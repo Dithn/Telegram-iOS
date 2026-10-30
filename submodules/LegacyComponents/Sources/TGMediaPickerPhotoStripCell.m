@@ -1,22 +1,22 @@
 #import "TGMediaPickerPhotoStripCell.h"
 
 #import "LegacyComponentsInternal.h"
-#import "TGFont.h"
+#import <LegacyComponents/TGFont.h>
 
-#import "TGModernButton.h"
-#import "TGCheckButtonView.h"
+#import <LegacyComponents/TGModernButton.h>
+#import <LegacyComponents/TGCheckButtonView.h>
 #import <LegacyComponents/TGImageView.h>
 
 #import <LegacyComponents/TGPhotoEditorUtils.h>
 
-#import "TGMediaPickerGallerySelectedItemsModel.h"
+#import <LegacyComponents/TGMediaPickerGallerySelectedItemsModel.h>
 #import <LegacyComponents/TGMediaSelectionContext.h>
 #import <LegacyComponents/TGMediaEditingContext.h>
 
 #import <LegacyComponents/TGVideoEditAdjustments.h>
 
-#import "TGCameraCapturedVideo.h"
-#import "TGMediaAsset+TGMediaEditableItem.h"
+#import <LegacyComponents/TGCameraCapturedVideo.h>
+#import <LegacyComponents/TGMediaAsset+TGMediaEditableItem.h>
 
 NSString *const TGMediaPickerPhotoStripCellKind = @"PhotoStripCell";
 
@@ -149,7 +149,7 @@ NSString *const TGMediaPickerPhotoStripCellKind = @"PhotoStripCell";
             
             [self setChecked:[self.selectionContext isItemSelected:(id<TGMediaSelectableItem>)item] animated:false];
             __weak TGMediaPickerPhotoStripCell *weakSelf = self;
-            [_itemSelectedDisposable setDisposable:[[self.selectionContext itemInformativeSelectedSignal:(id<TGMediaSelectableItem>)item] startWithNext:^(TGMediaSelectionChange *next)
+            [_itemSelectedDisposable setDisposable:[[self.selectionContext itemInformativeSelectedSignal:(id<TGMediaSelectableItem>)item] startStrictWithNext:^(TGMediaSelectionChange *next)
             {
                 __strong TGMediaPickerPhotoStripCell *strongSelf = weakSelf;
                 if (strongSelf == nil)
@@ -157,7 +157,7 @@ NSString *const TGMediaPickerPhotoStripCellKind = @"PhotoStripCell";
                 
                 if (![next.sender isKindOfClass:[TGMediaPickerGallerySelectedItemsModel class]])
                     [strongSelf setChecked:next.selected animated:next.animated];
-            }]];
+            } file:__FILE_NAME__ line:__LINE__]];
         }
     }
     
@@ -180,8 +180,11 @@ NSString *const TGMediaPickerPhotoStripCellKind = @"PhotoStripCell";
         {
             SSignal *adjustmentsSignal = [self.editingContext adjustmentsSignalForItem:video];
             
+            if (_adjustmentsDisposable == nil)
+                _adjustmentsDisposable = [[SMetaDisposable alloc] init];
+            
             __weak TGMediaPickerPhotoStripCell *weakSelf = self;
-            [_adjustmentsDisposable setDisposable:[adjustmentsSignal startWithNext:^(TGVideoEditAdjustments *next)
+            [_adjustmentsDisposable setDisposable:[adjustmentsSignal startStrictWithNext:^(TGVideoEditAdjustments *next)
             {
                 __strong TGMediaPickerPhotoStripCell *strongSelf = weakSelf;
                 if (strongSelf == nil)
@@ -191,7 +194,7 @@ NSString *const TGMediaPickerPhotoStripCellKind = @"PhotoStripCell";
                     [strongSelf _layoutImageForOriginalSize:next.originalSize cropRect:next.cropRect cropOrientation:next.cropOrientation];
                 else
                     [strongSelf _layoutImageWithoutAdjustments];
-            }]];
+            } file:__FILE_NAME__ line:__LINE__]];
         }
         return;
     }
@@ -220,8 +223,11 @@ NSString *const TGMediaPickerPhotoStripCellKind = @"PhotoStripCell";
             {
                 SSignal *adjustmentsSignal = [self.editingContext adjustmentsSignalForItem:asset];
                 
+                if (_adjustmentsDisposable == nil)
+                    _adjustmentsDisposable = [[SMetaDisposable alloc] init];
+                
                 __weak TGMediaPickerPhotoStripCell *weakSelf = self;
-                [_adjustmentsDisposable setDisposable:[adjustmentsSignal startWithNext:^(TGVideoEditAdjustments *next)
+                [_adjustmentsDisposable setDisposable:[adjustmentsSignal startStrictWithNext:^(TGVideoEditAdjustments *next)
                 {
                     __strong TGMediaPickerPhotoStripCell *strongSelf = weakSelf;
                     if (strongSelf == nil)
@@ -231,7 +237,7 @@ NSString *const TGMediaPickerPhotoStripCellKind = @"PhotoStripCell";
                         [strongSelf _layoutImageForOriginalSize:next.originalSize cropRect:next.cropRect cropOrientation:next.cropOrientation];
                     else
                         [strongSelf _layoutImageWithoutAdjustments];
-                }]];
+                } file:__FILE_NAME__ line:__LINE__]];
             }
         }
             break;
@@ -384,7 +390,10 @@ NSString *const TGMediaPickerPhotoStripCellKind = @"PhotoStripCell";
         
         [self setImage:image forState:UIControlStateNormal];
         
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations" // legacy non-configuration UIButton: property is still honored
         self.adjustsImageWhenHighlighted = false;
+        #pragma clang diagnostic pop
     }
     return self;
 }

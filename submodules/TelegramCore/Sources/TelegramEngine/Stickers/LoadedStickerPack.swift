@@ -1,6 +1,6 @@
 import Foundation
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import SwiftSignalKit
 
 extension StickerPackReference {
@@ -10,16 +10,28 @@ extension StickerPackReference {
     
     var apiInputStickerSet: Api.InputStickerSet {
         switch self {
-            case let .id(id, accessHash):
-                return .inputStickerSetID(id: id, accessHash: accessHash)
-            case let .name(name):
-                return .inputStickerSetShortName(shortName: name)
-            case .animatedEmoji:
-                return .inputStickerSetAnimatedEmoji
-            case let .dice(emoji):
-                return .inputStickerSetDice(emoticon: emoji)
-            case .animatedEmojiAnimations:
-                return .inputStickerSetAnimatedEmojiAnimations
+        case let .id(id, accessHash):
+            return .inputStickerSetID(.init(id: id, accessHash: accessHash))
+        case let .name(name):
+            return .inputStickerSetShortName(.init(shortName: name))
+        case .animatedEmoji:
+            return .inputStickerSetAnimatedEmoji
+        case let .dice(emoji):
+            return .inputStickerSetDice(.init(emoticon: emoji))
+        case .animatedEmojiAnimations:
+            return .inputStickerSetAnimatedEmojiAnimations
+        case .premiumGifts:
+            return .inputStickerSetPremiumGifts
+        case .emojiGenericAnimations:
+            return .inputStickerSetEmojiGenericAnimations
+        case .iconStatusEmoji:
+            return .inputStickerSetEmojiDefaultStatuses
+        case .iconChannelStatusEmoji:
+            return .inputStickerSetEmojiChannelDefaultStatuses
+        case .iconTopicEmoji:
+            return .inputStickerSetEmojiDefaultTopicIcons
+        case .tonGifts:
+            return .inputStickerSetTonGifts
         }
     }
 }
@@ -27,7 +39,7 @@ extension StickerPackReference {
 public enum LoadedStickerPack {
     case fetching
     case none
-    case result(info: StickerPackCollectionInfo, items: [StickerPackItem], installed: Bool)
+    case result(info: StickerPackCollectionInfo.Accessor, items: [StickerPackItem], installed: Bool)
 }
 
 func updatedRemoteStickerPack(postbox: Postbox, network: Network, reference: StickerPackReference) -> Signal<(StickerPackCollectionInfo, [StickerPackItem])?, NoError> {
@@ -46,12 +58,16 @@ func updatedRemoteStickerPack(postbox: Postbox, network: Network, reference: Sti
             switch result {
             case .stickerSetNotModified:
                 return .complete()
-            case let .stickerSet(set, packs, documents):
+            case let .stickerSet(stickerSetData):
+                let (set, packs, keywords, documents) = (stickerSetData.set, stickerSetData.packs, stickerSetData.keywords, stickerSetData.documents)
                 let namespace: ItemCollectionId.Namespace
                 switch set {
-                    case let .stickerSet(flags, _, _, _, _, _, _, _, _, _, _):
+                    case let .stickerSet(stickerSetData):
+                        let flags = stickerSetData.flags
                         if (flags & (1 << 3)) != 0 {
                             namespace = Namespaces.ItemCollection.CloudMaskPacks
+                        } else if (flags & (1 << 7)) != 0 {
+                            namespace = Namespaces.ItemCollection.CloudEmojiPacks
                         } else {
                             namespace = Namespaces.ItemCollection.CloudStickerPacks
                         }
@@ -60,7 +76,8 @@ func updatedRemoteStickerPack(postbox: Postbox, network: Network, reference: Sti
                 var indexKeysByFile: [MediaId: [MemoryBuffer]] = [:]
                 for pack in packs {
                     switch pack {
-                        case let .stickerPack(text, fileIds):
+                        case let .stickerPack(stickerPackData):
+                            let (text, fileIds) = (stickerPackData.emoticon, stickerPackData.documents)
                             let key = ValueBoxKey(text).toMemoryBuffer()
                             for fileId in fileIds {
                                 let mediaId = MediaId(namespace: Namespaces.Media.CloudFile, id: fileId)
@@ -72,9 +89,24 @@ func updatedRemoteStickerPack(postbox: Postbox, network: Network, reference: Sti
                             }
                     }
                 }
+                for keyword in keywords {
+                    switch keyword {
+                    case let .stickerKeyword(stickerKeywordData):
+                        let (documentId, texts) = (stickerKeywordData.documentId, stickerKeywordData.keyword)
+                        for text in texts {
+                            let key = ValueBoxKey(text).toMemoryBuffer()
+                            let mediaId = MediaId(namespace: Namespaces.Media.CloudFile, id: documentId)
+                            if indexKeysByFile[mediaId] == nil {
+                                indexKeysByFile[mediaId] = [key]
+                            } else {
+                                indexKeysByFile[mediaId]!.append(key)
+                            }
+                        }
+                    }
+                }
                 
                 for apiDocument in documents {
-                    if let file = telegramMediaFileFromApiDocument(apiDocument), let id = file.id {
+                    if let file = telegramMediaFileFromApiDocument(apiDocument, altDocuments: []), let id = file.id {
                         let fileIndexKeys: [MemoryBuffer]
                         if let indexKeys = indexKeysByFile[id] {
                             fileIndexKeys = indexKeys
@@ -97,7 +129,7 @@ func updatedRemoteStickerPack(postbox: Postbox, network: Network, reference: Sti
         }
 }
 
-func _internal_loadedStickerPack(postbox: Postbox, network: Network, reference: StickerPackReference, forceActualized: Bool) -> Signal<LoadedStickerPack, NoError> {
+func _internal_loadedStickerPack(postbox: Postbox, network: Network, reference: StickerPackReference, forceActualized: Bool, ignoreCache: Bool = false) -> Signal<LoadedStickerPack, NoError> {
     return _internal_cachedStickerPack(postbox: postbox, network: network, reference: reference, forceRemote: forceActualized)
     |> map { result -> LoadedStickerPack in
         switch result {
@@ -109,4 +141,36 @@ func _internal_loadedStickerPack(postbox: Postbox, network: Network, reference: 
                 return .result(info: info, items: items, installed: installed)
         }
     }
+}
+
+/// Emits exactly once: the first `.result`, or nil. A pack its owner deleted loads as `.none`
+/// and an emoji can name no pack at all, so waiting for a `.result` alone never ends for them.
+func _internal_customEmojiPack(file: TelegramMediaFile, loadPack: (StickerPackReference) -> Signal<LoadedStickerPack, NoError>) -> Signal<LoadedStickerPack?, NoError> {
+    var packReference: StickerPackReference?
+    for attribute in file.attributes {
+        if case let .CustomEmoji(_, _, _, reference) = attribute {
+            packReference = reference
+            break
+        }
+    }
+    guard let packReference else {
+        return .single(nil)
+    }
+    return (loadPack(packReference)
+    |> filter { pack in
+        if case .fetching = pack {
+            return false
+        } else {
+            return true
+        }
+    }
+    |> map { pack -> LoadedStickerPack? in
+        if case .result = pack {
+            return pack
+        } else {
+            return nil
+        }
+    }
+    |> then(.single(nil)))
+    |> take(1)
 }

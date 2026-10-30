@@ -1,5 +1,5 @@
 import Foundation
-import Postbox
+import TelegramCore
 
 public final class TelegramHashtag {
     public let peerName: String?
@@ -12,10 +12,10 @@ public final class TelegramHashtag {
 }
 
 public final class TelegramPeerMention {
-    public let peerId: PeerId
+    public let peerId: EnginePeer.Id
     public let mention: String
     
-    public init(peerId: PeerId, mention: String) {
+    public init(peerId: EnginePeer.Id, mention: String) {
         self.peerId = peerId
         self.mention = mention
     }
@@ -31,6 +31,16 @@ public final class TelegramTimecode {
     }
 }
 
+public final class TelegramTonAddress {
+    public let address: String
+    public let range: NSRange
+
+    public init(address: String, range: NSRange) {
+        self.address = address
+        self.range = range
+    }
+}
+
 public struct TelegramTextAttributes {
     public static let URL = "UrlAttributeT"
     public static let PeerMention = "TelegramPeerMention"
@@ -38,8 +48,12 @@ public struct TelegramTextAttributes {
     public static let BotCommand = "TelegramBotCommand"
     public static let Hashtag = "TelegramHashtag"
     public static let BankCard = "TelegramBankCard"
+    public static let TonAddress = "TelegramTonAddress"
     public static let Timecode = "TelegramTimecode"
     public static let BlockQuote = "TelegramBlockQuote"
     public static let Pre = "TelegramPre"
     public static let Spoiler = "TelegramSpoiler"
+    public static let Code = "TelegramCode"
+    public static let Button = "TelegramButton"
+    public static let Date = "TelegramDate"
 }

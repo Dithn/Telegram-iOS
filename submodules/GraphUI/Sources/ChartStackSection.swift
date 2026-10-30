@@ -9,12 +9,14 @@
 import UIKit
 import GraphCore
 import Display
+import UIKitRuntimeUtils
 
 private enum Constants {
     static let chartViewHeightFraction: CGFloat = 0.55
 }
 
 private class LeftAlignedIconButton: UIButton {
+    @available(iOS, deprecated: 15.0, message: "Legacy non-configuration button layout; intentionally retained.")
     override func titleRect(forContentRect contentRect: CGRect) -> CGRect {
         var titleRect = super.titleRect(forContentRect: contentRect)
         let imageSize = currentImage?.size ?? .zero
@@ -22,6 +24,7 @@ private class LeftAlignedIconButton: UIButton {
         return titleRect
     }
     
+    @available(iOS, deprecated: 15.0, message: "Legacy non-configuration button layout; intentionally retained.")
     override func imageRect(forContentRect contentRect: CGRect) -> CGRect {
         var imageRect = super.imageRect(forContentRect: contentRect)
         imageRect.origin.x = 0.0
@@ -71,11 +74,11 @@ class ChartStackSection: UIView, ChartThemeContainer {
         backButton.addTarget(self, action: #selector(self.didTapBackButton), for: .touchUpInside)
         backButton.setTitle("Zoom Out", for: .normal)
         backButton.titleLabel?.font = UIFont.systemFont(ofSize: 14, weight: .regular)
-        backButton.setTitleColor(UIColor(rgb: 0x007aff), for: .normal)
+        backButton.setTitleColor(UIColor(rgb: 0x0088ff), for: .normal)
         backButton.setImage(UIImage(bundleImageName: "Chart/arrow_left"), for: .normal)
-        backButton.imageEdgeInsets = UIEdgeInsets(top: 0.0, left: 6.0, bottom: 0.0, right: 3.0)
-        backButton.imageView?.tintColor = UIColor(rgb: 0x007aff)
-        backButton.adjustsImageWhenHighlighted = false
+        backButton.legacyImageEdgeInsets = UIEdgeInsets(top: 0.0, left: 6.0, bottom: 0.0, right: 3.0)
+        backButton.imageView?.tintColor = UIColor(rgb: 0x0088ff)
+        backButton.legacyAdjustsImageWhenHighlighted = false
         
         backButton.setVisible(false, animated: false)
     }
@@ -181,7 +184,7 @@ class ChartStackSection: UIView, ChartThemeContainer {
         self.chartView.setNeedsDisplay()
     }
     
-    func setup(controller: BaseChartController, displayRange: Bool = true) {
+    func setup(controller: BaseChartController, displayRange: Bool = true, zoomToEnding: Bool = true) {
         self.controller = controller
         self.displayRange = displayRange
         
@@ -246,7 +249,7 @@ class ChartStackSection: UIView, ChartThemeContainer {
         controller.initializeChart()
         updateToolViews(animated: false)
         
-        let range: ClosedRange<CGFloat> = displayRange ? 0.8 ... 1.0 : 0.0 ... 1.0
+        let range: ClosedRange<CGFloat> = displayRange && zoomToEnding ? 0.8 ... 1.0 : 0.0 ... 1.0
         rangeView.setRange(range, animated: false)
         controller.updateChartRange(range, animated: false)
         

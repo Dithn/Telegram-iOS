@@ -1,6 +1,6 @@
 import Foundation
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import SwiftSignalKit
 
 
@@ -14,7 +14,7 @@ func _internal_updateGroupSpecificStickerset(postbox: Postbox, network: Network,
     |> mapToSignal { peer -> Signal<Void, UpdateGroupSpecificStickersetError> in
         let inputStickerset: Api.InputStickerSet
         if let info = info {
-            inputStickerset = Api.InputStickerSet.inputStickerSetShortName(shortName: info.shortName)
+            inputStickerset = Api.InputStickerSet.inputStickerSetShortName(.init(shortName: info.shortName))
         } else {
             inputStickerset = Api.InputStickerSet.inputStickerSetEmpty
         }
@@ -32,6 +32,44 @@ func _internal_updateGroupSpecificStickerset(postbox: Postbox, network: Network,
                             })
                         }
                     |> castError(UpdateGroupSpecificStickersetError.self)
+                    default:
+                        return .complete()
+                }
+            }
+        }
+        return .complete()
+    }
+}
+
+
+public enum UpdateGroupSpecificEmojisetError {
+    case generic
+}
+
+func _internal_updateGroupSpecificEmojiset(postbox: Postbox, network: Network, peerId: PeerId, info: StickerPackCollectionInfo?) -> Signal<Void, UpdateGroupSpecificEmojisetError> {
+    return postbox.loadedPeerWithId(peerId)
+    |> castError(UpdateGroupSpecificEmojisetError.self)
+    |> mapToSignal { peer -> Signal<Void, UpdateGroupSpecificEmojisetError> in
+        let inputStickerset: Api.InputStickerSet
+        if let info = info {
+            inputStickerset = Api.InputStickerSet.inputStickerSetShortName(.init(shortName: info.shortName))
+        } else {
+            inputStickerset = Api.InputStickerSet.inputStickerSetEmpty
+        }
+        if let inputChannel = apiInputChannel(peer) {
+            return network.request(Api.functions.channels.setEmojiStickers(channel: inputChannel, stickerset: inputStickerset))
+            |> mapError { _ -> UpdateGroupSpecificEmojisetError in
+                return .generic
+            }
+            |> mapToSignal { value -> Signal<Void, UpdateGroupSpecificEmojisetError> in
+                switch value {
+                    case .boolTrue:
+                        return postbox.transaction { transaction -> Void in
+                            return transaction.updatePeerCachedData(peerIds: [peerId], update: { _, current -> CachedPeerData? in
+                                return (current as? CachedChannelData)?.withUpdatedEmojiPack(info)
+                            })
+                        }
+                    |> castError(UpdateGroupSpecificEmojisetError.self)
                     default:
                         return .complete()
                 }

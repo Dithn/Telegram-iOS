@@ -37,6 +37,10 @@ final class CompressedAnimationRenderer: ASDisplayNode, AnimationRenderer {
     
     private let renderer: CompressedImageRenderer
     
+    var currentFrameImage: UIImage? {
+        return nil
+    }
+    
     override init() {
         self.renderer = CompressedImageRenderer(sharedContext: AnimationCompressor.SharedContext.shared)!
         
@@ -54,7 +58,7 @@ final class CompressedAnimationRenderer: ASDisplayNode, AnimationRenderer {
         self.layer.backgroundColor = nil
     }
         
-    func render(queue: Queue, width: Int, height: Int, bytesPerRow: Int, data: Data, type: AnimationRendererFrameType, mulAlpha: Bool, completion: @escaping () -> Void) {
+    func render(queue: Queue, width: Int, height: Int, bytesPerRow: Int, data: Data, type: AnimationRendererFrameType, mulAlpha: Bool, completion: @escaping () -> Void, averageColor: ((UIColor) -> Void)?) {
         switch type {
         case .dct:
             self.renderer.renderIdct(layer: self.layer as! MetalImageLayer, compressedImage: AnimationCompressor.CompressedImageData(data: data), completion: { [weak self] in

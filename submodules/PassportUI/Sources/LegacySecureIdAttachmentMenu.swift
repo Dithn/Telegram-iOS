@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import LegacyComponents
 import Display
+import SSignalKit
 import SwiftSignalKit
 import Postbox
 import TelegramCore
@@ -75,7 +76,7 @@ func presentLegacySecureIdAttachmentMenu(context: AccountContext, present: @esca
             |> runOn(.mainQueue())
             |> delay(0.1, queue: .mainQueue())).start()
             
-            let _ = (processedLegacySecureIdAttachmentItems(postbox: context.account.postbox, signal: signal)
+            let _ = (processedLegacySecureIdAttachmentItems(signal: signal)
             |> mapToSignal { resources -> Signal<([TelegramMediaResource], SecureIdRecognizedDocumentData?), NoError> in
                 switch type {
                     case .generic, .idCard:
@@ -115,7 +116,7 @@ private enum AttachmentItem {
     case iCloud(URL)
 }
 
-private func processedLegacySecureIdAttachmentItems(postbox: Postbox, signal: SSignal) -> Signal<[TelegramMediaResource], NoError> {
+private func processedLegacySecureIdAttachmentItems(signal: SSignal) -> Signal<[TelegramMediaResource], NoError> {
     let nativeSignal = Signal<AttachmentItem?, NoError> { subscriber in
         let disposable = signal.start(next: { next in
             if let dict = next as? [String: Any], let image = dict["image"] as? UIImage {
@@ -160,7 +161,11 @@ private func processedLegacySecureIdAttachmentItems(postbox: Postbox, signal: SS
         let randomId = Int64.random(in: Int64.min ... Int64.max)
         let tempFilePath = NSTemporaryDirectory() + "\(randomId).jpeg"
         let scaledSize = image.size.aspectFitted(CGSize(width: 2048.0, height: 2048.0))
-        if let scaledImage = TGScaleImageToPixelSize(image, scaledSize), let scaledImageData = compressImageToJPEG(scaledImage, quality: 0.84) {
+        let tempFile = TempBox.shared.tempFile(fileName: "file")
+        defer {
+            TempBox.shared.dispose(tempFile)
+        }
+        if let scaledImage = TGScaleImageToPixelSize(image, scaledSize), let scaledImageData = compressImageToJPEG(scaledImage, quality: 0.84, tempFilePath: tempFile.path) {
             let _ = try? scaledImageData.write(to: URL(fileURLWithPath: tempFilePath))
             let resource = LocalFileReferenceMediaResource(localFilePath: tempFilePath, randomId: randomId)
             return [resource]

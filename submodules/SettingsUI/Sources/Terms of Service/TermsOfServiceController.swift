@@ -1,13 +1,14 @@
 import Foundation
 import UIKit
 import TelegramCore
-import Postbox
 import SwiftSignalKit
 import Display
 import AsyncDisplayKit
 import TelegramPresentationData
 import TelegramUIPreferences
+import PresentationDataUtils
 import ProgressNavigationButtonNode
+import AccountContext
 
 public class TermsOfServiceControllerTheme {
     public let statusBarStyle: StatusBarStyle
@@ -44,6 +45,7 @@ public class TermsOfServiceController: ViewController, StandalonePresentableCont
         return self.displayNode as! TermsOfServiceControllerNode
     }
 
+    private let context: AccountContext
     private let presentationData: PresentationData
     private let text: String
     private let entities: [MessageTextEntity]
@@ -68,7 +70,8 @@ public class TermsOfServiceController: ViewController, StandalonePresentableCont
         }
     }
     
-    public init(presentationData: PresentationData, text: String, entities: [MessageTextEntity], ageConfirmation: Int32?, signingUp: Bool, accept: @escaping (String?) -> Void, decline: @escaping () -> Void, openUrl: @escaping (String) -> Void) {
+    public init(context: AccountContext, presentationData: PresentationData, text: String, entities: [MessageTextEntity], ageConfirmation: Int32?, signingUp: Bool, accept: @escaping (String?) -> Void, decline: @escaping () -> Void, openUrl: @escaping (String) -> Void) {
+        self.context = context
         self.presentationData = presentationData
         self.text = text
         self.entities = entities
@@ -78,7 +81,7 @@ public class TermsOfServiceController: ViewController, StandalonePresentableCont
         self.decline = decline
         self.openUrl = openUrl
         
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: NavigationBarTheme(rootControllerTheme: presentationData.theme), strings: NavigationBarStrings(back: presentationData.strings.Common_Back, close: presentationData.strings.Common_Close)))
+        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: NavigationBarTheme(rootControllerTheme: presentationData.theme), strings: NavigationBarStrings(back: presentationData.strings.Common_Back, close: presentationData.strings.Common_Close, more: presentationData.strings.Common_More)))
         
         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
         
@@ -113,9 +116,9 @@ public class TermsOfServiceController: ViewController, StandalonePresentableCont
                 text = strongSelf.presentationData.strings.PrivacyPolicy_DeclineMessage
                 declineTitle = strongSelf.presentationData.strings.PrivacyPolicy_DeclineDeclineAndDelete
             }
-            strongSelf.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: strongSelf.presentationData), title: strongSelf.presentationData.strings.PrivacyPolicy_Decline, text: text, actions: [TextAlertAction(type: .destructiveAction, title: declineTitle, action: {
+            strongSelf.present(textAlertController(context: strongSelf.context, title: strongSelf.presentationData.strings.PrivacyPolicy_Decline, text: text, actions: [TextAlertAction(type: .destructiveAction, title: declineTitle, action: {
                 self?.decline()
-            }), TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_Cancel, action: {
+            }), TextAlertAction(type: .genericAction, title: strongSelf.presentationData.strings.Common_Cancel, action: {
             })], actionLayout: .vertical), in: .window(.root))
         }, rightAction: { [weak self] in
             guard let strongSelf = self else {
@@ -123,7 +126,7 @@ public class TermsOfServiceController: ViewController, StandalonePresentableCont
             }
             
             if let ageConfirmation = strongSelf.ageConfirmation {
-                strongSelf.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: strongSelf.presentationData), title: strongSelf.presentationData.strings.PrivacyPolicy_AgeVerificationTitle, text: strongSelf.presentationData.strings.PrivacyPolicy_AgeVerificationMessage("\(ageConfirmation)").string, actions: [TextAlertAction(type: .genericAction, title: strongSelf.presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.PrivacyPolicy_AgeVerificationAgree, action: {
+                strongSelf.present(textAlertController(context: strongSelf.context, title: strongSelf.presentationData.strings.PrivacyPolicy_AgeVerificationTitle, text: strongSelf.presentationData.strings.PrivacyPolicy_AgeVerificationMessage("\(ageConfirmation)").string, actions: [TextAlertAction(type: .genericAction, title: strongSelf.presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.PrivacyPolicy_AgeVerificationAgree, action: {
                     self?.accept(self?.proccessBotNameAfterAccept)
                 })]), in: .window(.root))
             } else {

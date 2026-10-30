@@ -1,21 +1,73 @@
 import Foundation
 
 public enum PostboxViewKey: Hashable {
+    public struct HistoryView: Equatable {
+        public var peerId: PeerId
+        public var threadId: Int64?
+        public var clipHoles: Bool
+        public var trackHoles: Bool
+        public var orderStatistics: MessageHistoryViewOrderStatistics
+        public var ignoreMessagesInTimestampRange: ClosedRange<Int32>?
+        public var ignoreMessageIds: Set<MessageId>
+        public var anchor: HistoryViewInputAnchor
+        public var combinedReadStates: MessageHistoryViewReadState?
+        public var transientReadStates: MessageHistoryViewReadState?
+        public var tag: HistoryViewInputTag?
+        public var appendMessagesFromTheSameGroup: Bool
+        public var namespaces: MessageIdNamespaces
+        public var count: Int
+        
+        public init(
+            peerId: PeerId,
+            threadId: Int64?,
+            clipHoles: Bool,
+            trackHoles: Bool,
+            orderStatistics: MessageHistoryViewOrderStatistics = [],
+            ignoreMessagesInTimestampRange: ClosedRange<Int32>? = nil,
+            ignoreMessageIds: Set<MessageId> = Set(),
+            anchor: HistoryViewInputAnchor,
+            combinedReadStates: MessageHistoryViewReadState? = nil,
+            transientReadStates: MessageHistoryViewReadState? = nil,
+            tag: HistoryViewInputTag? = nil,
+            appendMessagesFromTheSameGroup: Bool,
+            namespaces: MessageIdNamespaces,
+            count: Int
+        ) {
+            self.peerId = peerId
+            self.threadId = threadId
+            self.clipHoles = clipHoles
+            self.trackHoles = trackHoles
+            self.orderStatistics = orderStatistics
+            self.ignoreMessagesInTimestampRange = ignoreMessagesInTimestampRange
+            self.ignoreMessageIds = ignoreMessageIds
+            self.anchor = anchor
+            self.combinedReadStates = combinedReadStates
+            self.transientReadStates = transientReadStates
+            self.tag = tag
+            self.appendMessagesFromTheSameGroup = appendMessagesFromTheSameGroup
+            self.namespaces = namespaces
+            self.count = count
+        }
+    }
+    
     case itemCollectionInfos(namespaces: [ItemCollectionId.Namespace])
     case itemCollectionIds(namespaces: [ItemCollectionId.Namespace])
     case itemCollectionInfo(id: ItemCollectionId)
     case peerChatState(peerId: PeerId)
     case orderedItemList(id: Int32)
     case preferences(keys: Set<ValueBoxKey>)
+    case preferencesPrefix(keyPrefix: ValueBoxKey)
     case globalMessageTags(globalTag: GlobalMessageTags, position: MessageIndex, count: Int, groupingPredicate: ((Message, Message) -> Bool)?)
     case peer(peerId: PeerId, components: PeerViewComponents)
     case pendingMessageActions(type: PendingMessageActionType)
-    case invalidatedMessageHistoryTagSummaries(tagMask: MessageTags, namespace: MessageId.Namespace)
+    case invalidatedMessageHistoryTagSummaries(peerId: PeerId?, threadId: Int64?, tagMask: MessageTags, namespace: MessageId.Namespace)
     case pendingMessageActionsSummary(type: PendingMessageActionType, peerId: PeerId, namespace: MessageId.Namespace)
-    case historyTagSummaryView(tag: MessageTags, peerId: PeerId, namespace: MessageId.Namespace)
+    case historyTagSummaryView(tag: MessageTags, peerId: PeerId, threadId: Int64?, namespace: MessageId.Namespace, customTag: MemoryBuffer?)
+    case historyCustomTagSummariesView(peerId: PeerId, threadId: Int64?, namespace: MessageId.Namespace)
     case cachedPeerData(peerId: PeerId)
+    case cachedPeerDataWithMessages(peerId: PeerId)
     case unreadCounts(items: [UnreadMessageCountsItem])
-    case combinedReadState(peerId: PeerId)
+    case combinedReadState(peerId: PeerId, handleThreads: Bool)
     case peerNotificationSettings(peerIds: Set<PeerId>)
     case pendingPeerNotificationSettings
     case messageOfInterestHole(location: MessageOfInterestViewLocation, namespace: MessageId.Namespace, count: Int)
@@ -33,6 +85,25 @@ public enum PostboxViewKey: Hashable {
     case topChatMessage(peerIds: [PeerId])
     case contacts(accountPeerId: PeerId?, includePresences: Bool)
     case deletedMessages(peerId: PeerId)
+    case notice(key: NoticeEntryKey)
+    case messageGroup(id: MessageId)
+    case isContact(id: PeerId)
+    case chatListIndex(id: PeerId)
+    case peerTimeoutAttributes
+    case messageHistoryThreadIndex(id: PeerId, summaryComponents: ChatListEntrySummaryComponents)
+    case messageHistoryThreadInfo(peerId: PeerId, threadId: Int64)
+    case storySubscriptions(key: PostboxStorySubscriptionsKey)
+    case storiesState(key: PostboxStoryStatesKey)
+    case storyItems(peerId: PeerId)
+    case storyExpirationTimeItems
+    case peerStoryStats(peerIds: Set<PeerId>)
+    case story(id: StoryId)
+    case savedMessagesIndex(peerId: PeerId)
+    case savedMessagesStats(peerId: PeerId)
+    case chatInterfaceState(peerId: PeerId)
+    case historyView(HistoryView)
+    case typingDrafts(PeerAndThreadId)
+    case allTypingDrafts
 
     public func hash(into hasher: inout Hasher) {
         switch self {
@@ -48,24 +119,36 @@ public enum PostboxViewKey: Hashable {
             hasher.combine(id)
         case .preferences:
             hasher.combine(3)
+        case .preferencesPrefix:
+            hasher.combine(21)
         case .globalMessageTags:
             hasher.combine(4)
         case let .peer(peerId, _):
             hasher.combine(peerId)
         case let .pendingMessageActions(type):
             hasher.combine(type)
-        case let .invalidatedMessageHistoryTagSummaries(tagMask, namespace):
+        case let .invalidatedMessageHistoryTagSummaries(peerId, threadId, tagMask, namespace):
+            hasher.combine(peerId)
+            hasher.combine(threadId)
             hasher.combine(tagMask)
             hasher.combine(namespace)
         case let .pendingMessageActionsSummary(type, peerId, namespace):
             hasher.combine(type)
             hasher.combine(peerId)
             hasher.combine(namespace)
-        case let .historyTagSummaryView(tag, peerId, namespace):
+        case let .historyTagSummaryView(tag, peerId, threadId, namespace, customTag):
             hasher.combine(tag)
             hasher.combine(peerId)
+            hasher.combine(threadId)
+            hasher.combine(namespace)
+            hasher.combine(customTag)
+        case let .historyCustomTagSummariesView(peerId, threadId, namespace):
+            hasher.combine(peerId)
+            hasher.combine(threadId)
             hasher.combine(namespace)
         case let .cachedPeerData(peerId):
+            hasher.combine(peerId)
+        case let .cachedPeerDataWithMessages(peerId):
             hasher.combine(peerId)
         case .unreadCounts:
             hasher.combine(5)
@@ -106,9 +189,52 @@ public enum PostboxViewKey: Hashable {
         case let .topChatMessage(peerIds):
             hasher.combine(peerIds)
         case .contacts:
-            hasher.combine(16)
+            hasher.combine(24)
         case let .deletedMessages(peerId):
             hasher.combine(peerId)
+        case let .notice(key):
+            hasher.combine(key)
+        case let .messageGroup(id):
+            hasher.combine(id)
+        case let .isContact(id):
+            hasher.combine(id)
+        case let .chatListIndex(id):
+            hasher.combine(id)
+        case .peerTimeoutAttributes:
+            hasher.combine(17)
+        case let .messageHistoryThreadIndex(id, _):
+            hasher.combine(id)
+        case let .messageHistoryThreadInfo(peerId, threadId):
+            hasher.combine(peerId)
+            hasher.combine(threadId)
+        case let .storySubscriptions(key):
+            hasher.combine(18)
+            hasher.combine(key)
+        case let .storiesState(key):
+            hasher.combine(key)
+        case let .storyItems(peerId):
+            hasher.combine(peerId)
+        case .storyExpirationTimeItems:
+            hasher.combine(19)
+        case let .peerStoryStats(peerIds):
+            hasher.combine(peerIds)
+        case let .story(id):
+            hasher.combine(id)
+        case let .savedMessagesIndex(peerId):
+            hasher.combine(peerId)
+        case let .savedMessagesStats(peerId):
+            hasher.combine(peerId)
+        case let .chatInterfaceState(peerId):
+            hasher.combine(peerId)
+        case let .historyView(historyView):
+            hasher.combine(20)
+            hasher.combine(historyView.peerId)
+            hasher.combine(historyView.threadId)
+        case let .typingDrafts(peerId):
+            hasher.combine(23)
+            hasher.combine(peerId)
+        case .allTypingDrafts:
+            hasher.combine(22)
         }
     }
     
@@ -150,6 +276,12 @@ public enum PostboxViewKey: Hashable {
             } else {
                 return false
             }
+        case let .preferencesPrefix(lhsKeyPrefix):
+            if case let .preferencesPrefix(rhsKeyPrefix) = rhs, lhsKeyPrefix == rhsKeyPrefix {
+                return true
+            } else {
+                return false
+            }
         case let .globalMessageTags(globalTag, position, count, _):
             if case .globalMessageTags(globalTag, position, count, _) = rhs {
                 return true
@@ -168,8 +300,8 @@ public enum PostboxViewKey: Hashable {
             } else {
                 return false
             }
-        case .invalidatedMessageHistoryTagSummaries:
-            if case .invalidatedMessageHistoryTagSummaries = rhs {
+        case let .invalidatedMessageHistoryTagSummaries(peerId, threadId, tagMask, namespace):
+            if case .invalidatedMessageHistoryTagSummaries(peerId, threadId, tagMask, namespace) = rhs {
                 return true
             } else {
                 return false
@@ -180,8 +312,14 @@ public enum PostboxViewKey: Hashable {
             } else {
                 return false
             }
-        case let .historyTagSummaryView(tag, peerId, namespace):
-            if case .historyTagSummaryView(tag, peerId, namespace) = rhs {
+        case let .historyTagSummaryView(tag, peerId, threadId, namespace, customTag):
+            if case .historyTagSummaryView(tag, peerId, threadId, namespace, customTag) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .historyCustomTagSummariesView(peerId, threadId, namespace):
+            if case .historyCustomTagSummariesView(peerId, threadId, namespace) = rhs {
                 return true
             } else {
                 return false
@@ -192,14 +330,20 @@ public enum PostboxViewKey: Hashable {
             } else {
                 return false
             }
+        case let .cachedPeerDataWithMessages(peerId):
+            if case .cachedPeerDataWithMessages(peerId) = rhs {
+                return true
+            } else {
+                return false
+            }
         case let .unreadCounts(lhsItems):
             if case let .unreadCounts(rhsItems) = rhs, lhsItems == rhsItems {
                 return true
             } else {
                 return false
             }
-        case let .combinedReadState(peerId):
-            if case .combinedReadState(peerId) = rhs {
+        case let .combinedReadState(peerId, handleThreads):
+            if case .combinedReadState(peerId, handleThreads) = rhs {
                 return true
             } else {
                 return false
@@ -306,6 +450,120 @@ public enum PostboxViewKey: Hashable {
             } else {
                 return false
             }
+        case let .notice(key):
+            if case .notice(key) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .messageGroup(id):
+            if case .messageGroup(id) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .isContact(id):
+            if case .isContact(id) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .chatListIndex(id):
+            if case .chatListIndex(id) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case .peerTimeoutAttributes:
+            if case .peerTimeoutAttributes = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .messageHistoryThreadIndex(id, summaryComponents):
+            if case .messageHistoryThreadIndex(id, summaryComponents) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .messageHistoryThreadInfo(peerId, threadId):
+            if case .messageHistoryThreadInfo(peerId, threadId) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .storySubscriptions(key):
+            if case .storySubscriptions(key) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .storiesState(key):
+            if case .storiesState(key) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .storyItems(peerId):
+            if case .storyItems(peerId) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case .storyExpirationTimeItems:
+            if case .storyExpirationTimeItems = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .peerStoryStats(peerIds):
+            if case .peerStoryStats(peerIds) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .story(id):
+            if case .story(id) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .savedMessagesIndex(peerId):
+            if case .savedMessagesIndex(peerId) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .savedMessagesStats(peerId):
+            if case .savedMessagesStats(peerId) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .chatInterfaceState(peerId):
+            if case .chatInterfaceState(peerId) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .historyView(historyView):
+            if case .historyView(historyView) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .typingDrafts(peerId):
+            if case .typingDrafts(peerId) = rhs {
+                return true
+            } else {
+                return false
+            }
+        case .allTypingDrafts:
+            if case .allTypingDrafts = rhs {
+                return true
+            } else {
+                return false
+            }
         }
     }
 }
@@ -324,24 +582,30 @@ func postboxViewForKey(postbox: PostboxImpl, key: PostboxViewKey) -> MutablePost
         return MutableOrderedItemListView(postbox: postbox, collectionId: id)
     case let .preferences(keys):
         return MutablePreferencesView(postbox: postbox, keys: keys)
+    case let .preferencesPrefix(keyPrefix):
+        return MutablePreferencesPrefixView(postbox: postbox, keyPrefix: keyPrefix)
     case let .globalMessageTags(globalTag, position, count, groupingPredicate):
         return MutableGlobalMessageTagsView(postbox: postbox, globalTag: globalTag, position: position, count: count, groupingPredicate: groupingPredicate)
     case let .peer(peerId, components):
         return MutablePeerView(postbox: postbox, peerId: peerId, components: components)
     case let .pendingMessageActions(type):
         return MutablePendingMessageActionsView(postbox: postbox, type: type)
-    case let .invalidatedMessageHistoryTagSummaries(tagMask, namespace):
-        return MutableInvalidatedMessageHistoryTagSummariesView(postbox: postbox, tagMask: tagMask, namespace: namespace)
+    case let .invalidatedMessageHistoryTagSummaries(peerId, threadId, tagMask, namespace):
+        return MutableInvalidatedMessageHistoryTagSummariesView(postbox: postbox, peerId: peerId, threadId: threadId, tagMask: tagMask, namespace: namespace)
     case let .pendingMessageActionsSummary(type, peerId, namespace):
         return MutablePendingMessageActionsSummaryView(postbox: postbox, type: type, peerId: peerId, namespace: namespace)
-    case let .historyTagSummaryView(tag, peerId, namespace):
-        return MutableMessageHistoryTagSummaryView(postbox: postbox, tag: tag, peerId: peerId, namespace: namespace)
+    case let .historyTagSummaryView(tag, peerId, threadId, namespace, customTag):
+        return MutableMessageHistoryTagSummaryView(postbox: postbox, tag: tag, peerId: peerId, threadId: threadId, namespace: namespace, customTag: customTag)
+    case let .historyCustomTagSummariesView(peerId, threadId, namespace):
+        return MutableMessageHistoryCustomTagSummariesView(postbox: postbox, peerId: peerId, threadId: threadId, namespace: namespace)
     case let .cachedPeerData(peerId):
-        return MutableCachedPeerDataView(postbox: postbox, peerId: peerId)
+        return MutableCachedPeerDataView(postbox: postbox, peerId: peerId, trackAssociatedMessages: false)
+    case let .cachedPeerDataWithMessages(peerId):
+        return MutableCachedPeerDataView(postbox: postbox, peerId: peerId, trackAssociatedMessages: true)
     case let .unreadCounts(items):
         return MutableUnreadMessageCountsView(postbox: postbox, items: items)
-    case let .combinedReadState(peerId):
-        return MutableCombinedReadStateView(postbox: postbox, peerId: peerId)
+    case let .combinedReadState(peerId, handleThreads):
+        return MutableCombinedReadStateView(postbox: postbox, peerId: peerId, handleThreads: handleThreads)
     case let .peerNotificationSettings(peerIds):
         return MutablePeerNotificationSettingsView(postbox: postbox, peerIds: peerIds)
     case .pendingPeerNotificationSettings:
@@ -376,5 +640,60 @@ func postboxViewForKey(postbox: PostboxImpl, key: PostboxViewKey) -> MutablePost
         return MutableContactPeersView(postbox: postbox, accountPeerId: accountPeerId, includePresences: includePresences)
     case let .deletedMessages(peerId):
         return MutableDeletedMessagesView(peerId: peerId)
+    case let .notice(key):
+        return MutableLocalNoticeEntryView(postbox: postbox, key: key)
+    case let .messageGroup(id):
+        return MutableMessageGroupView(postbox: postbox, id: id)
+    case let .isContact(id):
+        return MutableIsContactView(postbox: postbox, id: id)
+    case let .chatListIndex(id):
+        return MutableChatListIndexView(postbox: postbox, id: id)
+    case .peerTimeoutAttributes:
+        return MutablePeerTimeoutAttributesView(postbox: postbox)
+    case let .messageHistoryThreadIndex(id, summaryComponents):
+        return MutableMessageHistoryThreadIndexView(postbox: postbox, peerId: id, summaryComponents: summaryComponents)
+    case let .messageHistoryThreadInfo(peerId, threadId):
+        return MutableMessageHistoryThreadInfoView(postbox: postbox, peerId: peerId, threadId: threadId)
+    case let .storySubscriptions(key):
+        return MutableStorySubscriptionsView(postbox: postbox, key: key)
+    case let .storiesState(key):
+        return MutableStoryStatesView(postbox: postbox, key: key)
+    case let .storyItems(peerId):
+        return MutableStoryItemsView(postbox: postbox, peerId: peerId)
+    case .storyExpirationTimeItems:
+        return MutableStoryExpirationTimeItemsView(postbox: postbox)
+    case let .peerStoryStats(peerIds):
+        return MutablePeerStoryStatsView(postbox: postbox, peerIds: peerIds)
+    case let .story(id):
+        return MutableStoryView(postbox: postbox, id: id)
+    case let .savedMessagesIndex(peerId):
+        return MutableMessageHistorySavedMessagesIndexView(postbox: postbox, peerId: peerId)
+    case let .savedMessagesStats(peerId):
+        return MutableMessageHistorySavedMessagesStatsView(postbox: postbox, peerId: peerId)
+    case let .chatInterfaceState(peerId):
+        return MutableChatInterfaceStateView(postbox: postbox, peerId: peerId)
+    case let .historyView(historyView):
+        return MutableMessageHistoryView(
+            postbox: postbox,
+            orderStatistics: historyView.orderStatistics,
+            clipHoles: historyView.clipHoles,
+            trackHoles: historyView.trackHoles,
+            peerIds: .single(peerId: historyView.peerId, threadId: historyView.threadId),
+            ignoreMessagesInTimestampRange: historyView.ignoreMessagesInTimestampRange,
+            ignoreMessageIds: historyView.ignoreMessageIds,
+            anchor: historyView.anchor,
+            combinedReadStates: historyView.combinedReadStates,
+            transientReadStates: historyView.transientReadStates,
+            tag: historyView.tag,
+            appendMessagesFromTheSameGroup: historyView.appendMessagesFromTheSameGroup,
+            namespaces: historyView.namespaces,
+            count: historyView.count,
+            topTaggedMessages: [:],
+            additionalDatas: []
+        )
+    case let .typingDrafts(peerId):
+        return MutableTypingDraftsView(postbox: postbox, peerAndThreadId: peerId)
+    case .allTypingDrafts:
+        return MutableAllTypingDraftsView(postbox: postbox)
     }
 }

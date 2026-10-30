@@ -6,6 +6,7 @@ final class PeerTable: Table {
     }
     
     private let reverseAssociatedTable: ReverseAssociatedPeerTable
+    private let peerTimeoutPropertiesTable: PeerTimeoutPropertiesTable
     
     private let sharedEncoder = PostboxEncoder()
     private let sharedKey = ValueBoxKey(length: 8)
@@ -13,8 +14,9 @@ final class PeerTable: Table {
     private var cachedPeers: [PeerId: Peer] = [:]
     private var updatedInitialPeers: [PeerId: Peer?] = [:]
     
-    init(valueBox: ValueBox, table: ValueBoxTable, useCaches: Bool, reverseAssociatedTable: ReverseAssociatedPeerTable) {
+    init(valueBox: ValueBox, table: ValueBoxTable, useCaches: Bool, reverseAssociatedTable: ReverseAssociatedPeerTable, peerTimeoutPropertiesTable: PeerTimeoutPropertiesTable) {
         self.reverseAssociatedTable = reverseAssociatedTable
+        self.peerTimeoutPropertiesTable = peerTimeoutPropertiesTable
         
         super.init(valueBox: valueBox, table: table, useCaches: useCaches)
     }
@@ -54,13 +56,41 @@ final class PeerTable: Table {
         var result: [((Peer, Bool)?, (Peer, Bool))] = []
         for (peerId, initialPeer) in self.updatedInitialPeers {
             if let peer = self.get(peerId) {
-                let isContact = contactsTable.isContact(peerId: peerId)
+                // A peer whose identity is overridden by an associated one (a secret chat) has no
+                // contact status of its own. ChatListIndexTable files it into a summary counter
+                // bucket using the associated peer's status, so the tag transitions derived from
+                // this must resolve it the same way or the chat lands in two buckets at once.
+                let contactPeerId: PeerId
+                if let associatedPeerId = peer.associatedPeerId, peer.associatedPeerOverridesIdentity {
+                    contactPeerId = associatedPeerId
+                } else {
+                    contactPeerId = peerId
+                }
+                let isContact = contactsTable.isContact(peerId: contactPeerId)
                 result.append((initialPeer.flatMap { ($0, isContact) }, (peer, isContact)))
             } else {
                 assertionFailure()
             }
         }
         return result
+    }
+    
+    func commitDependentTables() {
+        for (peerId, previousPeer) in self.updatedInitialPeers {
+            if let peer = self.cachedPeers[peerId] {
+                let previousTimeout = previousPeer?.timeoutAttribute
+                if previousTimeout != peer.timeoutAttribute {
+                    if let previousTimeout = previousTimeout {
+                        self.peerTimeoutPropertiesTable.remove(peerId: peerId, timestamp: previousTimeout)
+                    }
+                    if let updatedTimeout = peer.timeoutAttribute {
+                        self.peerTimeoutPropertiesTable.add(peerId: peerId, timestamp: updatedTimeout)
+                    }
+                }
+            } else {
+                assertionFailure()
+            }
+        }
     }
     
     override func beforeCommit() {

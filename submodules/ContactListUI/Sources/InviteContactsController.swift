@@ -38,6 +38,7 @@ public class InviteContactsController: ViewController, MFMessageComposeViewContr
         
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
         
+        self._hasGlassStyle = true
         self.navigationPresentation = .modal
         
         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
@@ -67,7 +68,7 @@ public class InviteContactsController: ViewController, MFMessageComposeViewContr
                     strongSelf.updateThemeAndStrings()
                 }
             }
-        })
+        }).strict()
         
         self.searchContentNode = NavigationBarSearchContentNode(theme: self.presentationData.theme, placeholder: self.presentationData.strings.Common_Search, activate: { [weak self] in
             self?.activateSearch()
@@ -86,7 +87,7 @@ public class InviteContactsController: ViewController, MFMessageComposeViewContr
     
     private func updateThemeAndStrings() {
         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
-        self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: self.presentationData))
+        self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: self.presentationData), transition: .immediate)
         self.searchContentNode?.updateThemeAndPlaceholder(theme: self.presentationData.theme, placeholder: self.presentationData.strings.Common_Search)
         self.title = self.presentationData.strings.Contacts_InviteFriends
         self.navigationItem.backBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Common_Back, style: .plain, target: nil, action: nil)
@@ -171,7 +172,7 @@ public class InviteContactsController: ViewController, MFMessageComposeViewContr
             self?.updateRightBarButtonItem()
         }
         
-        self.contactsNode.listNode.visibleContentOffsetChanged = { [weak self] offset in
+        self.contactsNode.listNode.visibleContentOffsetChanged = { [weak self] offset, _ in
             if let strongSelf = self, let searchContentNode = strongSelf.searchContentNode {
                 searchContentNode.updateListVisibleContentOffset(offset)
             }

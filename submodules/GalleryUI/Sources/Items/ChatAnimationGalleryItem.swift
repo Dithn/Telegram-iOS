@@ -33,7 +33,7 @@ class ChatAnimationGalleryItem: GalleryItem {
     func node(synchronous: Bool) -> GalleryItemNode {
         let node = ChatAnimationGalleryItemNode(context: self.context, presentationData: self.presentationData)
 
-        for media in self.message.media {
+        for media in self.message.effectiveMedia {
             if let file = media as? TelegramMediaFile {
                 node.setFile(context: self.context, fileReference: .message(message: MessageReference(self.message), media: file))
                 break
@@ -93,7 +93,7 @@ final class ChatAnimationGalleryItemNode: ZoomableContentGalleryItemNode {
     private var disposable = MetaDisposable()
     private var fetchDisposable = MetaDisposable()
     private let statusDisposable = MetaDisposable()
-    private var status: MediaResourceStatus?
+    private var status: EngineMediaResource.FetchStatus?
     
     init(context: AccountContext, presentationData: PresentationData) {
         self.context = context
@@ -154,7 +154,7 @@ final class ChatAnimationGalleryItemNode: ZoomableContentGalleryItemNode {
                 guard let strongSelf = self else {
                     return
                 }
-                if let json = try? JSONSerialization.jsonObject(with: next, options: []) as? [AnyHashable: Any] {
+                if let json = try? JSONSerialization.jsonObject(with: next, options: []) as? [String: Any] {
                     let containerSize = CGSize(width: 640.0, height: 640.0)
                     strongSelf.animationNode.setAnimation(json: json)
                     strongSelf.zoomableContent = (containerSize, strongSelf.containerNode)
@@ -172,9 +172,7 @@ final class ChatAnimationGalleryItemNode: ZoomableContentGalleryItemNode {
             
             self._title.set(.single("\(fileReference.media.fileName ?? "") - \(dataSizeString(fileReference.media.size ?? 0, forceDecimal: false, formatting: DataSizeStringFormatting(presentationData: self.presentationData)))"))
             
-            let speedItem = UIBarButtonItem(image: UIImage(bundleImageName: "Media Gallery/SlowDown"), style: .plain, target: self, action: #selector(self.toggleSpeedButtonPressed))
-            let backgroundItem = UIBarButtonItem(image: backgroundButtonIcon, style: .plain, target: self, action: #selector(self.toggleBackgroundButtonPressed))
-            self._rightBarButtonItems.set(.single([speedItem, backgroundItem]))
+            self._rightBarButtonItems.set(.single([]))
         }
         self.contextAndMedia = (context, fileReference.abstract)
     }
@@ -197,7 +195,7 @@ final class ChatAnimationGalleryItemNode: ZoomableContentGalleryItemNode {
     }
     
     private func setupStatus(resource: MediaResource) {
-        self.statusDisposable.set((self.context.account.postbox.mediaBox.resourceStatus(resource)
+        self.statusDisposable.set((self.context.engine.resources.status(resource: EngineMediaResource(resource))
         |> deliverOnMainQueue).start(next: { [weak self] status in
             if let strongSelf = self {
                 let previousStatus = strongSelf.status
@@ -343,9 +341,9 @@ final class ChatAnimationGalleryItemNode: ZoomableContentGalleryItemNode {
             if let resource = resource {
                 switch status {
                     case .Fetching:
-                        self.context.account.postbox.mediaBox.cancelInteractiveResourceFetch(resource.resource)
+                        self.context.engine.resources.cancelInteractiveResourceFetch(id: EngineMediaResource.Id(resource.resource.id))
                     case .Remote:
-                        self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.context.account.postbox.mediaBox, reference: resource, statsCategory: statsCategory ?? .generic).start())
+                    self.fetchDisposable.set(self.context.engine.resources.fetch(reference: resource, userLocation: (self.message?.id.peerId).flatMap(MediaResourceUserLocation.peer) ?? .other, userContentType: .file, statsCategory: statsCategory ?? .generic).start())
                     default:
                         break
                 }

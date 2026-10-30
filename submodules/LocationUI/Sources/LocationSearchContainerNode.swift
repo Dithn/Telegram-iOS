@@ -3,7 +3,6 @@ import UIKit
 import AsyncDisplayKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import TelegramStringFormatting
@@ -20,8 +19,11 @@ private struct LocationSearchEntry: Identifiable, Comparable {
     let index: Int
     let theme: PresentationTheme
     let location: TelegramMediaMap
+    let queryId: Int64?
+    let resultId: String?
     let title: String?
     let distance: Double
+    let story: Bool
     
     var stableId: String {
         return self.location.venue?.id ?? ""
@@ -37,10 +39,19 @@ private struct LocationSearchEntry: Identifiable, Comparable {
         if lhs.location.venue?.id != rhs.location.venue?.id {
             return false
         }
+        if lhs.queryId != rhs.queryId {
+            return false
+        }
+        if lhs.resultId != rhs.resultId {
+            return false
+        }
         if lhs.title != rhs.title {
             return false
         }
         if lhs.distance != rhs.distance {
+            return false
+        }
+        if lhs.story != rhs.story {
             return false
         }
         return true
@@ -50,8 +61,11 @@ private struct LocationSearchEntry: Identifiable, Comparable {
         return lhs.index < rhs.index
     }
     
-    func item(engine: TelegramEngine, presentationData: PresentationData, sendVenue: @escaping (TelegramMediaMap) -> Void) -> ListViewItem {
+    func item(engine: TelegramEngine, presentationData: PresentationData, sendVenue: @escaping (TelegramMediaMap, Int64?, String?) -> Void, goToVenue: @escaping (TelegramMediaMap) -> Void) -> ListViewItem {
         let venue = self.location
+        let queryId = self.queryId
+        let resultId = self.resultId
+        
         let header: ChatListSearchItemHeader
         let subtitle: String?
         if let _ = venue.venue {
@@ -61,9 +75,11 @@ private struct LocationSearchEntry: Identifiable, Comparable {
             header = ChatListSearchItemHeader(type: .mapAddress, theme: presentationData.theme, strings: presentationData.strings)
             subtitle = presentationData.strings.Map_DistanceAway(stringForDistance(strings: presentationData.strings, distance: self.distance)).string
         }
-        return ItemListVenueItem(presentationData: ItemListPresentationData(presentationData), engine: engine, venue: self.location, title: self.title, subtitle: subtitle, style: .plain, action: {
-            sendVenue(venue)
-        }, header: header)
+        return ItemListVenueItem(presentationData: ItemListPresentationData(presentationData), engine: engine, venue: self.location, title: self.title, subtitle: subtitle, icon: .goTo, style: .plain, action: {
+            sendVenue(venue, queryId, resultId)
+        }, infoAction: self.story && venue.venue == nil ? {
+            goToVenue(venue)
+        } : nil, header: header)
     }
 }
 
@@ -76,12 +92,12 @@ struct LocationSearchContainerTransition {
     let isEmpty: Bool
 }
 
-private func locationSearchContainerPreparedTransition(from fromEntries: [LocationSearchEntry], to toEntries: [LocationSearchEntry], query: String, isSearching: Bool, isEmpty: Bool, engine: TelegramEngine, presentationData: PresentationData, sendVenue: @escaping (TelegramMediaMap) -> Void) -> LocationSearchContainerTransition {
+private func locationSearchContainerPreparedTransition(from fromEntries: [LocationSearchEntry], to toEntries: [LocationSearchEntry], query: String, isSearching: Bool, isEmpty: Bool, engine: TelegramEngine, presentationData: PresentationData, sendVenue: @escaping (TelegramMediaMap, Int64?, String?) -> Void, goToVenue: @escaping (TelegramMediaMap) -> Void) -> LocationSearchContainerTransition {
     let (deleteIndices, indicesAndItems, updateIndices) = mergeListsStableWithUpdates(leftList: fromEntries, rightList: toEntries)
     
     let deletions = deleteIndices.map { ListViewDeleteItem(index: $0, directionHint: nil) }
-    let insertions = indicesAndItems.map { ListViewInsertItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(engine: engine, presentationData: presentationData, sendVenue: sendVenue), directionHint: nil) }
-    let updates = updateIndices.map { ListViewUpdateItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(engine: engine, presentationData: presentationData, sendVenue: sendVenue), directionHint: nil) }
+    let insertions = indicesAndItems.map { ListViewInsertItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(engine: engine, presentationData: presentationData, sendVenue: sendVenue, goToVenue: goToVenue), directionHint: nil) }
+    let updates = updateIndices.map { ListViewUpdateItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(engine: engine, presentationData: presentationData, sendVenue: sendVenue, goToVenue: goToVenue), directionHint: nil) }
     
     return LocationSearchContainerTransition(deletions: deletions, insertions: insertions, updates: updates, query: query, isSearching: isSearching, isEmpty: isEmpty)
 }
@@ -89,6 +105,7 @@ private func locationSearchContainerPreparedTransition(from fromEntries: [Locati
 final class LocationSearchContainerNode: ASDisplayNode {
     private let context: AccountContext
     private let interaction: LocationPickerInteraction
+    private let story: Bool
     
     private let dimNode: ASDisplayNode
     public let listNode: ListView
@@ -109,19 +126,21 @@ final class LocationSearchContainerNode: ASDisplayNode {
         return self._isSearching.get()
     }
     
-    public init(context: AccountContext, coordinate: CLLocationCoordinate2D, interaction: LocationPickerInteraction) {
+    public init(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, coordinate: CLLocationCoordinate2D, interaction: LocationPickerInteraction, story: Bool) {
         self.context = context
         self.interaction = interaction
+        self.story = story
                 
-        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+        let presentationData = updatedPresentationData?.initial ?? context.sharedContext.currentPresentationData.with { $0 }
         self.presentationData = presentationData
         self.themeAndStringsPromise = Promise((self.presentationData.theme, self.presentationData.strings))
         
         self.dimNode = ASDisplayNode()
-        self.dimNode.backgroundColor = UIColor.black.withAlphaComponent(0.5)
-        self.listNode = ListView()
+        self.dimNode.backgroundColor = .clear // UIColor.black.withAlphaComponent(0.5)
+        
+        self.listNode = ListViewImpl()
         self.listNode.backgroundColor = self.presentationData.theme.list.plainBackgroundColor
-        self.listNode.isHidden = true
+        self.listNode.alpha = 0.0
         self.listNode.accessibilityPageScrolledString = { row, count in
             return presentationData.strings.VoiceOver_ScrollStatus(row, count).string
         }
@@ -129,12 +148,12 @@ final class LocationSearchContainerNode: ASDisplayNode {
         self.emptyResultsTitleNode = ImmediateTextNode()
         self.emptyResultsTitleNode.attributedText = NSAttributedString(string: self.presentationData.strings.SharedMedia_SearchNoResults, font: Font.semibold(17.0), textColor: self.presentationData.theme.list.freeTextColor)
         self.emptyResultsTitleNode.textAlignment = .center
-        self.emptyResultsTitleNode.isHidden = true
+        self.emptyResultsTitleNode.alpha = 0.0
         
         self.emptyResultsTextNode = ImmediateTextNode()
         self.emptyResultsTextNode.maximumNumberOfLines = 0
         self.emptyResultsTextNode.textAlignment = .center
-        self.emptyResultsTextNode.isHidden = true
+        self.emptyResultsTextNode.alpha = 0.0
         
         super.init()
         
@@ -146,35 +165,35 @@ final class LocationSearchContainerNode: ASDisplayNode {
         
         self.addSubnode(self.emptyResultsTitleNode)
         self.addSubnode(self.emptyResultsTextNode)
-        
-        self.listNode.isHidden = true
-        
+                
         let currentLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
         let themeAndStringsPromise = self.themeAndStringsPromise
+        
+        let locale = localeWithStrings(presentationData.strings)
         
         let isSearching = self._isSearching
         let searchItems = self.searchQuery.get()
         |> mapToSignal { query -> Signal<String?, NoError> in
             if let query = query, !query.isEmpty {
-                return (.complete() |> delay(0.6, queue: Queue.mainQueue()))
+                return (.complete() |> delay(1.0, queue: Queue.mainQueue()))
                 |> then(.single(query))
             } else {
                 return .single(query)
             }
         }
         |> mapToSignal { query -> Signal<([LocationSearchEntry], String)?, NoError> in
-            if let query = query, !query.isEmpty {
-                let foundVenues = nearbyVenues(context: context, latitude: coordinate.latitude, longitude: coordinate.longitude, query: query)
+            if let query, !query.isEmpty {
+                let foundVenues = nearbyVenues(context: context, story: story, latitude: coordinate.latitude, longitude: coordinate.longitude, query: query)
                 |> afterCompleted {
                     isSearching.set(false)
                 }
-                let foundPlacemarks = geocodeLocation(address: query)
+                let foundPlacemarks = geocodeLocation(address: query, locale: locale)
                 return combineLatest(foundVenues, foundPlacemarks, themeAndStringsPromise.get())
                 |> delay(0.1, queue: Queue.concurrentDefaultQueue())
                 |> beforeStarted {
                     isSearching.set(true)
                 }
-                |> map { venues, placemarks, themeAndStrings -> ([LocationSearchEntry], String) in
+                |> map { contextResult, placemarks, themeAndStrings -> ([LocationSearchEntry], String) in
                     var entries: [LocationSearchEntry] = []
                     var index: Int = 0
                     
@@ -183,24 +202,37 @@ final class LocationSearchContainerNode: ASDisplayNode {
                             guard let placemarkLocation = placemark.location else {
                                 continue
                             }
-                            let location = TelegramMediaMap(latitude: placemarkLocation.coordinate.latitude, longitude: placemarkLocation.coordinate.longitude, heading: nil, accuracyRadius: nil, geoPlace: nil, venue: nil, liveBroadcastingTimeout: nil, liveProximityNotificationRadius: nil)
+                            var address: MapGeoAddress?
+                            if let countryCode = placemark.isoCountryCode, placemark.thoroughfare == nil {
+                                address = MapGeoAddress(country: countryCode, state: placemark.administrativeArea, city: placemark.locality, street: nil)
+                            }
+                            let location = TelegramMediaMap(latitude: placemarkLocation.coordinate.latitude, longitude: placemarkLocation.coordinate.longitude, heading: nil, accuracyRadius: nil, venue: nil, address: address, liveBroadcastingTimeout: nil, liveProximityNotificationRadius: nil)
                             
-                            entries.append(LocationSearchEntry(index: index, theme: themeAndStrings.0, location: location, title: placemark.name ?? "Name", distance: placemarkLocation.distance(from: currentLocation)))
+                            entries.append(LocationSearchEntry(index: index, theme: themeAndStrings.0, location: location, queryId: nil, resultId: nil, title: placemark.name ?? "Name", distance: placemarkLocation.distance(from: currentLocation), story: story))
                             
                             index += 1
                         }
                     }
                     
-                    for venue in venues {
-                        entries.append(LocationSearchEntry(index: index, theme: themeAndStrings.0, location: venue, title: nil, distance: 0.0))
-                        index += 1
+                    if let contextResult {
+                        for result in contextResult.results {
+                            switch result.message {
+                                case let .mapLocation(mapMedia, _):
+                                    if let _ = mapMedia.venue {
+                                        entries.append(LocationSearchEntry(index: index, theme: themeAndStrings.0, location: mapMedia, queryId: contextResult.queryId, resultId: result.id, title: nil, distance: 0.0, story: story))
+                                        index += 1
+                                    }
+                                default:
+                                    break
+                            }
+                        }
                     }
                     return (entries, query)
                 }
             } else {
                 return .single(nil)
                 |> afterCompleted {
-                    isSearching.set(true)
+                    isSearching.set(false)
                 }
             }
         }
@@ -211,13 +243,25 @@ final class LocationSearchContainerNode: ASDisplayNode {
             if let strongSelf = self {
                 let (items, query) = itemsAndQuery ?? (nil, "")
                 let previousItems = previousSearchItems.swap(items ?? [])
-                let transition = locationSearchContainerPreparedTransition(from: previousItems, to: items ?? [], query: query, isSearching: items != nil, isEmpty: items?.isEmpty ?? false, engine: context.engine, presentationData: strongSelf.presentationData, sendVenue: { venue in self?.listNode.clearHighlightAnimated(true)
+                let transition = locationSearchContainerPreparedTransition(from: previousItems, to: items ?? [], query: query, isSearching: items != nil, isEmpty: items?.isEmpty ?? false, engine: context.engine, presentationData: strongSelf.presentationData, sendVenue: { venue, queryId, resultId in
+                    self?.listNode.clearHighlightAnimated(true)
                     if let _ = venue.venue {
-                        self?.interaction.sendVenue(venue)
+                        self?.interaction.sendVenue(venue, queryId, resultId)
+                    } else if story, let address = venue.address {
+                        let name: String
+                        if let city = address.city {
+                            name = city
+                        } else {
+                            name = displayCountryName(address.country, locale: locale)
+                        }
+                        self?.interaction.sendLocation(venue.coordinate, name, address)
                     } else {
-                        self?.interaction.goToCoordinate(venue.coordinate)
+                        self?.interaction.goToCoordinate(venue.coordinate, false)
                         self?.interaction.dismissSearch()
                     }
+                }, goToVenue: { venue in
+                    self?.interaction.goToCoordinate(venue.coordinate, true)
+                    self?.interaction.dismissSearch()
                 })
                 strongSelf.enqueueTransition(transition)
             }
@@ -233,7 +277,7 @@ final class LocationSearchContainerNode: ASDisplayNode {
     }
     
     func scrollToTop() {
-        if !self.listNode.isHidden {
+        if self.listNode.alpha > 0.0 {
             self.listNode.transaction(deleteIndices: [], insertIndicesAndItems: [], updateIndicesAndItems: [], options: [.Synchronous, .LowLatency], scrollToItem: ListViewScrollToItem(index: 0, position: .top(0.0), animated: true, curve: .Default(duration: nil), directionHint: .Up), updateSizeAndInsets: nil, stationaryItemRange: nil, updateOpaqueState: nil, completion: { _ in })
         }
     }
@@ -309,14 +353,16 @@ final class LocationSearchContainerNode: ASDisplayNode {
                 guard let strongSelf = self else {
                     return
                 }
-                strongSelf.listNode.isHidden = !transition.isSearching
+                
+                let containerTransition = ContainedViewLayoutTransition.animated(duration: 0.3, curve: .easeInOut)
+                containerTransition.updateAlpha(node: strongSelf.listNode, alpha: transition.isSearching ? 1.0 : 0.0)
                 strongSelf.dimNode.isHidden = transition.isSearching
                 
                 strongSelf.emptyResultsTextNode.attributedText = NSAttributedString(string: strongSelf.presentationData.strings.Map_SearchNoResultsDescription(transition.query).string, font: Font.regular(15.0), textColor: strongSelf.presentationData.theme.list.freeTextColor)
                 
                 let emptyResults = transition.isSearching && transition.isEmpty
-                strongSelf.emptyResultsTitleNode.isHidden = !emptyResults
-                strongSelf.emptyResultsTextNode.isHidden = !emptyResults
+                containerTransition.updateAlpha(node: strongSelf.emptyResultsTitleNode, alpha: emptyResults ? 1.0 : 0.0)
+                containerTransition.updateAlpha(node: strongSelf.emptyResultsTextNode, alpha: emptyResults ? 1.0 : 0.0)
                 
                 if let (layout, navigationBarHeight) = strongSelf.validLayout {
                     strongSelf.containerLayoutUpdated(layout, navigationBarHeight: navigationBarHeight, transition: .immediate)

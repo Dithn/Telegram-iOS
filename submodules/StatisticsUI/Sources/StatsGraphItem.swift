@@ -10,28 +10,35 @@ import PresentationDataUtils
 import GraphCore
 import GraphUI
 import ActivityIndicator
+import ListItemComponentAdaptor
 
-class StatsGraphItem: ListViewItem, ItemListItem {
+public final class StatsGraphItem: ListViewItem, ItemListItem, ListItemComponentAdaptor.ItemGenerator {
     let presentationData: ItemListPresentationData
+    let systemStyle: ItemListSystemStyle
     let graph: StatsGraph
     let type: ChartType
+    let noInitialZoom: Bool
+    let conversionRate: Double
     let getDetailsData: ((Date, @escaping (String?) -> Void) -> Void)?
-    let sectionId: ItemListSectionId
+    public let sectionId: ItemListSectionId
     let style: ItemListStyle
     
-    init(presentationData: ItemListPresentationData, graph: StatsGraph, type: ChartType, getDetailsData: ((Date, @escaping (String?) -> Void) -> Void)? = nil, sectionId: ItemListSectionId, style: ItemListStyle) {
+    public init(presentationData: ItemListPresentationData, systemStyle: ItemListSystemStyle = .legacy, graph: StatsGraph, type: ChartType, noInitialZoom: Bool = false, conversionRate: Double = 1.0, getDetailsData: ((Date, @escaping (String?) -> Void) -> Void)? = nil, sectionId: ItemListSectionId, style: ItemListStyle) {
         self.presentationData = presentationData
+        self.systemStyle = systemStyle
         self.graph = graph
         self.type = type
+        self.noInitialZoom = noInitialZoom
+        self.conversionRate = conversionRate
         self.getDetailsData = getDetailsData
         self.sectionId = sectionId
         self.style = style
     }
     
-    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = StatsGraphItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -44,13 +51,13 @@ class StatsGraphItem: ListViewItem, ItemListItem {
         }
     }
     
-    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? StatsGraphItemNode {
                 let makeLayout = nodeValue.asyncLayout()
                 
                 async {
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply()
@@ -61,10 +68,39 @@ class StatsGraphItem: ListViewItem, ItemListItem {
         }
     }
     
-    var selectable: Bool = false
+    public func item() -> ListViewItem {
+        return self
+    }
+    
+    public static func ==(lhs: StatsGraphItem, rhs: StatsGraphItem) -> Bool {
+        if lhs.presentationData !== rhs.presentationData {
+            return false
+        }
+        if lhs.graph != rhs.graph {
+            return false
+        }
+        if lhs.type != rhs.type {
+            return false
+        }
+        if lhs.noInitialZoom != rhs.noInitialZoom {
+            return false
+        }
+        if lhs.conversionRate != rhs.conversionRate {
+            return false
+        }
+        if lhs.sectionId != rhs.sectionId {
+            return false
+        }
+        if lhs.style != rhs.style {
+            return false
+        }
+        return true
+    }
+    
+    public var selectable: Bool = false
 }
 
-class StatsGraphItemNode: ListViewItemNode {
+public final class StatsGraphItemNode: ListViewItemNode {
     private let backgroundNode: ASDisplayNode
     private let topStripeNode: ASDisplayNode
     private let bottomStripeNode: ASDisplayNode
@@ -73,6 +109,7 @@ class StatsGraphItemNode: ListViewItemNode {
     
     let chartNode: ChartNode
     private let activityIndicator: ActivityIndicator
+    private let errorTextNode: TextNode
     
     private var item: StatsGraphItem?
     private var visibilityHeight: CGFloat?
@@ -98,14 +135,18 @@ class StatsGraphItemNode: ListViewItemNode {
         self.chartNode = ChartNode()
         self.activityIndicator = ActivityIndicator(type: ActivityIndicatorType.custom(.black, 16.0, 2.0, false))
         self.activityIndicator.isHidden = true
+        self.errorTextNode = TextNode()
+        self.errorTextNode.isUserInteractionEnabled = false
+        self.errorTextNode.isHidden = true
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
         
         self.chartContainerNode.addSubnode(self.chartNode)
         self.chartContainerNode.addSubnode(self.activityIndicator)
+        self.chartContainerNode.addSubnode(self.errorTextNode)
     }
     
-    override func didLoad() {
+    public override func didLoad() {
         super.didLoad()
     
         self.view.interactiveTransitionGestureRecognizerTest = { point -> Bool in
@@ -113,17 +154,19 @@ class StatsGraphItemNode: ListViewItemNode {
         }
     }
     
-    func resetInteraction() {
+    public func resetInteraction() {
         self.chartNode.resetInteraction()
     }
     
     func asyncLayout() -> (_ item: StatsGraphItem, _ params: ListViewItemLayoutParams, _ insets: ItemListNeighbors) -> (ListViewItemNodeLayout, () -> Void) {
+        let makeErrorTextLayout = TextNode.asyncLayout(self.errorTextNode)
         let currentItem = self.item
         let currentVisibilityHeight = self.visibilityHeight
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             let leftInset = params.leftInset
             let rightInset: CGFloat = params.rightInset
+            let errorTextFont = Font.regular(item.presentationData.fontSize.itemListBaseLabelFontSize / 14.0 * 16.0)
             var updatedTheme: PresentationTheme?
             var updatedGraph: StatsGraph?
             var updatedController: BaseChartController?
@@ -135,7 +178,7 @@ class StatsGraphItemNode: ListViewItemNode {
             if currentItem?.graph != item.graph {
                 updatedGraph = item.graph
                 if case let .Loaded(_, data) = updatedGraph {
-                    updatedController = createChartController(data, type: item.type, getDetailsData: { [weak self] date, completion in
+                    updatedController = createChartController(data, type: item.type, rate: item.conversionRate, getDetailsData: { [weak self] date, completion in
                         if let strongSelf = self, let item = strongSelf.item {
                             item.getDetailsData?(date, completion)
                         }
@@ -161,6 +204,27 @@ class StatsGraphItemNode: ListViewItemNode {
                     contentSize = CGSize(width: params.width, height: 361.0)
                     insets = itemListNeighborsGroupedInsets(neighbors, params)
             }
+            
+            let errorText: String
+            if case let .Failed(text) = item.graph {
+                errorText = text
+            } else {
+                errorText = ""
+            }
+            let (errorTextLayout, errorTextApply) = makeErrorTextLayout(TextNodeLayoutArguments(
+                attributedString: NSAttributedString(
+                    string: errorText,
+                    font: errorTextFont,
+                    textColor: item.presentationData.theme.list.itemSecondaryTextColor
+                ),
+                backgroundColor: nil,
+                maximumNumberOfLines: 0,
+                truncationType: .end,
+                constrainedSize: CGSize(width: max(1.0, params.width - leftInset - rightInset - 32.0), height: contentSize.height),
+                alignment: .center,
+                cutout: nil,
+                insets: UIEdgeInsets()
+            ))
                 
             var visibilityHeight = currentVisibilityHeight
             if let updatedController = updatedController {
@@ -180,6 +244,8 @@ class StatsGraphItemNode: ListViewItemNode {
             if let visibilityHeight = visibilityHeight {
                 contentSize.height += visibilityHeight
             }
+            contentSize.height += 7.0
+            contentSize.height += 8.0
             
             let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
             return (ListViewItemNodeLayout(contentSize: contentSize, insets: insets), { [weak self] in
@@ -245,49 +311,77 @@ class StatsGraphItemNode: ListViewItemNode {
                                 strongSelf.bottomStripeNode.isHidden = hasCorners
                         }
                         
-                        strongSelf.chartContainerNode.frame = CGRect(origin: CGPoint(x: leftInset, y: 0.0), size: CGSize(width: layout.size.width - leftInset - rightInset, height: contentSize.height))
+                        strongSelf.chartContainerNode.frame = CGRect(origin: CGPoint(x: leftInset, y: 8.0), size: CGSize(width: layout.size.width - leftInset - rightInset, height: contentSize.height - 8.0))
                         strongSelf.chartNode.frame = CGRect(origin: CGPoint(x: 0.0, y: item.type == .hourlyStep ? -40.0 : 0.0), size: CGSize(width: layout.size.width - leftInset - rightInset, height: 750.0))
-                        strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                        strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                         
                         strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
-                        strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                        strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                         strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: separatorHeight))
                         strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: params.width - bottomStripeInset, height: separatorHeight))
                         
-                        strongSelf.activityIndicator.frame = CGRect(origin: CGPoint(x: floor((layout.size.width - 16.0) / 2.0), y: floor((layout.size.height - 16.0) / 2.0)), size: CGSize(width: 16.0, height: 16.0))
+                        strongSelf.activityIndicator.frame = CGRect(origin: CGPoint(x: floor((strongSelf.chartContainerNode.frame.width - 16.0) / 2.0), y: floor((strongSelf.chartContainerNode.frame.height - 16.0) / 2.0)), size: CGSize(width: 16.0, height: 16.0))
+                        strongSelf.errorTextNode.frame = CGRect(
+                            origin: CGPoint(
+                                x: floorToScreenPixels((strongSelf.chartContainerNode.bounds.width - errorTextLayout.size.width) / 2.0),
+                                y: floorToScreenPixels((strongSelf.chartContainerNode.bounds.height - errorTextLayout.size.height) / 2.0)
+                            ),
+                            size: errorTextLayout.size
+                        )
                     }
                     
+                    let _ = errorTextApply()
                     strongSelf.activityIndicator.type = .custom(item.presentationData.theme.list.itemSecondaryTextColor, 16.0, 2.0, false)
                     
                     if let updatedTheme = updatedTheme {
-                        strongSelf.chartNode.setup(theme: ChartTheme(presentationTheme: updatedTheme), strings: ChartStrings(zoomOut: item.presentationData.strings.Stats_ZoomOut, total: item.presentationData.strings.Stats_Total))
+                        strongSelf.chartNode.setup(
+                            theme: ChartTheme(presentationTheme: updatedTheme),
+                            strings: ChartStrings(
+                                zoomOut: item.presentationData.strings.Stats_ZoomOut,
+                                total: item.presentationData.strings.Stats_Total,
+                                revenueInTon: item.presentationData.strings.Stats_RevenueInTon,
+                                revenueInStars: item.presentationData.strings.Stats_RevenueInStars,
+                                revenueInUsd: item.presentationData.strings.Stats_RevenueInUsd
+                            )
+                        )
                     }
                     
-                    if let updatedGraph = updatedGraph {
-                        if case .Loaded = updatedGraph, let updatedController = updatedController {
-                            strongSelf.chartNode.setup(controller: updatedController)
-                            strongSelf.activityIndicator.isHidden = true
-                            strongSelf.chartNode.isHidden = false
-                        } else if case .OnDemand = updatedGraph {
-                            strongSelf.activityIndicator.isHidden = false
-                            strongSelf.chartNode.isHidden = true
-                        }
+                    if let updatedGraph = updatedGraph, case .Loaded = updatedGraph, let updatedController = updatedController {
+                        strongSelf.chartNode.setup(controller: updatedController, noInitialZoom: item.noInitialZoom)
+                    }
+                    
+                    switch item.graph {
+                    case .Loaded:
+                        strongSelf.activityIndicator.isHidden = true
+                        strongSelf.chartNode.isHidden = false
+                        strongSelf.errorTextNode.isHidden = true
+                    case .OnDemand:
+                        strongSelf.activityIndicator.isHidden = false
+                        strongSelf.chartNode.isHidden = true
+                        strongSelf.errorTextNode.isHidden = true
+                    case let .Failed(error):
+                        strongSelf.activityIndicator.isHidden = true
+                        strongSelf.chartNode.isHidden = true
+                        strongSelf.errorTextNode.isHidden = error.isEmpty
+                    case .Empty:
+                        strongSelf.activityIndicator.isHidden = true
+                        strongSelf.chartNode.isHidden = true
+                        strongSelf.errorTextNode.isHidden = true
                     }
                 }
             })
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    public override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
-    override func animateAdded(_ currentTimestamp: Double, duration: Double) {
+    public override func animateAdded(_ currentTimestamp: Double, duration: Double) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
     }
     
-    override func animateRemoved(_ currentTimestamp: Double, duration: Double) {
+    public override func animateRemoved(_ currentTimestamp: Double, duration: Double) {
         self.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false)
     }
 }
-

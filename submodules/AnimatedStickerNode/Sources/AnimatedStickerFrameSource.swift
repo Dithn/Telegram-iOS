@@ -3,7 +3,8 @@ import Compression
 import Display
 import SwiftSignalKit
 import MediaResources
-import RLottieBinding
+import LottieBinding
+import LottieSettings
 import GZip
 import ManagedFile
 import AnimationCompression
@@ -330,7 +331,7 @@ private final class AnimatedStickerDirectFrameSourceCache {
             return .notFound
         }
         
-        self.file.seek(position: Int64(index * 4 * 2))
+        let _ = self.file.seek(position: Int64(index * 4 * 2))
         var offset: Int32 = 0
         var length: Int32 = 0
         if self.file.read(&offset, 4) != 4 {
@@ -384,12 +385,12 @@ private final class AnimatedStickerDirectFrameSourceCache {
                         return
                     }
                     
-                    strongSelf.file.seek(position: Int64(index * 4 * 2))
+                    let _ = strongSelf.file.seek(position: Int64(index * 4 * 2))
                     var offset = Int32(currentSize)
                     var length = Int32(compressedData.data.count)
                     let _ = strongSelf.file.write(&offset, count: 4)
                     let _ = strongSelf.file.write(&length, count: 4)
-                    strongSelf.file.seek(position: Int64(currentSize))
+                    let _ = strongSelf.file.seek(position: Int64(currentSize))
                     compressedData.data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Void in
                         if let baseAddress = buffer.baseAddress {
                             let _ = strongSelf.file.write(baseAddress, count: Int(length))
@@ -427,12 +428,12 @@ private final class AnimatedStickerDirectFrameSourceCache {
                     return
                 }
                 
-                strongSelf.file.seek(position: Int64(index * 4 * 2))
+                let _ = strongSelf.file.seek(position: Int64(index * 4 * 2))
                 var offset = Int32(currentSize)
                 var length = Int32(compressedData.count)
                 let _ = strongSelf.file.write(&offset, count: 4)
                 let _ = strongSelf.file.write(&length, count: 4)
-                strongSelf.file.seek(position: Int64(currentSize))
+                let _ = strongSelf.file.seek(position: Int64(currentSize))
                 compressedData.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Void in
                     if let baseAddress = buffer.baseAddress {
                         let _ = strongSelf.file.write(baseAddress, count: Int(length))
@@ -502,7 +503,7 @@ private final class AnimatedStickerDirectFrameSourceCache {
         
         switch rangeResult {
         case let .range(range):
-            self.file.seek(position: Int64(range.lowerBound))
+            let _ = self.file.seek(position: Int64(range.lowerBound))
             let length = range.upperBound - range.lowerBound
             let compressedData = self.file.readData(count: length)
             if compressedData.count != length {
@@ -562,23 +563,23 @@ private final class AnimatedStickerDirectFrameSourceCache {
 }
 
 
-final class AnimatedStickerDirectFrameSource: AnimatedStickerFrameSource {
+public final class AnimatedStickerDirectFrameSource: AnimatedStickerFrameSource {
     private let queue: Queue
     private let data: Data
     private let width: Int
     private let height: Int
     private let cache: AnimatedStickerDirectFrameSourceCache?
     private let bytesPerRow: Int
-    let frameCount: Int
-    let frameRate: Int
+    public let frameCount: Int
+    public let frameRate: Int
     fileprivate var currentFrame: Int
     private let animation: LottieInstance
     
-    var frameIndex: Int {
+    public var frameIndex: Int {
         return self.currentFrame % self.frameCount
     }
     
-    init?(queue: Queue, data: Data, width: Int, height: Int, cachePathPrefix: String?, useMetalCache: Bool = false, fitzModifier: EmojiFitzModifier?) {
+    public init?(queue: Queue, data: Data, width: Int, height: Int, cachePathPrefix: String?, useMetalCache: Bool = false, fitzModifier: EmojiFitzModifier?, lottieSettings: LottieRenderingSettings) {
         self.queue = queue
         self.data = data
         self.width = width
@@ -587,13 +588,14 @@ final class AnimatedStickerDirectFrameSource: AnimatedStickerFrameSource {
         self.currentFrame = 0
         let decompressedData = TGGUnzipData(data, 8 * 1024 * 1024) ?? data
         
-        guard let animation = LottieInstance(data: decompressedData, fitzModifier: fitzModifier?.lottieFitzModifier ?? .none, colorReplacements: nil, cacheKey: "") else {
+        guard let animation = makeLottieInstance(data: decompressedData, fitzModifier: fitzModifier?.lottieFitzModifier ?? .none, colorReplacements: nil, cacheKey: "", settings: lottieSettings) else {
+            print("Could not load sticker data")
             return nil
         }
         self.animation = animation
-        let frameCount = Int(animation.frameCount)
+        let frameCount = max(1, Int(animation.frameCount))
         self.frameCount = frameCount
-        self.frameRate = Int(animation.frameRate)
+        self.frameRate = max(1, Int(animation.frameRate))
         
         self.cache = cachePathPrefix.flatMap { cachePathPrefix in
             AnimatedStickerDirectFrameSourceCache(queue: queue, pathPrefix: cachePathPrefix, width: width, height: height, frameCount: frameCount, fitzModifier: fitzModifier, useHardware: useMetalCache)
@@ -604,7 +606,7 @@ final class AnimatedStickerDirectFrameSource: AnimatedStickerFrameSource {
         assert(self.queue.isCurrent())
     }
     
-    func takeFrame(draw: Bool) -> AnimatedStickerFrame? {
+    public func takeFrame(draw: Bool) -> AnimatedStickerFrame? {
         let frameIndex = self.currentFrame % self.frameCount
         self.currentFrame += 1
         if draw {
@@ -630,11 +632,11 @@ final class AnimatedStickerDirectFrameSource: AnimatedStickerFrameSource {
         }
     }
     
-    func skipToEnd() {
+    public func skipToEnd() {
         self.currentFrame = self.frameCount - 1
     }
 
-    func skipToFrameIndex(_ index: Int) {
+    public func skipToFrameIndex(_ index: Int) {
         self.currentFrame = index
     }
 }

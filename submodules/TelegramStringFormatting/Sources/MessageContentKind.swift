@@ -3,10 +3,12 @@ import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
 import PlatformRestrictionMatching
+import TextFormat
 
 public enum MessageContentKindKey {
     case text
     case image
+    case livePhoto
     case video
     case videoMessage
     case audioMessage
@@ -19,15 +21,22 @@ public enum MessageContentKindKey {
     case liveLocation
     case expiredImage
     case expiredVideo
+    case expiredVoiceMessage
+    case expiredVideoMessage
     case poll
+    case todo
     case restricted
     case dice
     case invoice
+    case story
+    case giveaway
+    case paidContent
 }
 
 public enum MessageContentKind: Equatable {
-    case text(String)
+    case text(NSAttributedString)
     case image
+    case livePhoto
     case video
     case videoMessage
     case audioMessage
@@ -40,10 +49,164 @@ public enum MessageContentKind: Equatable {
     case liveLocation
     case expiredImage
     case expiredVideo
+    case expiredVoiceMessage
+    case expiredVideoMessage
     case poll(String)
+    case todo(String)
     case restricted(String)
     case dice(String)
     case invoice(String)
+    case story
+    case giveaway
+    
+    public func isSemanticallyEqual(to other: MessageContentKind) -> Bool {
+        switch self {
+        case .text:
+            if case .text = other {
+                return true
+            } else {
+                return false
+            }
+        case .image:
+            if case .image = other {
+                return true
+            } else {
+                return false
+            }
+        case .livePhoto:
+            if case .livePhoto = other {
+                return true
+            } else {
+                return false
+            }
+        case .video:
+            if case .video = other {
+                return true
+            } else {
+                return false
+            }
+        case .videoMessage:
+            if case .videoMessage = other {
+                return true
+            } else {
+                return false
+            }
+        case .audioMessage:
+            if case .audioMessage = other {
+                return true
+            } else {
+                return false
+            }
+        case .sticker:
+            if case .sticker = other {
+                return true
+            } else {
+                return false
+            }
+        case .animation:
+            if case .animation = other {
+                return true
+            } else {
+                return false
+            }
+        case .file:
+            if case .file = other {
+                return true
+            } else {
+                return false
+            }
+        case .contact:
+            if case .contact = other {
+                return true
+            } else {
+                return false
+            }
+        case .game:
+            if case .game = other {
+                return true
+            } else {
+                return false
+            }
+        case .location:
+            if case .location = other {
+                return true
+            } else {
+                return false
+            }
+        case .liveLocation:
+            if case .liveLocation = other {
+                return true
+            } else {
+                return false
+            }
+        case .expiredImage:
+            if case .expiredImage = other {
+                return true
+            } else {
+                return false
+            }
+        case .expiredVideo:
+            if case .expiredVideo = other {
+                return true
+            } else {
+                return false
+            }
+        case .expiredVoiceMessage:
+            if case .expiredVoiceMessage = other {
+                return true
+            } else {
+                return false
+            }
+        case .expiredVideoMessage:
+            if case .expiredVideoMessage = other {
+                return true
+            } else {
+                return false
+            }
+        case .poll:
+            if case .poll = other {
+                return true
+            } else {
+                return false
+            }
+        case .todo:
+            if case .todo = other {
+                return true
+            } else {
+                return false
+            }
+        case .restricted:
+            if case .restricted = other {
+                return true
+            } else {
+                return false
+            }
+        case .dice:
+            if case .dice = other {
+                return true
+            } else {
+                return false
+            }
+        case .invoice:
+            if case .invoice = other {
+                return true
+            } else {
+                return false
+            }
+        case .story:
+            if case .story = other {
+                return true
+            } else {
+                return false
+            }
+        case .giveaway:
+            if case .giveaway = other {
+                return true
+            } else {
+                return false
+            }
+        }
+    }
     
     public var key: MessageContentKindKey {
         switch self {
@@ -51,6 +214,8 @@ public enum MessageContentKind: Equatable {
             return .text
         case .image:
             return .image
+        case .livePhoto:
+            return .livePhoto
         case .video:
             return .video
         case .videoMessage:
@@ -75,16 +240,43 @@ public enum MessageContentKind: Equatable {
             return .expiredImage
         case .expiredVideo:
             return .expiredVideo
+        case .expiredVoiceMessage:
+            return .expiredVoiceMessage
+        case .expiredVideoMessage:
+            return .expiredVideoMessage
         case .poll:
             return .poll
+        case .todo:
+            return .todo
         case .restricted:
             return .restricted
         case .dice:
             return .dice
         case .invoice:
             return .invoice
+        case .story:
+            return .story
+        case .giveaway:
+            return .giveaway
         }
     }
+}
+
+public func messageTextWithAttributes(message: EngineMessage) -> NSAttributedString {
+    var attributedText = NSAttributedString(string: message.text)
+    
+    var entities: TextEntitiesMessageAttribute?
+    for attribute in message.attributes {
+        if let attribute = attribute as? TextEntitiesMessageAttribute {
+            entities = attribute
+            break
+        }
+    }
+    if let entities = entities?.entities {
+        attributedText = stringWithAppliedCustomEmojiEntities(attributedText, entities: entities, message: message._asMessage())
+    }
+
+    return attributedText
 }
 
 public func messageContentKind(contentSettings: ContentSettings, message: EngineMessage, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, accountPeerId: EnginePeer.Id) -> MessageContentKind {
@@ -101,7 +293,12 @@ public func messageContentKind(contentSettings: ContentSettings, message: Engine
             return kind
         }
     }
-    return .text(message.text)
+    for attribute in message.attributes {
+        if let attribute = attribute as? RichTextMessageAttribute {
+            return .text(attribute.instantPage.previewAttributedText(strings: strings, dateTimeFormat: dateTimeFormat, associatedMedia: { message.associatedMedia[$0].map(EngineMedia.init) }))
+        }
+    }
+    return .text(messageTextWithAttributes(message: message))
 }
 
 public func mediaContentKind(_ media: EngineMedia, message: EngineMessage? = nil, strings: PresentationStrings? = nil, nameDisplayOrder: PresentationPersonNameOrder? = nil, dateTimeFormat: PresentationDateTimeFormat? = nil, accountPeerId: EnginePeer.Id? = nil) -> MessageContentKind? {
@@ -112,9 +309,17 @@ public func mediaContentKind(_ media: EngineMedia, message: EngineMessage? = nil
             return .expiredImage
         case .file:
             return .expiredVideo
+        case .voiceMessage:
+            return .expiredVoiceMessage
+        case .videoMessage:
+            return .expiredVideoMessage
         }
-    case .image:
-        return .image
+    case let .image(image):
+        if let _ = image.video {
+            return .livePhoto
+        } else {
+            return .image
+        }
     case let .file(file):
         var fileName: String = ""
         
@@ -137,7 +342,7 @@ public func mediaContentKind(_ media: EngineMedia, message: EngineMessage? = nil
                         return .file(performer)
                     }
                 }
-            case let .Video(_, _, flags):
+            case let .Video(_, _, flags, _, _, _):
                 if file.isAnimated {
                     result = .animation
                 } else {
@@ -170,12 +375,14 @@ public func mediaContentKind(_ media: EngineMedia, message: EngineMessage? = nil
         }
     case .action:
         if let message = message, let strings = strings, let nameDisplayOrder = nameDisplayOrder, let accountPeerId = accountPeerId {
-            return .text(plainServiceMessageString(strings: strings, nameDisplayOrder: nameDisplayOrder, dateTimeFormat: dateTimeFormat ?? PresentationDateTimeFormat(timeFormat: .military, dateFormat: .dayFirst, dateSeparator: ".", dateSuffix: "", requiresFullYear: false, decimalSeparator: ".", groupingSeparator: ""), message: message, accountPeerId: accountPeerId, forChatList: false)?.0 ?? "")
+            return .text(NSAttributedString(string: plainServiceMessageString(strings: strings, nameDisplayOrder: nameDisplayOrder, dateTimeFormat: dateTimeFormat ?? PresentationDateTimeFormat(timeFormat: .military, dateFormat: .dayFirst, dateSeparator: ".", dateSuffix: "", requiresFullYear: false, decimalSeparator: ".", groupingSeparator: ""), message: message, accountPeerId: accountPeerId, forChatList: false, forForumOverview: false)?.0 ?? ""))
         } else {
             return nil
         }
     case let .poll(poll):
         return .poll(poll.text)
+    case let .todo(todo):
+        return .todo(todo.text)
     case let .dice(dice):
         return .dice(dice.emoji)
     case let .invoice(invoice):
@@ -184,64 +391,111 @@ public func mediaContentKind(_ media: EngineMedia, message: EngineMessage? = nil
         } else {
             return .invoice(invoice.title)
         }
+    case .story:
+        return .story
+    case .giveaway, .giveawayResults:
+        return .giveaway
+    case let .webpage(webpage):
+        if let message, message.text.isEmpty, case let .Loaded(content) = webpage.content {
+            return .text(NSAttributedString(string: content.displayUrl))
+        } else {
+            return nil
+        }
+    case let .paidContent(paidContent):
+        switch paidContent.extendedMedia.first {
+        case let .preview(_, _, videoDuration):
+            if let _ = videoDuration {
+                return .video
+            } else {
+                return .image
+            }
+        case let .full(media):
+            if media is TelegramMediaImage {
+                return .image
+            } else if media is TelegramMediaFile {
+                return .video
+            } else {
+                return nil
+            }
+        default:
+            return nil
+        }
     default:
         return nil
     }
 }
 
-public func stringForMediaKind(_ kind: MessageContentKind, strings: PresentationStrings) -> (String, Bool) {
+public func stringForMediaKind(_ kind: MessageContentKind, strings: PresentationStrings) -> (NSAttributedString, Bool) {
     switch kind {
     case let .text(text):
         return (foldLineBreaks(text), false)
     case .image:
-        return (strings.Message_Photo, true)
+        return (NSAttributedString(string: strings.Message_Photo), true)
+    case .livePhoto:
+        return (NSAttributedString(string: strings.Message_LivePhoto), true)
     case .video:
-        return (strings.Message_Video, true)
+        return (NSAttributedString(string: strings.Message_Video), true)
     case .videoMessage:
-        return (strings.Message_VideoMessage, true)
+        return (NSAttributedString(string: strings.Message_VideoMessage), true)
     case .audioMessage:
-        return (strings.Message_Audio, true)
+        return (NSAttributedString(string: strings.Message_Audio), true)
     case let .sticker(text):
         if text.isEmpty {
-            return (strings.Message_Sticker, true)
+            return (NSAttributedString(string: strings.Message_Sticker), true)
         } else {
-            return (strings.Message_StickerText(text).string, true)
+            return (NSAttributedString(string: strings.Message_StickerText(text).string), true)
         }
     case .animation:
-        return (strings.Message_Animation, true)
+        return (NSAttributedString(string: strings.Message_Animation), true)
     case let .file(text):
         if text.isEmpty {
-            return (strings.Message_File, true)
+            return (NSAttributedString(string: strings.Message_File), true)
         } else {
-            return (text, true)
+            return (NSAttributedString(string: text), true)
         }
     case .contact:
-        return (strings.Message_Contact, true)
+        return (NSAttributedString(string: strings.Message_Contact), true)
     case let .game(text):
-        return (text, true)
+        return (NSAttributedString(string: text), true)
     case .location:
-        return (strings.Message_Location, true)
+        return (NSAttributedString(string: strings.Message_Location), true)
     case .liveLocation:
-        return (strings.Message_LiveLocation, true)
+        return (NSAttributedString(string: strings.Message_LiveLocation), true)
     case .expiredImage:
-        return (strings.Message_ImageExpired, true)
+        return (NSAttributedString(string: strings.Message_ImageExpired), true)
     case .expiredVideo:
-        return (strings.Message_VideoExpired, true)
+        return (NSAttributedString(string: strings.Message_VideoExpired), true)
+    case .expiredVoiceMessage:
+        return (NSAttributedString(string: strings.Message_VoiceMessageExpired), true)
+    case .expiredVideoMessage:
+        return (NSAttributedString(string: strings.Message_VideoMessageExpired), true)
     case let .poll(text):
-        return ("📊 \(text)", false)
+        return (NSAttributedString(string: text), false)
+    case let .todo(text):
+        return (NSAttributedString(string: "☑️ \(text)"), false)
     case let .restricted(text):
-        return (text, false)
+        return (NSAttributedString(string: text), false)
     case let .dice(emoji):
-        return (emoji, true)
+        return (NSAttributedString(string: emoji), true)
     case let .invoice(text):
-        return (text, true)
+        return (NSAttributedString(string: text), true)
+    case .story:
+        return (NSAttributedString(string: strings.Message_Story), true)
+    case .giveaway:
+        return (NSAttributedString(string: strings.Message_Giveaway), true)
     }
 }
 
-public func descriptionStringForMessage(contentSettings: ContentSettings, message: EngineMessage, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, accountPeerId: EnginePeer.Id) -> (String, Bool, Bool) {
+public func descriptionStringForMessage(contentSettings: ContentSettings, message: EngineMessage, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, accountPeerId: EnginePeer.Id) -> (NSAttributedString, Bool, Bool) {
     let contentKind = messageContentKind(contentSettings: contentSettings, message: message, strings: strings, nameDisplayOrder: nameDisplayOrder, dateTimeFormat: dateTimeFormat, accountPeerId: accountPeerId)
-    if !message.text.isEmpty && ![.expiredImage, .expiredVideo].contains(contentKind.key) {
-        return (foldLineBreaks(message.text), false, true)
+    if message.richText != nil {
+        let result = stringForMediaKind(contentKind, strings: strings)
+        if contentKind.key != .text || result.0.length != 0 {
+            return (result.0, result.1, false)
+        }
+    }
+    if !message.text.isEmpty && ![.expiredImage, .expiredVideo, .poll].contains(contentKind.key) {
+        return (foldLineBreaks(messageTextWithAttributes(message: message)), false, true)
     }
     let result = stringForMediaKind(contentKind, strings: strings)
     return (result.0, result.1, false)
@@ -260,9 +514,55 @@ public func foldLineBreaks(_ text: String) -> String {
             result += " " + line
         }
     }
+    result = result.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
     return result
 }
 
+public func foldLineBreaks(_ text: NSAttributedString) -> NSAttributedString {
+    let remainingString = NSMutableAttributedString(attributedString: text)
+    
+    var lines: [NSAttributedString] = []
+    while true {
+        if let range = remainingString.string.range(of: "\n") {
+            let mappedRange = NSRange(range, in: remainingString.string)
+            let restString = remainingString.attributedSubstring(from: NSRange(location: 0, length: mappedRange.upperBound - 1))
+            lines.append(restString)
+            remainingString.replaceCharacters(in: NSRange(location: 0, length: mappedRange.upperBound), with: "")
+        } else {
+            if lines.isEmpty {
+                return text
+            }
+            if !remainingString.string.isEmpty {
+                lines.append(remainingString)
+            }
+            break
+        }
+    }
+    
+    let result = NSMutableAttributedString()
+    
+    for line in lines {
+        if line.string.isEmpty {
+            continue
+        }
+        if result.string.isEmpty {
+            result.append(line)
+        } else {
+            let currentAttributes = line.attributes(at: 0, effectiveRange: nil).filter { key, _ in
+                switch key {
+                case .font, .foregroundColor:
+                    return true
+                default:
+                    return false
+                }
+            }
+            result.append(NSAttributedString(string: " ", attributes: currentAttributes))
+            result.append(line)
+        }
+    }
+    
+    return result
+}
 
 public func trimToLineCount(_ text: String, lineCount: Int) -> String {
     if lineCount < 1 {

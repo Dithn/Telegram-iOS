@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
@@ -106,7 +105,7 @@ private struct PeerAutoremoveSetupState: Equatable {
     var applyingSetting: Bool = false
 }
 
-private func peerAutoremoveSetupEntries(peer: Peer?, presentationData: PresentationData, isDebug: Bool, defaultValue: Int32, state: PeerAutoremoveSetupState) -> [PeerAutoremoveSetupEntry] {
+private func peerAutoremoveSetupEntries(peer: EnginePeer?, presentationData: PresentationData, isDebug: Bool, defaultValue: Int32, state: PeerAutoremoveSetupState) -> [PeerAutoremoveSetupEntry] {
     var entries: [PeerAutoremoveSetupEntry] = []
     
     let resolvedValue: Int32
@@ -127,7 +126,7 @@ private func peerAutoremoveSetupEntries(peer: Peer?, presentationData: Presentat
         availableValues[2] = 5 * 60
     }
     entries.append(.timeValue(resolvedValue, availableValues))
-    if let channel = peer as? TelegramChannel, case .broadcast = channel.info {
+    if case let .channel(channel) = peer, case .broadcast = channel.info {
         entries.append(.timeComment(presentationData.strings.AutoremoveSetup_TimerInfoChannel))
     } else {
         entries.append(.timeComment(presentationData.strings.AutoremoveSetup_TimerInfoChat))
@@ -145,7 +144,7 @@ public enum PeerAutoremoveSetupScreenResult {
     case updated(Updated)
 }
 
-public func peerAutoremoveSetupScreen(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, peerId: PeerId, completion: @escaping (PeerAutoremoveSetupScreenResult) -> Void = { _ in }) -> ViewController {
+public func peerAutoremoveSetupScreen(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, peerId: EnginePeer.Id, completion: @escaping (PeerAutoremoveSetupScreenResult) -> Void = { _ in }) -> ViewController {
     let statePromise = ValuePromise(PeerAutoremoveSetupState(), ignoreRepeated: true)
     let stateValue = Atomic(value: PeerAutoremoveSetupState())
     let updateState: ((PeerAutoremoveSetupState) -> PeerAutoremoveSetupState) -> Void = { f in
@@ -188,14 +187,14 @@ public func peerAutoremoveSetupScreen(context: AccountContext, updatedPresentati
         
         let peer = view.peers[view.peerId]
         
-        let leftNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Cancel), style: .regular, enabled: true, action: {
+        let leftNavigationButton = ItemListNavigationButton(content: .icon(.close), style: .regular, enabled: true, action: {
             dismissImpl?()
         })
         var rightNavigationButton: ItemListNavigationButton?
         if state.applyingSetting {
             rightNavigationButton = ItemListNavigationButton(content: .none, style: .activity, enabled: true, action: {})
         } else {
-            rightNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Done), style: .bold, enabled: true, action: {
+            rightNavigationButton = ItemListNavigationButton(content: .icon(.done), style: .bold, enabled: true, action: {
                 var changedValue: Int32?
                 updateState { state in
                     var state = state
@@ -240,7 +239,7 @@ public func peerAutoremoveSetupScreen(context: AccountContext, updatedPresentati
         let isDebug = context.account.testingEnvironment
         
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.AutoremoveSetup_Title), leftNavigationButton: leftNavigationButton, rightNavigationButton: rightNavigationButton, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: peerAutoremoveSetupEntries(peer: peer, presentationData: presentationData, isDebug: isDebug, defaultValue: defaultValue, state: state), style: .blocks)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: peerAutoremoveSetupEntries(peer: peer.flatMap(EnginePeer.init), presentationData: presentationData, isDebug: isDebug, defaultValue: defaultValue, state: state), style: .blocks)
         
         return (controllerState, (listState, arguments))
     }

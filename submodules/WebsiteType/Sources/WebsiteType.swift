@@ -35,3 +35,29 @@ public func instantPageType(of webpage: TelegramMediaWebpageLoadedContent) -> In
             return .generic
     }
 }
+
+public func defaultWebpageImageSizeIsSmall(webpage: TelegramMediaWebpageLoadedContent) -> Bool {
+    let type = websiteType(of: webpage.websiteName)
+    
+    let mainMedia: EngineMedia?
+    switch type {
+    case .instagram, .twitter:
+        mainMedia = webpage.story.map(EngineMedia.story) ?? webpage.image.map(EngineMedia.image) ?? webpage.file.map(EngineMedia.file)
+    default:
+        mainMedia = webpage.story.map(EngineMedia.story) ?? webpage.file.map(EngineMedia.file) ?? webpage.image.map(EngineMedia.image)
+    }
+
+    if case let .image(image) = mainMedia {
+        if let type = webpage.type, (["photo", "video", "embed", "gif", "document", "telegram_album"] as [String]).contains(type) {
+        } else if let type = webpage.type, (["article"] as [String]).contains(type) {
+            return true
+        } else if let _ = largestImageRepresentation(image.representations)?.dimensions {
+            if webpage.instantPage == nil {
+                return true
+            }
+        }
+    }
+    
+    return false
+}
+

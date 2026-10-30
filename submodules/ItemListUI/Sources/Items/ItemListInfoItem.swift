@@ -17,27 +17,42 @@ public enum InfoListItemLinkAction {
 }
 
 public class InfoListItem: ListViewItem {
+    public var neighborDescriptor: AnyEquatable {
+        return AnyEquatable.noNeighborInfluence
+    }
+
+    public enum InfoStyle {
+        case `default`
+        case compact
+    }
+    
     public let selectable: Bool = false
     
     let presentationData: ItemListPresentationData
+    let systemStyle: ItemListSystemStyle
     let title: String
     let text: InfoListItemText
     let style: ItemListStyle
     let hasDecorations: Bool
+    let isWarning: Bool
+    let infoStyle: InfoStyle
     let linkAction: ((InfoListItemLinkAction) -> Void)?
     let closeAction: (() -> Void)?
     
-    public init(presentationData: ItemListPresentationData, title: String, text: InfoListItemText, style: ItemListStyle, hasDecorations: Bool = true, linkAction: ((InfoListItemLinkAction) -> Void)? = nil, closeAction: (() -> Void)?) {
+    public init(presentationData: ItemListPresentationData, systemStyle: ItemListSystemStyle = .legacy, title: String, text: InfoListItemText, style: ItemListStyle, hasDecorations: Bool = true, isWarning: Bool = false, infoStyle: InfoStyle = .default, linkAction: ((InfoListItemLinkAction) -> Void)? = nil, closeAction: (() -> Void)?) {
         self.presentationData = presentationData
+        self.systemStyle = systemStyle
         self.title = title
         self.text = text
         self.style = style
         self.hasDecorations = hasDecorations
+        self.isWarning = isWarning
+        self.infoStyle = infoStyle
         self.linkAction = linkAction
         self.closeAction = closeAction
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = InfoItemNode()
             let (layout, apply) = node.asyncLayout()(self, params, nil)
@@ -53,7 +68,7 @@ public class InfoListItem: ListViewItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? InfoItemNode {
                 let makeLayout = nodeValue.asyncLayout()
@@ -72,17 +87,36 @@ public class InfoListItem: ListViewItem {
 }
 
 public class ItemListInfoItem: InfoListItem, ItemListItem {
+    override public var neighborDescriptor: AnyEquatable {
+        return AnyEquatable(ItemListItemNeighborDescriptor(
+            sectionId: self.sectionId,
+            isAlwaysPlain: self.isAlwaysPlain,
+            requestsNoInset: self.requestsNoInset,
+            isTextItem: false,
+            hasActiveRevealOptions: false
+        ))
+    }
+
     public let sectionId: ItemListSectionId
     
-    public init(presentationData: ItemListPresentationData, title: String, text: InfoListItemText, style: ItemListStyle, sectionId: ItemListSectionId, linkAction: ((InfoListItemLinkAction) -> Void)? = nil, closeAction: (() -> Void)?) {
+    public init(
+        presentationData: ItemListPresentationData,
+        systemStyle: ItemListSystemStyle = .legacy,
+        title: String,
+        text: InfoListItemText,
+        style: ItemListStyle,
+        sectionId: ItemListSectionId,
+        linkAction: ((InfoListItemLinkAction) -> Void)? = nil,
+        closeAction: (() -> Void)?
+    ) {
         self.sectionId = sectionId
-        super.init(presentationData: presentationData, title: title, text: text, style: style, linkAction: linkAction, closeAction: closeAction)
+        super.init(presentationData: presentationData, systemStyle: systemStyle, title: title, text: text, style: style, linkAction: linkAction, closeAction: closeAction)
     }
     
-    override public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    override public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = InfoItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -95,13 +129,13 @@ public class ItemListInfoItem: InfoListItem, ItemListItem {
         }
     }
     
-    override public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    override public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? InfoItemNode {
                 let makeLayout = nodeValue.asyncLayout()
                 
                 async {
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply()
@@ -154,12 +188,15 @@ public class InfoItemNode: ListViewItemNode {
         
         self.labelNode = TextNode()
         self.labelNode.isUserInteractionEnabled = false
+        self.labelNode.displaysAsynchronously = false
         
         self.titleNode = TextNode()
         self.titleNode.isUserInteractionEnabled = false
+        self.titleNode.displaysAsynchronously = false
         
         self.textNode = TextNode()
         self.textNode.isUserInteractionEnabled = false
+        self.textNode.displaysAsynchronously = false
         
         self.activateArea = AccessibilityAreaNode()
         self.activateArea.accessibilityTraits = .staticText
@@ -168,7 +205,7 @@ public class InfoItemNode: ListViewItemNode {
         self.closeButton.hitTestSlop = UIEdgeInsets(top: -8.0, left: -8.0, bottom: -8.0, right: -8.0)
         self.closeButton.displaysAsynchronously = false
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
         
         self.addSubnode(self.badgeNode)
         self.addSubnode(self.labelNode)
@@ -205,21 +242,35 @@ public class InfoItemNode: ListViewItemNode {
         
         let currentItem = self.item
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             let leftInset: CGFloat = 16.0 + params.leftInset
             let rightInset: CGFloat = 16.0 + params.rightInset
             
             let titleFont = Font.medium(item.presentationData.fontSize.itemListBaseFontSize)
+            let smallerTextFont = Font.regular(item.presentationData.fontSize.itemListBaseLabelFontSize / 14.0 * 15.0)
             let textFont = Font.regular(item.presentationData.fontSize.itemListBaseLabelFontSize / 14.0 * 16.0)
             let textBoldFont = Font.semibold(item.presentationData.fontSize.itemListBaseLabelFontSize / 14.0 * 16.0)
+            let smallBadgeFont = Font.semibold(11.0)
             let badgeFont = Font.regular(15.0)
+            let largeBadgeFont = Font.regular(24.0)
     
             var updatedTheme: PresentationTheme?
             var updatedBadgeImage: UIImage?
             
             var updatedCloseIcon: UIImage?
             
-            let badgeDiameter: CGFloat = 22.0
+            let badgeDiameter: CGFloat
+            let effectiveBadgeFont: UIFont
+            if item.isWarning {
+                badgeDiameter = 30.0
+                effectiveBadgeFont = largeBadgeFont
+            } else if case .compact = item.infoStyle {
+                badgeDiameter = 15.0
+                effectiveBadgeFont = smallBadgeFont
+            } else {
+                badgeDiameter = 22.0
+                effectiveBadgeFont = badgeFont
+            }
             if currentItem?.presentationData.theme !== item.presentationData.theme {
                 updatedTheme = item.presentationData.theme
                 updatedBadgeImage = generateStretchableFilledCircleImage(diameter: badgeDiameter, color: item.presentationData.theme.list.itemDestructiveColor)
@@ -233,6 +284,7 @@ public class InfoItemNode: ListViewItemNode {
                 insets = UIEdgeInsets()
             }
             let separatorHeight = UIScreenPixel
+            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
             
             let itemBackgroundColor: UIColor
             let itemSeparatorColor: UIColor
@@ -251,16 +303,33 @@ public class InfoItemNode: ListViewItemNode {
             case let .plain(text):
                 attributedText = NSAttributedString(string: text, font: textFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor)
             case let .markdown(text):
-                attributedText = parseMarkdownIntoAttributedString(text, attributes: MarkdownAttributes(body: MarkdownAttributeSet(font: textFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), bold: MarkdownAttributeSet(font: textBoldFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), link: MarkdownAttributeSet(font: textFont, textColor: item.presentationData.theme.list.itemAccentColor), linkAttribute: { contents in
+                attributedText = parseMarkdownIntoAttributedString(text, attributes: MarkdownAttributes(body: MarkdownAttributeSet(font: item.isWarning || item.infoStyle == .compact ? smallerTextFont : textFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), bold: MarkdownAttributeSet(font: textBoldFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), link: MarkdownAttributeSet(font: textFont, textColor: item.presentationData.theme.list.itemAccentColor), linkAttribute: { contents in
                     return (TelegramTextAttributes.URL, contents)
                 }))
             }
             
-            let (labelLayout, labelApply) = makeLabelLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: "!", font: badgeFont, textColor: item.presentationData.theme.list.itemCheckColors.foregroundColor), backgroundColor: nil, maximumNumberOfLines: 3, truncationType: .end, constrainedSize: CGSize(width: badgeDiameter, height: badgeDiameter), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
-            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.title, font: titleFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: 2, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - rightInset - badgeDiameter - 8.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
-            let (textLayout, textApply) = makeTextLayout(TextNodeLayoutArguments(attributedString: attributedText, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - rightInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            var textCutout: TextNodeCutout?
+            if case .compact = item.infoStyle, item.title.isEmpty {
+                textCutout = TextNodeCutout(topLeft: CGSize(width: 22.0, height: 8.0), topRight: nil, bottomRight: nil)
+            }
             
-            let contentSize = CGSize(width: params.width, height: titleLayout.size.height + textLayout.size.height + 38.0)
+            let (labelLayout, labelApply) = makeLabelLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.isWarning ? "⚠️" : "!", font: effectiveBadgeFont, textColor: item.presentationData.theme.list.itemCheckColors.foregroundColor), backgroundColor: nil, maximumNumberOfLines: 3, truncationType: .end, constrainedSize: CGSize(width: 100.0, height: 100.0), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.title, font: titleFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: 2, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - rightInset - badgeDiameter - 8.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let (textLayout, textApply) = makeTextLayout(TextNodeLayoutArguments(attributedString: attributedText, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - rightInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: textCutout, insets: UIEdgeInsets()))
+            
+            var verticalInset: CGFloat = 0.0
+            if case .glass = item.systemStyle {
+                verticalInset = 4.0
+            }
+            
+            var contentHeight: CGFloat = titleLayout.size.height + textLayout.size.height + verticalInset * 2.0
+            if case .compact = item.infoStyle {
+                contentHeight += 13.0
+            } else {
+                contentHeight += 38.0
+            }
+            
+            let contentSize = CGSize(width: params.width, height: contentHeight)
             let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
             
             return (layout, { [weak self] in
@@ -305,6 +374,12 @@ public class InfoItemNode: ListViewItemNode {
                                 hasTopCorners = true
                                 strongSelf.topStripeNode.isHidden = hasCorners || !item.hasDecorations
                         }
+                    } else {
+                        // A standalone info item (the contact list's access notice) draws no separator above itself.
+                        strongSelf.topStripeNode.isHidden = true
+                        if case .blocks = item.style, case .glass = item.systemStyle {
+                            hasTopCorners = true
+                        }
                     }
                     let bottomStripeInset: CGFloat
                     if let neighbors = neighbors {
@@ -321,17 +396,21 @@ public class InfoItemNode: ListViewItemNode {
                         bottomStripeInset = leftInset
                         if !item.hasDecorations {
                             strongSelf.topStripeNode.isHidden = true
+                            if case .compact = item.infoStyle {
+                                strongSelf.bottomStripeNode.isHidden = true
+                            }
                         }
                     }
                     
+                    strongSelf.badgeNode.isHidden = item.isWarning
                     strongSelf.closeButton.isHidden = item.closeAction == nil
                     
-                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                     
                     strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
-                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                     strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: separatorHeight))
-                    strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: params.width - bottomStripeInset, height: separatorHeight))
+                    strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: params.width - bottomStripeInset - params.rightInset - separatorRightInset, height: separatorHeight))
                     
                     if let updateBadgeImage = updatedBadgeImage {
                         if strongSelf.badgeNode.supernode == nil {
@@ -344,21 +423,42 @@ public class InfoItemNode: ListViewItemNode {
                         strongSelf.closeButton.setImage(updatedCloseIcon, for: [])
                     }
                     
-                    strongSelf.badgeNode.frame = CGRect(origin: CGPoint(x: leftInset, y: 15.0), size: CGSize(width: badgeDiameter, height: badgeDiameter))
+                    var badgeOriginX: CGFloat = leftInset
+                    let badgeOriginY: CGFloat
+                    var labelOffset: CGPoint = .zero
+                    if item.isWarning {
+                        badgeOriginY = verticalInset + 15.0 + 4.0
+                    } else if case .compact = item.infoStyle {
+                        badgeOriginY = 12.0
+                        badgeOriginX += 1
+                        labelOffset = CGPoint(x: UIScreenPixel, y: -1.0)
+                    } else {
+                        badgeOriginY = verticalInset + 15.0
+                    }
                     
-                    strongSelf.labelNode.frame = CGRect(origin: CGPoint(x: strongSelf.badgeNode.frame.midX - labelLayout.size.width / 2.0, y: strongSelf.badgeNode.frame.minY + 2.0 + UIScreenPixel), size: labelLayout.size)
+                    strongSelf.badgeNode.frame = CGRect(origin: CGPoint(x: badgeOriginX, y: badgeOriginY), size: CGSize(width: badgeDiameter, height: badgeDiameter))
                     
-                    strongSelf.titleNode.frame = CGRect(origin: CGPoint(x: strongSelf.badgeNode.frame.maxX + 8.0, y: 16.0), size: titleLayout.size)
+                    strongSelf.labelNode.frame = CGRect(origin: CGPoint(x: floorToScreenPixels(strongSelf.badgeNode.frame.midX - labelLayout.size.width / 2.0) + labelOffset.x, y: strongSelf.badgeNode.frame.minY + 2.0 + UIScreenPixel + labelOffset.y), size: labelLayout.size)
                     
-                    strongSelf.textNode.frame = CGRect(origin: CGPoint(x: leftInset, y: strongSelf.titleNode.frame.maxY + 9.0), size: textLayout.size)
+                    strongSelf.titleNode.frame = CGRect(origin: CGPoint(x: strongSelf.badgeNode.frame.maxX + 8.0, y: verticalInset + 16.0), size: titleLayout.size)
                     
-                    strongSelf.closeButton.frame = CGRect(x: params.width - rightInset - 26.0, y: 10.0, width: 32.0, height: 32.0)
+                    let textOriginY: CGFloat
+                    if titleLayout.size.height > 0.0 {
+                        textOriginY = strongSelf.titleNode.frame.maxY + 9.0
+                    } else if case .compact = item.infoStyle {
+                        textOriginY = 11.0
+                    } else {
+                        textOriginY = verticalInset + 16.0
+                    }
+                    strongSelf.textNode.frame = CGRect(origin: CGPoint(x: leftInset, y: textOriginY), size: textLayout.size)
+                    
+                    strongSelf.closeButton.frame = CGRect(x: params.width - rightInset - 26.0, y: verticalInset + 10.0, width: 32.0, height: 32.0)
                 }
             })
         }
     }
 
-    public override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    public override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
@@ -426,7 +526,7 @@ public class InfoItemNode: ListViewItemNode {
                 if let current = self.linkHighlightingNode {
                     linkHighlightingNode = current
                 } else {
-                    linkHighlightingNode = LinkHighlightingNode(color: item.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.5))
+                    linkHighlightingNode = LinkHighlightingNode(color: item.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.2))
                     self.linkHighlightingNode = linkHighlightingNode
                     self.insertSubnode(linkHighlightingNode, belowSubnode: self.textNode)
                 }

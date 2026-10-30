@@ -1,12 +1,12 @@
 #import <LegacyComponents/TGGifConverter.h>
 
 #import "LegacyComponentsInternal.h"
-#import "TGImageUtils.h"
+#import <LegacyComponents/TGImageUtils.h>
 
 #import <UIKit/UIKit.h>
 #import <ImageIO/ImageIO.h>
 #import <AVFoundation/AVFoundation.h>
-#import <MobileCoreServices/MobileCoreServices.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 const int32_t TGGifConverterFPS = 600;
 const CGFloat TGGifConverterMaximumSide = 720.0f;
@@ -107,7 +107,7 @@ const CGFloat TGGifConverterMaximumSide = 720.0f;
             
             NSDictionary *videoSettings = @
             {
-                AVVideoCodecKey : AVVideoCodecH264,
+                AVVideoCodecKey : AVVideoCodecTypeH264,
                 AVVideoCompressionPropertiesKey: codecSettings,
                 AVVideoWidthKey : @((NSInteger)targetSize.width),
                 AVVideoHeightKey : @((NSInteger)targetSize.height)
@@ -144,7 +144,7 @@ const CGFloat TGGifConverterMaximumSide = 720.0f;
             {
                 if (videoWriterInput.isReadyForMoreMediaData)
                 {
-                    NSDictionary *options = @{ (NSString *)kCGImageSourceTypeIdentifierHint : (id)kUTTypeGIF };
+                    NSDictionary *options = @{ (NSString *)kCGImageSourceTypeIdentifierHint : UTTypeGIF.identifier };
                     CGImageRef imgRef = CGImageSourceCreateImageAtIndex(source, currentFrameNumber, (__bridge CFDictionaryRef)options);
                     if (imgRef != NULL)
                     {
@@ -243,7 +243,7 @@ const CGFloat TGGifConverterMaximumSide = 720.0f;
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
     
     CVPixelBufferRef pxBuffer = NULL;
-    CVReturn status = kCVReturnSuccess;
+    __unused CVReturn status = kCVReturnSuccess;
     
     if (pixelBufferPool)
         status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pixelBufferPool, &pxBuffer);
@@ -257,7 +257,7 @@ const CGFloat TGGifConverterMaximumSide = 720.0f;
     
     size_t bytesPerRow = CVPixelBufferGetBytesPerRow(pxBuffer);
     
-    CGContextRef context = CGBitmapContextCreate(pxData, size.width, size.height, 8, bytesPerRow, colorSpace, kCGImageAlphaNoneSkipFirst);
+    CGContextRef context = CGBitmapContextCreate(pxData, size.width, size.height, 8, bytesPerRow, colorSpace, (CGBitmapInfo)kCGImageAlphaNoneSkipFirst);
     NSAssert(context, @"Could not create a context");
     
     CGContextDrawImage(context, CGRectMake(0, 0, size.width, size.height), frame);

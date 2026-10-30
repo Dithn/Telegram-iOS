@@ -2,6 +2,7 @@
 
 #import <FFMpegBinding/FFMpegAVFrame.h>
 
+#import "libavformat/avformat.h"
 #import "libavcodec/avcodec.h"
 #import "libswresample/swresample.h"
 
@@ -52,7 +53,30 @@
         swr_free(&_context);
         _context = NULL;
     }
-
+    
+    #if LIBAVFORMAT_VERSION_MAJOR >= 59
+    AVChannelLayout channelLayoutIn;
+    av_channel_layout_default(&channelLayoutIn, channelCount);
+    
+    AVChannelLayout channelLayoutOut;
+    av_channel_layout_default(&channelLayoutOut, _destinationChannelCount);
+    
+    if (swr_alloc_set_opts2(
+        &_context,
+        &channelLayoutOut,
+        (enum AVSampleFormat)_destinationSampleFormat,
+        (int)_destinationSampleRate,
+        &channelLayoutIn,
+        (enum AVSampleFormat)_sourceSampleFormat,
+        (int)_sourceSampleRate,
+        0,
+        NULL
+    ) != 0) {
+        return;
+    }
+    #else
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     _context = swr_alloc_set_opts(NULL,
                                   av_get_default_channel_layout((int)_destinationChannelCount),
                                   (enum AVSampleFormat)_destinationSampleFormat,
@@ -62,6 +86,8 @@
                                   (int)_sourceSampleRate,
                                   0,
                                   NULL);
+    #pragma clang diagnostic pop
+    #endif
     _currentSourceChannelCount = channelCount;
     _ratio = MAX(1, _destinationSampleRate / MAX(_sourceSampleRate, 1)) * MAX(1, _destinationChannelCount / channelCount) * 2;
     if (_context) {
@@ -72,7 +98,11 @@
 - (NSData * _Nullable)resample:(FFMpegAVFrame *)frame {
     AVFrame *frameImpl = (AVFrame *)[frame impl];
 
+#if LIBAVFORMAT_VERSION_MAJOR >= 59
+    int numChannels = frameImpl->ch_layout.nb_channels;
+#else
     int numChannels = frameImpl->channels;
+#endif
     if (numChannels != _currentSourceChannelCount) {
         [self resetContextForChannelCount:numChannels];
     }
@@ -81,22 +111,37 @@
         return nil;
     }
 
+    int64_t outSamples = (int64_t)frameImpl->nb_samples * (int64_t)_ratio;
+    // Cap at 8M samples per frame: ~10× larger than any legitimate codec
+    // frame × resample ratio, bounds the per-frame buffer to ~32 MB (s16 stereo),
+    // and rejects pathological inputs (e.g. 1 Hz source with a 65 KB FLAC block).
+    if (outSamples <= 0 || outSamples > 8 * 1024 * 1024) {
+        return nil;
+    }
+
     int bufSize = av_samples_get_buffer_size(NULL,
                                              (int)_destinationChannelCount,
-                                             frameImpl->nb_samples * (int)_ratio,
+                                             (int)outSamples,
                                              (enum AVSampleFormat)_destinationSampleFormat,
                                              1);
-    
-    if (!_buffer || _bufferSize < bufSize) {
-        _bufferSize = bufSize;
-        _buffer = realloc(_buffer, _bufferSize);
+    if (bufSize <= 0) {
+        return nil;
     }
-    
+
+    if (!_buffer || _bufferSize < bufSize) {
+        void *newBuffer = realloc(_buffer, bufSize);
+        if (!newBuffer) {
+            return nil;
+        }
+        _buffer = newBuffer;
+        _bufferSize = bufSize;
+    }
+
     Byte *outbuf[2] = { _buffer, 0 };
-    
+
     int numFrames = swr_convert(_context,
                                 outbuf,
-                                frameImpl->nb_samples * (int)_ratio,
+                                (int)outSamples,
                                 (const uint8_t **)frameImpl->data,
                                 frameImpl->nb_samples);
     if (numFrames <= 0) {

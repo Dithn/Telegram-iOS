@@ -1,7 +1,6 @@
 import Foundation
 import UIKit
 import AsyncDisplayKit
-import Postbox
 import Display
 import SwiftSignalKit
 import WebKit
@@ -17,10 +16,10 @@ class ChatDocumentGalleryItem: GalleryItem {
     
     let context: AccountContext
     let presentationData: PresentationData
-    let message: Message
-    let location: MessageHistoryEntryLocation?
+    let message: EngineRawMessage
+    let location: EngineMessageHistoryEntryLocation?
     
-    init(context: AccountContext, presentationData: PresentationData, message: Message, location: MessageHistoryEntryLocation?) {
+    init(context: AccountContext, presentationData: PresentationData, message: EngineRawMessage, location: EngineMessageHistoryEntryLocation?) {
         self.context = context
         self.presentationData = presentationData
         self.message = message
@@ -30,7 +29,7 @@ class ChatDocumentGalleryItem: GalleryItem {
     func node(synchronous: Bool) -> GalleryItemNode {
         let node = ChatDocumentGalleryItemNode(context: self.context, presentationData: self.presentationData)
         
-        for media in self.message.media {
+        for media in self.message.effectiveMedia {
             if let file = media as? TelegramMediaFile {
                 node.setFile(context: context, fileReference: .message(message: MessageReference(self.message), media: file))
                 break
@@ -104,20 +103,18 @@ class ChatDocumentGalleryItemNode: ZoomableContentGalleryItemNode, WKNavigationD
     
     private var itemIsVisible = false
     
-    private var message: Message?
+    private var message: EngineRawMessage?
     
     private let footerContentNode: ChatItemGalleryFooterContentNode
     
     private var fetchDisposable = MetaDisposable()
     private let statusDisposable = MetaDisposable()
-    private var status: MediaResourceStatus?
+    private var status: EngineMediaResource.FetchStatus?
     
     init(context: AccountContext, presentationData: PresentationData) {
         if #available(iOSApplicationExtension 11.0, iOS 11.0, *) {
-            let preferences = WKPreferences()
-            preferences.javaScriptEnabled = false
             let configuration = WKWebViewConfiguration()
-            configuration.preferences = preferences
+            configuration.defaultWebpagePreferences.allowsContentJavaScript = false
             let webView = WKWebView(frame: CGRect(), configuration: configuration)
             webView.allowsLinkPreview = false
             webView.allowsBackForwardNavigationGestures = false
@@ -156,14 +153,17 @@ class ChatDocumentGalleryItemNode: ZoomableContentGalleryItemNode, WKNavigationD
     override func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition) {
         super.containerLayoutUpdated(layout, navigationBarHeight: navigationBarHeight, transition: transition)
         
-        self.webView.frame = CGRect(origin: CGPoint(x: 0.0, y: navigationBarHeight), size: CGSize(width: layout.size.width, height: layout.size.height - navigationBarHeight - 44.0 - layout.insets(options: []).bottom))
+        // Beside a side strip (iPhone Duo) the document keeps to the band; equal side insets keep the full width.
+        let bandMinX: CGFloat = layout.safeInsets.left != layout.safeInsets.right ? layout.safeInsets.left : 0.0
+        let bandWidth: CGFloat = layout.safeInsets.left != layout.safeInsets.right ? layout.size.width - layout.safeInsets.left - layout.safeInsets.right : layout.size.width
+        self.webView.frame = CGRect(origin: CGPoint(x: bandMinX, y: navigationBarHeight), size: CGSize(width: bandWidth, height: layout.size.height - navigationBarHeight - 44.0 - layout.insets(options: []).bottom))
         
         let statusSize = CGSize(width: 50.0, height: 50.0)
         transition.updateFrame(node: self.statusNodeContainer, frame: CGRect(origin: CGPoint(x: floor((layout.size.width - statusSize.width) / 2.0), y: floor((layout.size.height - statusSize.height) / 2.0)), size: statusSize))
         transition.updateFrame(node: self.statusNode, frame: CGRect(origin: CGPoint(), size: statusSize))
     }
     
-    fileprivate func setMessage(_ message: Message) {
+    fileprivate func setMessage(_ message: EngineRawMessage) {
         self.footerContentNode.setMessage(message)
     }
     
@@ -182,11 +182,13 @@ class ChatDocumentGalleryItemNode: ZoomableContentGalleryItemNode, WKNavigationD
             }
             self.maybeLoadContent()
             self.setupStatus(context: context, resource: fileReference.media.resource)
+            
+            self.fetchDisposable.set(context.engine.resources.fetch(reference: fileReference.resourceReference(fileReference.media.resource), userLocation: (self.message?.id.peerId).flatMap(MediaResourceUserLocation.peer) ?? .other, userContentType: .file).start())
         }
     }
     
-    private func setupStatus(context: AccountContext, resource: MediaResource) {
-        self.statusDisposable.set((context.account.postbox.mediaBox.resourceStatus(resource)
+    private func setupStatus(context: AccountContext, resource: EngineRawMediaResource) {
+        self.statusDisposable.set((context.engine.resources.status(resource: EngineMediaResource(resource))
         |> deliverOnMainQueue).start(next: { [weak self] status in
             if let strongSelf = self {
                 let previousStatus = strongSelf.status
@@ -236,11 +238,11 @@ class ChatDocumentGalleryItemNode: ZoomableContentGalleryItemNode, WKNavigationD
             if let fileName = fileReference.media.fileName {
                 pathExtension = (fileName as NSString).pathExtension
             }
-            let data = context.account.postbox.mediaBox.resourceData(fileReference.media.resource, pathExtension: pathExtension, option: .complete(waitUntilFetchStatus: false))
+            let data = context.engine.resources.data(resource: EngineMediaResource(fileReference.media.resource), pathExtension: pathExtension)
             |> deliverOnMainQueue
             self.dataDisposable.set(data.start(next: { [weak self] data in
                 if let strongSelf = self {
-                    if data.complete {
+                    if data.isComplete {
                         if let webView = strongSelf.webView as? WKWebView {
                             if #available(iOSApplicationExtension 11.0, iOS 11.0, *) {
                                 let blockRules = """
@@ -277,8 +279,6 @@ class ChatDocumentGalleryItemNode: ZoomableContentGalleryItemNode, WKNavigationD
                                         webView.loadFileURL(URL(fileURLWithPath: data.path), allowingReadAccessTo: URL(fileURLWithPath: data.path))
                                 }
                             }
-                        } else if let webView = strongSelf.webView as? UIWebView {
-                            webView.loadRequest(URLRequest(url: URL(fileURLWithPath: data.path)))
                         }
                     }
                 }
@@ -386,9 +386,9 @@ class ChatDocumentGalleryItemNode: ZoomableContentGalleryItemNode, WKNavigationD
         if let (context, fileReference) = self.contextAndFile, let status = self.status {
             switch status {
                 case .Fetching:
-                    context.account.postbox.mediaBox.cancelInteractiveResourceFetch(fileReference.media.resource)
+                    context.engine.resources.cancelInteractiveResourceFetch(id: EngineMediaResource.Id(fileReference.media.resource.id))
                 case .Remote:
-                    self.fetchDisposable.set(fetchedMediaResource(mediaBox: context.account.postbox.mediaBox, reference: fileReference.resourceReference(fileReference.media.resource)).start())
+                    self.fetchDisposable.set(context.engine.resources.fetch(reference: fileReference.resourceReference(fileReference.media.resource), userLocation: (self.message?.id.peerId).flatMap(MediaResourceUserLocation.peer) ?? .other, userContentType: .file).start())
                 default:
                     break
             }

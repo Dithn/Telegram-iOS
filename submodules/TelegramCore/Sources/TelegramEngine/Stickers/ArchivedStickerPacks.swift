@@ -1,12 +1,13 @@
 import Foundation
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import SwiftSignalKit
 
 
 public enum ArchivedStickerPacksNamespace: Int32 {
     case stickers = 0
     case masks = 1
+    case emoji = 2
     
     var itemCollectionNamespace: ItemCollectionId.Namespace {
         switch self {
@@ -14,6 +15,8 @@ public enum ArchivedStickerPacksNamespace: Int32 {
                 return Namespaces.ItemCollection.CloudStickerPacks
             case .masks:
                 return Namespaces.ItemCollection.CloudMaskPacks
+            case .emoji:
+                return Namespaces.ItemCollection.CloudEmojiPacks
         }
     }
 }
@@ -32,12 +35,15 @@ func _internal_archivedStickerPacks(account: Account, namespace: ArchivedSticker
     var flags: Int32 = 0
     if case .masks = namespace {
         flags |= 1 << 0
+    } else if case .emoji = namespace {
+        flags |= 1 << 1
     }
     return account.network.request(Api.functions.messages.getArchivedStickers(flags: flags, offsetId: 0, limit: 200))
     |> map { result -> [ArchivedStickerPackItem] in
         var archivedItems: [ArchivedStickerPackItem] = []
         switch result {
-            case let .archivedStickers(_, sets):
+            case let .archivedStickers(archivedStickersData):
+                let sets = archivedStickersData.sets
                 for set in sets {
                     let (info, items) = parsePreviewStickerSet(set, namespace: namespace.itemCollectionNamespace)
                     archivedItems.append(ArchivedStickerPackItem(info: info, topItems: items))
@@ -50,7 +56,7 @@ func _internal_archivedStickerPacks(account: Account, namespace: ArchivedSticker
 }
 
 func _internal_removeArchivedStickerPack(account: Account, info: StickerPackCollectionInfo) -> Signal<Void, NoError> {
-    return account.network.request(Api.functions.messages.uninstallStickerSet(stickerset: Api.InputStickerSet.inputStickerSetID(id: info.id.id, accessHash: info.accessHash)))
+    return account.network.request(Api.functions.messages.uninstallStickerSet(stickerset: Api.InputStickerSet.inputStickerSetID(.init(id: info.id.id, accessHash: info.accessHash))))
     |> `catch` { _ -> Signal<Api.Bool, NoError> in
         return .single(.boolFalse)
     }

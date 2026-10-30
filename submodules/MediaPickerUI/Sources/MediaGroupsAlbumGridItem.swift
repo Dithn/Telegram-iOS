@@ -7,6 +7,7 @@ import TelegramPresentationData
 import ItemListUI
 import MergeLists
 import Photos
+import MediaAssetsContext
 
 private struct MediaGroupsGridAlbumEntry: Comparable, Identifiable {
     let theme: PresentationTheme
@@ -49,6 +50,10 @@ private struct MediaGroupsGridAlbumEntry: Comparable, Identifiable {
 
 
 private class MediaGroupsGridAlbumItem: ListViewItem {
+    var neighborDescriptor: AnyEquatable {
+        return AnyEquatable.noNeighborInfluence
+    }
+
     let theme: PresentationTheme
     let collection: PHAssetCollection
     let firstItem: PHAsset?
@@ -63,7 +68,7 @@ private class MediaGroupsGridAlbumItem: ListViewItem {
         self.action = action
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = MediaGroupsGridAlbumItemNode()
             let (nodeLayout, apply) = node.asyncLayout()(self, params)
@@ -80,7 +85,7 @@ private class MediaGroupsGridAlbumItem: ListViewItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             assert(node() is MediaGroupsGridAlbumItemNode)
             if let nodeValue = node() as? MediaGroupsGridAlbumItemNode {
@@ -129,7 +134,7 @@ private final class MediaGroupsGridAlbumItemNode : ListViewItemNode {
         self.countNode = TextNode()
         self.countNode.isUserInteractionEnabled = false
         
-        super.init(layerBacked: false, dynamicBounce: false, rotated: false, seeThrough: false)
+        super.init(layerBacked: false, rotated: false, seeThrough: false)
                 
         self.addSubnode(self.containerNode)
         self.containerNode.addSubnode(self.imageNode)
@@ -140,7 +145,7 @@ private final class MediaGroupsGridAlbumItemNode : ListViewItemNode {
     override func didLoad() {
         super.didLoad()
         
-        self.imageNode.cornerRadius = 10.0
+        self.imageNode.cornerRadius = 5.0
         if #available(iOS 13.0, *) {
             self.imageNode.layer.cornerCurve = .continuous
         }
@@ -184,8 +189,8 @@ private final class MediaGroupsGridAlbumItemNode : ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
-        super.animateInsertion(currentTimestamp, duration: duration, short: short)
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
+        super.animateInsertion(currentTimestamp, duration: duration, options: options)
         
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
     }
@@ -221,17 +226,21 @@ private func preparedTransition(action: @escaping (PHAssetCollection) -> Void, f
 }
 
 final class MediaGroupsAlbumGridItem: ListViewItem {
-    let presentationData: ItemListPresentationData
+    var neighborDescriptor: AnyEquatable {
+        return AnyEquatable.noNeighborInfluence
+    }
+
+    let presentationData: PresentationData
     let collections: [PHAssetCollection]
     let action: (PHAssetCollection) -> Void
     
-    public init(presentationData: ItemListPresentationData, collections: [PHAssetCollection], action: @escaping (PHAssetCollection) -> Void) {
+    public init(presentationData: PresentationData, collections: [PHAssetCollection], action: @escaping (PHAssetCollection) -> Void) {
         self.presentationData = presentationData
         self.collections = collections
         self.action = action
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         Queue.mainQueue().async {
             let node = MediaGroupsAlbumGridItemNode()
             let makeLayout = node.asyncLayout()
@@ -247,7 +256,7 @@ final class MediaGroupsAlbumGridItem: ListViewItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? MediaGroupsAlbumGridItemNode {
                 let layout = nodeValue.asyncLayout()
@@ -279,10 +288,10 @@ private class MediaGroupsAlbumGridItemNode: ListViewItemNode {
     private var enqueuedTransitions: [MediaGroupsAlbumGridItemNodeTransition] = []
     
     init() {
-        self.listNode = ListView()
+        self.listNode = ListViewImpl()
         self.listNode.transform = CATransform3DMakeRotation(-CGFloat.pi / 2.0, 0.0, 0.0, 1.0)
         
-        super.init(layerBacked: false, dynamicBounce: false, rotated: false, seeThrough: false)
+        super.init(layerBacked: false, rotated: false, seeThrough: false)
         
         self.addSubnode(self.listNode)
     }
@@ -310,7 +319,7 @@ private class MediaGroupsAlbumGridItemNode: ListViewItemNode {
         })
     }
 
-    override func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, previousItem: ListViewItem?, nextItem: ListViewItem?) {
+    override func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, neighbors: ListViewItemNeighbors) {
         if let item = self.item {
             let makeLayout = self.asyncLayout()
             let (nodeLayout, nodeApply) = makeLayout(item, params)
@@ -326,7 +335,7 @@ private class MediaGroupsAlbumGridItemNode: ListViewItemNode {
             let nodeLayout = ListViewItemNodeLayout(contentSize: contentSize, insets: UIEdgeInsets())
             
             return (nodeLayout, { [weak self] in
-                return (nil, { _ in
+                return (nil, { [item] _ in
                     if let strongSelf = self {
                         strongSelf.item = item
                         strongSelf.layoutParams = params
@@ -347,7 +356,8 @@ private class MediaGroupsAlbumGridItemNode: ListViewItemNode {
                                 firstItem = result.firstObject
                             }
                             if let firstItem = firstItem {
-                                entries.append(MediaGroupsGridAlbumEntry(theme: item.presentationData.theme, index: index, collection: collection, firstItem: firstItem, count: presentationStringsFormattedNumber(Int32(result.count))))
+                                let count = presentationStringsFormattedNumber(Int32(result.count), item.presentationData.dateTimeFormat.groupingSeparator)
+                                entries.append(MediaGroupsGridAlbumEntry(theme: item.presentationData.theme, index: index, collection: collection, firstItem: firstItem, count: count))
                                 index += 1
                             }
                         }
@@ -365,7 +375,7 @@ private class MediaGroupsAlbumGridItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: duration * 0.5)
     }
     

@@ -1,14 +1,16 @@
-#import "TGPassportAttachMenu.h"
+#import <LegacyComponents/LegacyComponents.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <LegacyComponents/TGPassportAttachMenu.h>
 
 #import "LegacyComponentsInternal.h"
-#import "TGImageUtils.h"
+#import <LegacyComponents/TGImageUtils.h>
 
 #import <LegacyComponents/TGViewController.h>
 #import <LegacyComponents/TGMenuSheetController.h>
 #import "TGOverlayFormsheetWindow.h"
 
 #import <LegacyComponents/TGAttachmentCarouselItemView.h>
-#import "TGAttachmentCameraView.h"
+#import <LegacyComponents/TGAttachmentCameraView.h>
 
 #import <LegacyComponents/TGCameraController.h>
 
@@ -154,7 +156,7 @@
         return;
     
     __weak TGViewController *weakParentController = parentController;
-    void (^presentBlock)(TGMediaAssetsController *) = nil;
+    __unused void (^presentBlock)(TGMediaAssetsController *) = nil;
     
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone)
     {
@@ -190,7 +192,10 @@
             controller.presentationStyle = TGNavigationControllerPresentationStyleInFormSheet;
             controller.modalPresentationStyle = UIModalPresentationFormSheet;
             
-            TGOverlayFormsheetWindow *formSheetWindow = [[TGOverlayFormsheetWindow alloc] initWithContext:context parentController:strongParentController contentController:controller];
+            id<LegacyComponentsOverlayWindowManager> windowManager = nil;
+            windowManager = [context makeOverlayWindowManager];
+            
+            TGOverlayFormsheetWindow *formSheetWindow = [[TGOverlayFormsheetWindow alloc] initWithManager:windowManager parentController:strongParentController contentController:controller];
             [formSheetWindow showAnimated:true];
             
             __weak TGNavigationController *weakNavController = controller;
@@ -309,7 +314,7 @@
     else
         controllerWindow.frame = [context fullscreenBounds];
     
-    bool standalone = true;
+    __unused bool standalone = true;
     CGRect startFrame = CGRectMake(0, screenSize.height, screenSize.width, screenSize.height);
     if (cameraView != nil)
     {
@@ -381,7 +386,7 @@
         [delegate cleanup];
     }];
     
-    UIDocumentPickerViewController *controller = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.image"] inMode:UIDocumentPickerModeOpen];
+    UIDocumentPickerViewController *controller = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeImage]];
     controller.view.backgroundColor = [UIColor whiteColor];
     controller.delegate = delegate;
     

@@ -3,11 +3,12 @@ import UIKit
 import Display
 import AsyncDisplayKit
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
 import TelegramUIPreferences
+import AccountContext
+import TextNodeWithEntities
 
 struct ChatListFilterPresetListItemEditing: Equatable {
     let editable: Bool
@@ -15,49 +16,68 @@ struct ChatListFilterPresetListItemEditing: Equatable {
     let revealed: Bool
 }
 
-final class ChatListFilterPresetListItem: ListViewItem, ItemListItem {
+final class ChatListFilterPresetListItem: ListViewItem, ItemListItem, ItemListRevealOptionsStatefulItem {
+    let context: AccountContext
     let presentationData: ItemListPresentationData
+    let systemStyle: ItemListSystemStyle
     let preset: ChatListFilter
-    let title: String
+    let title: ChatFolderTitle
     let label: String
+    let tagColor: UIColor?
     let editing: ChatListFilterPresetListItemEditing
     let canBeReordered: Bool
     let canBeDeleted: Bool
+    let isAllChats: Bool
+    let isDisabled: Bool
     let sectionId: ItemListSectionId
     let action: () -> Void
     let setItemWithRevealedOptions: (Int32?, Int32?) -> Void
     let remove: () -> Void
+
+    var hasActiveRevealOptions: Bool {
+        return self.editing.revealed
+    }
     
     init(
+        context: AccountContext,
         presentationData: ItemListPresentationData,
+        systemStyle: ItemListSystemStyle,
         preset: ChatListFilter,
-        title: String,
+        title: ChatFolderTitle,
         label: String,
+        tagColor: UIColor?,
         editing: ChatListFilterPresetListItemEditing,
         canBeReordered: Bool,
         canBeDeleted: Bool,
+        isAllChats: Bool,
+        isDisabled: Bool,
         sectionId: ItemListSectionId,
         action: @escaping () -> Void,
         setItemWithRevealedOptions: @escaping (Int32?, Int32?) -> Void,
         remove: @escaping () -> Void
     ) {
+        self.context = context
         self.presentationData = presentationData
+        self.systemStyle = systemStyle
         self.preset = preset
         self.title = title
         self.label = label
+        self.tagColor = tagColor
         self.editing = editing
         self.canBeReordered = canBeReordered
         self.canBeDeleted = canBeDeleted
+        self.isAllChats = isAllChats
+        self.isDisabled = isDisabled
         self.sectionId = sectionId
         self.action = action
         self.setItemWithRevealedOptions = setItemWithRevealedOptions
         self.remove = remove
     }
     
-    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = ChatListFilterPresetListItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -70,7 +90,7 @@ final class ChatListFilterPresetListItem: ListViewItem, ItemListItem {
         }
     }
     
-    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? ChatListFilterPresetListItemNode {
                 let makeLayout = nodeValue.asyncLayout()
@@ -81,7 +101,7 @@ final class ChatListFilterPresetListItem: ListViewItem, ItemListItem {
                 }
                 
                 async {
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply(animated)
@@ -92,7 +112,9 @@ final class ChatListFilterPresetListItem: ListViewItem, ItemListItem {
         }
     }
     
-    var selectable: Bool = true
+    var selectable: Bool  {
+        return !self.isAllChats
+    }
     
     func selected(listView: ListView){
         listView.clearHighlightAnimated(true)
@@ -102,7 +124,7 @@ final class ChatListFilterPresetListItem: ListViewItem, ItemListItem {
 
 private let titleFont = Font.regular(17.0)
 
-private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemNode {
+final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemNode {
     private let backgroundNode: ASDisplayNode
     private let topStripeNode: ASDisplayNode
     private let bottomStripeNode: ASDisplayNode
@@ -114,9 +136,11 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
         return self.containerNode
     }
     
-    private let titleNode: TextNode
+    private let titleNode: TextNodeWithEntities
     private let labelNode: TextNode
     private let arrowNode: ASImageNode
+    private let sharedIconNode: ASImageNode
+    private var tagIconView: UIImageView?
     
     private let activateArea: AccessibilityAreaNode
     
@@ -125,12 +149,22 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
     
     private var item: ChatListFilterPresetListItem?
     private var layoutParams: ListViewItemLayoutParams?
+    private var isHighlighted = false
     
     override var canBeSelected: Bool {
         if self.editableControlNode != nil {
             return false
         }
         return true
+    }
+    
+    override var visibility: ListViewItemNodeVisibility {
+        didSet {
+            if self.visibility != oldValue {
+                let enableAnimations = self.item?.title.enableAnimations ?? true
+                self.titleNode.visibilityRect = (self.visibility == ListViewItemNodeVisibility.none || !enableAnimations) ? CGRect.zero : CGRect.infinite
+            }
+        }
     }
     
     init() {
@@ -148,10 +182,11 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
         self.maskNode = ASImageNode()
         self.maskNode.isUserInteractionEnabled = false
         
-        self.titleNode = TextNode()
-        self.titleNode.isUserInteractionEnabled = false
-        self.titleNode.contentMode = .left
-        self.titleNode.contentsScale = UIScreen.main.scale
+        self.titleNode = TextNodeWithEntities()
+        self.titleNode.textNode.isUserInteractionEnabled = false
+        self.titleNode.textNode.contentMode = .left
+        self.titleNode.textNode.contentsScale = UIScreen.main.scale
+        self.titleNode.resetEmojiToFirstFrameAutomatically = true
         
         self.labelNode = TextNode()
         self.labelNode.isUserInteractionEnabled = false
@@ -161,17 +196,23 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
         self.arrowNode.displaysAsynchronously = false
         self.arrowNode.isLayerBacked = true
         
+        self.sharedIconNode = ASImageNode()
+        self.sharedIconNode.displayWithoutProcessing = true
+        self.sharedIconNode.displaysAsynchronously = false
+        self.sharedIconNode.isLayerBacked = true
+
         self.activateArea = AccessibilityAreaNode()
         
         self.highlightedBackgroundNode = ASDisplayNode()
         self.highlightedBackgroundNode.isLayerBacked = true
         
-        super.init(layerBacked: false, dynamicBounce: false, rotated: false, seeThrough: false)
+        super.init(layerBacked: false, rotated: false, seeThrough: false)
         
         self.addSubnode(self.containerNode)
-        self.containerNode.addSubnode(self.titleNode)
+        self.containerNode.addSubnode(self.titleNode.textNode)
         self.containerNode.addSubnode(self.labelNode)
         self.containerNode.addSubnode(self.arrowNode)
+        self.containerNode.addSubnode(self.sharedIconNode)
         self.addSubnode(self.activateArea)
         
         self.activateArea.activate = { [weak self] in
@@ -181,31 +222,42 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
     }
     
     func asyncLayout() -> (_ item: ChatListFilterPresetListItem, _ params: ListViewItemLayoutParams, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, (Bool) -> Void) {
-        let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
+        let makeTitleLayout = TextNodeWithEntities.asyncLayout(self.titleNode)
         let makeLabelLayout = TextNode.asyncLayout(self.labelNode)
         let editableControlLayout = ItemListEditableControlNode.asyncLayout(self.editableControlNode)
         let reorderControlLayout = ItemListEditableReorderControlNode.asyncLayout(self.reorderControlNode)
         
         let currentItem = self.item
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             var updatedTheme: PresentationTheme?
             var updateArrowImage: UIImage?
+            var updatedSharedIconImage: UIImage?
             
-            if currentItem?.presentationData.theme !== item.presentationData.theme {
+            if currentItem?.presentationData.theme !== item.presentationData.theme || currentItem?.isDisabled != item.isDisabled {
                 updatedTheme = item.presentationData.theme
-                updateArrowImage = PresentationResourcesItemList.disclosureArrowImage(item.presentationData.theme)
+                if item.isDisabled {
+                    updateArrowImage = PresentationResourcesItemList.disclosureLockedImage(item.presentationData.theme)
+                } else {
+                    updateArrowImage = PresentationResourcesItemList.disclosureArrowImage(item.presentationData.theme)
+                }
+                
+                updatedSharedIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat List/SharedFolderListIcon"), color: item.presentationData.theme.list.disclosureArrowColor)
             }
             
             let peerRevealOptions: [ItemListRevealOption]
             if item.editing.editable && item.canBeDeleted {
-                peerRevealOptions = [ItemListRevealOption(key: 0, title: item.presentationData.strings.Common_Delete, icon: .none, color: item.presentationData.theme.list.itemDisclosureActions.destructive.fillColor, textColor: item.presentationData.theme.list.itemDisclosureActions.destructive.foregroundColor)]
+                peerRevealOptions = [ItemListRevealOption(key: 0, title: item.presentationData.strings.Common_Delete, icon: .none, color: item.presentationData.theme.list.itemDisclosureActions.destructive.fillColor, iconColor: item.presentationData.theme.list.itemDisclosureActions.destructive.foregroundColor, textColor: item.presentationData.theme.list.itemSecondaryTextColor, isDestructive: true)]
             } else {
                 peerRevealOptions = []
             }
             
             let titleAttributedString = NSMutableAttributedString()
-            titleAttributedString.append(NSAttributedString(string: item.title, font: titleFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor))
+            if item.isAllChats {
+                titleAttributedString.append(NSAttributedString(string: item.presentationData.strings.ChatList_FolderAllChats, font: titleFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor))
+            } else {
+                titleAttributedString.append(item.title.attributedString(font: titleFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor))
+            }
             
             var editableControlSizeAndApply: (CGFloat, (CGFloat) -> ItemListEditableControlNode)?
             var reorderControlSizeAndApply: (CGFloat, (CGFloat, Bool, ContainedViewLayoutTransition) -> ItemListEditableReorderControlNode)?
@@ -234,9 +286,18 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
             let labelConstrain: CGFloat = params.width - params.rightInset - leftInset - 40.0 - titleLayout.size.width - 10.0
             let (labelLayout, labelApply) = makeLabelLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.label, font: titleFont, textColor: item.presentationData.theme.list.itemSecondaryTextColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: labelConstrain, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
+            let verticalInset: CGFloat
+            switch item.systemStyle {
+            case .glass:
+                verticalInset = 15.0
+            case .legacy:
+                verticalInset = 11.0
+            }
+            
             let insets = itemListNeighborsGroupedInsets(neighbors, params)
-            let contentSize = CGSize(width: params.width, height: titleLayout.size.height + 11.0 * 2.0)
+            let contentSize = CGSize(width: params.width, height: titleLayout.size.height + verticalInset * 2.0)
             let separatorHeight = UIScreenPixel
+            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
             
             let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
             let layoutSize = layout.size
@@ -262,6 +323,23 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
                         transition = ContainedViewLayoutTransition.animated(duration: 0.4, curve: .spring)
                     } else {
                         transition = .immediate
+                    }
+                    
+                    if let reorderControlSizeAndApply = reorderControlSizeAndApply {
+                        if strongSelf.reorderControlNode == nil {
+                            let reorderControlNode = reorderControlSizeAndApply.1(layout.contentSize.height, false, .immediate)
+                            strongSelf.reorderControlNode = reorderControlNode
+                            strongSelf.controlsContainer.addSubnode(reorderControlNode)
+                            reorderControlNode.alpha = 0.0
+                            transition.updateAlpha(node: reorderControlNode, alpha: 1.0)
+                        }
+                        let reorderControlFrame = CGRect(origin: CGPoint(x: params.width + revealOffset - params.rightInset - reorderControlSizeAndApply.0, y: 0.0), size: CGSize(width: reorderControlSizeAndApply.0, height: layout.contentSize.height))
+                        strongSelf.reorderControlNode?.frame = reorderControlFrame
+                    } else if let reorderControlNode = strongSelf.reorderControlNode {
+                        strongSelf.reorderControlNode = nil
+                        transition.updateAlpha(node: reorderControlNode, alpha: 0.0, completion: { [weak reorderControlNode] _ in
+                            reorderControlNode?.removeFromSupernode()
+                        })
                     }
                     
                     if let editableControlSizeAndApply = editableControlSizeAndApply {
@@ -293,26 +371,19 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
                             editableControlNode?.removeFromSupernode()
                         })
                     }
-                    
-                    if let reorderControlSizeAndApply = reorderControlSizeAndApply {
-                        if strongSelf.reorderControlNode == nil {
-                            let reorderControlNode = reorderControlSizeAndApply.1(layout.contentSize.height, false, .immediate)
-                            strongSelf.reorderControlNode = reorderControlNode
-                            strongSelf.addSubnode(reorderControlNode)
-                            reorderControlNode.alpha = 0.0
-                            transition.updateAlpha(node: reorderControlNode, alpha: 1.0)
-                        }
-                        let reorderControlFrame = CGRect(origin: CGPoint(x: params.width + revealOffset - params.rightInset - reorderControlSizeAndApply.0, y: 0.0), size: CGSize(width: reorderControlSizeAndApply.0, height: layout.contentSize.height))
-                        strongSelf.reorderControlNode?.frame = reorderControlFrame
-                    } else if let reorderControlNode = strongSelf.reorderControlNode {
-                        strongSelf.reorderControlNode = nil
-                        transition.updateAlpha(node: reorderControlNode, alpha: 0.0, completion: { [weak reorderControlNode] _ in
-                            reorderControlNode?.removeFromSupernode()
-                        })
-                    }
-                    
-                    let _ = titleApply()
+                    strongSelf.editableControlNode?.isHidden = !item.canBeDeleted
+                                        
+                    let _ = titleApply(TextNodeWithEntities.Arguments(
+                        context: item.context,
+                        cache: item.context.animationCache,
+                        renderer: item.context.animationRenderer,
+                        placeholderColor: item.presentationData.theme.list.mediaPlaceholderColor,
+                        attemptSynchronous: true
+                    ))
                     let _ = labelApply()
+                    
+                    let enableAnimations = item.title.enableAnimations
+                    strongSelf.titleNode.visibilityRect = (strongSelf.visibility == ListViewItemNodeVisibility.none || !enableAnimations) ? CGRect.zero : CGRect.infinite
                     
                     if strongSelf.backgroundNode.supernode == nil {
                         strongSelf.insertSubnode(strongSelf.backgroundNode, at: 0)
@@ -330,54 +401,110 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
                     let hasCorners = itemListHasRoundedBlockLayout(params)
                     var hasTopCorners = false
                     var hasBottomCorners = false
+                    let topStripeIsHidden: Bool
                     switch neighbors.top {
                         case .sameSection(false):
-                            strongSelf.topStripeNode.isHidden = true
+                            topStripeIsHidden = true
                         default:
                             hasTopCorners = true
-                            strongSelf.topStripeNode.isHidden = hasCorners
+                            topStripeIsHidden = hasCorners
                     }
                     let bottomStripeInset: CGFloat
                     let bottomStripeOffset: CGFloat
+                    let bottomStripeIsHidden: Bool
                     switch neighbors.bottom {
                     case .sameSection(false):
                         bottomStripeInset = leftInset + editingOffset
                         bottomStripeOffset = -separatorHeight
-                        strongSelf.bottomStripeNode.isHidden = false
+                        bottomStripeIsHidden = false
                     default:
                         bottomStripeInset = 0.0
                         bottomStripeOffset = 0.0
                         hasBottomCorners = true
-                        strongSelf.bottomStripeNode.isHidden = hasCorners
+                        bottomStripeIsHidden = hasCorners
                     }
+                    strongSelf.updateRevealOptionsSeparatorNodes(top: strongSelf.topStripeNode, bottom: strongSelf.bottomStripeNode, topIsHidden: topStripeIsHidden, bottomIsHidden: bottomStripeIsHidden, topHiddenByPreviousRevealOptions: neighbors.topHasActiveRevealOptions, bottomHiddenByNextRevealOptions: neighbors.bottomHasActiveRevealOptions)
                     
-                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                     
                     strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
                     strongSelf.containerNode.frame = CGRect(origin: CGPoint(), size: strongSelf.backgroundNode.frame.size)
-                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                     transition.updateFrame(node: strongSelf.topStripeNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight)))
-                    transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: layoutSize.width - bottomStripeInset, height: separatorHeight)))
+                    transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: layoutSize.width - bottomStripeInset - params.rightInset - separatorRightInset, height: separatorHeight)))
                     
-                    transition.updateFrame(node: strongSelf.titleNode, frame: CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: 11.0), size: titleLayout.size))
+                    transition.updateFrame(node: strongSelf.titleNode.textNode, frame: CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: verticalInset + 1.0), size: titleLayout.size))
                     
-                    let labelFrame = CGRect(origin: CGPoint(x: params.width - rightArrowInset - labelLayout.size.width + revealOffset, y: 11.0), size: labelLayout.size)
+                    let labelFrame = CGRect(origin: CGPoint(x: params.width - rightArrowInset - labelLayout.size.width + revealOffset, y: verticalInset + 1.0), size: labelLayout.size)
                     strongSelf.labelNode.frame = labelFrame
                     
                     transition.updateAlpha(node: strongSelf.labelNode, alpha: reorderControlSizeAndApply != nil ? 0.0 : 1.0)
                     transition.updateAlpha(node: strongSelf.arrowNode, alpha: reorderControlSizeAndApply != nil ? 0.0 : 1.0)
+                    transition.updateAlpha(node: strongSelf.sharedIconNode, alpha: reorderControlSizeAndApply != nil ? 0.0 : 1.0)
                     
                     if let updateArrowImage = updateArrowImage {
                         strongSelf.arrowNode.image = updateArrowImage
                     }
+                    if let updatedSharedIconImage {
+                        strongSelf.sharedIconNode.image = updatedSharedIconImage
+                    }
                     
                     if let arrowImage = strongSelf.arrowNode.image {
-                        strongSelf.arrowNode.frame = CGRect(origin: CGPoint(x: params.width - params.rightInset - 7.0 - arrowImage.size.width + revealOffset, y: floorToScreenPixels((layout.contentSize.height - arrowImage.size.height) / 2.0)), size: arrowImage.size)
+                        var rightArrowInset = 0.0
+                        if item.isDisabled == true {
+                            rightArrowInset -= 3.0
+                        }
+                        strongSelf.arrowNode.frame = CGRect(origin: CGPoint(x: params.width - params.rightInset - 7.0 - arrowImage.size.width + rightArrowInset + revealOffset, y: floorToScreenPixels((layout.contentSize.height - arrowImage.size.height) / 2.0)), size: arrowImage.size)
+                    }
+                    strongSelf.arrowNode.isHidden = item.isAllChats
+                    
+                    if let sharedIconImage = strongSelf.sharedIconNode.image {
+                        var sharedIconFrame = CGRect(origin: CGPoint(x: strongSelf.arrowNode.frame.minX + 2.0 - sharedIconImage.size.width, y: floorToScreenPixels((layout.contentSize.height - sharedIconImage.size.height) / 2.0) + 1.0), size: sharedIconImage.size)
+                        if item.tagColor != nil {
+                            sharedIconFrame.origin.x -= 34.0
+                        }
+                        if strongSelf.sharedIconNode.bounds.isEmpty {
+                            strongSelf.sharedIconNode.frame = sharedIconFrame
+                        } else {
+                            transition.updateFrame(node: strongSelf.sharedIconNode, frame: sharedIconFrame)
+                        }
+                    }
+                    var isShared = false
+                    if case let .filter(_, _, _, data) = item.preset, data.isShared {
+                        isShared = true
+                    }
+                    strongSelf.sharedIconNode.isHidden = !isShared
+                    
+                    if let tagColor = item.tagColor {
+                        let tagIconView: UIImageView
+                        var tagIconTransition = transition
+                        if let current = strongSelf.tagIconView {
+                            tagIconView = current
+                        } else {
+                            tagIconTransition = .immediate
+                            tagIconView = UIImageView(image: generateStretchableFilledCircleImage(diameter: 24.0, color: .white)?.withRenderingMode(.alwaysTemplate))
+                            strongSelf.tagIconView = tagIconView
+                            strongSelf.containerNode.view.addSubview(tagIconView)
+                        }
+                        tagIconView.tintColor = tagColor
+                        
+                        let tagIconFrame = CGRect(origin: CGPoint(x: strongSelf.arrowNode.frame.minX - 2.0 - 24.0, y: floorToScreenPixels((layout.contentSize.height - 24.0) / 2.0)), size: CGSize(width: 24.0, height: 24.0))
+                        
+                        tagIconTransition.updateAlpha(layer: tagIconView.layer, alpha: reorderControlSizeAndApply != nil ? 0.0 : 1.0)
+                        tagIconTransition.updateFrame(view: tagIconView, frame: tagIconFrame)
+                    } else {
+                        if let tagIconView = strongSelf.tagIconView {
+                            strongSelf.tagIconView = nil
+                            transition.updateAlpha(layer: tagIconView.layer, alpha: 0.0, completion: { [weak tagIconView] _ in
+                                tagIconView?.removeFromSuperview()
+                            })
+                            transition.updateTransformScale(layer: tagIconView.layer, scale: 0.001)
+                        }
                     }
                     
                     strongSelf.activateArea.frame = CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: 0.0), size: CGSize(width: params.width - params.rightInset - 56.0 - (leftInset + revealOffset + editingOffset), height: layout.contentSize.height))
                     
-                    strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: layout.contentSize.height + UIScreenPixel + UIScreenPixel))
+                    strongSelf.updateRevealOptionsHighlightedBackgroundFrame(strongSelf.highlightedBackgroundNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: layout.contentSize.height + UIScreenPixel + UIScreenPixel)), transition: transition, aboveNodes: [strongSelf.bottomStripeNode, strongSelf.topStripeNode, strongSelf.backgroundNode])
                     
                     strongSelf.updateLayout(size: layout.contentSize, leftInset: params.leftInset, rightInset: params.rightInset)
                     
@@ -388,45 +515,21 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
         }
     }
     
-    override func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) {
-        super.setHighlighted(highlighted, at: point, animated: animated)
-        
-        if highlighted {
-            self.highlightedBackgroundNode.alpha = 1.0
-            if self.highlightedBackgroundNode.supernode == nil {
-                var anchorNode: ASDisplayNode?
-                if self.bottomStripeNode.supernode != nil {
-                    anchorNode = self.bottomStripeNode
-                } else if self.topStripeNode.supernode != nil {
-                    anchorNode = self.topStripeNode
-                } else if self.backgroundNode.supernode != nil {
-                    anchorNode = self.backgroundNode
-                }
-                if let anchorNode = anchorNode {
-                    self.insertSubnode(self.highlightedBackgroundNode, aboveSubnode: anchorNode)
-                } else {
-                    self.addSubnode(self.highlightedBackgroundNode)
-                }
-            }
-        } else {
-            if self.highlightedBackgroundNode.supernode != nil {
-                if animated {
-                    self.highlightedBackgroundNode.layer.animateAlpha(from: self.highlightedBackgroundNode.alpha, to: 0.0, duration: 0.4, completion: { [weak self] completed in
-                        if let strongSelf = self {
-                            if completed {
-                                strongSelf.highlightedBackgroundNode.removeFromSupernode()
-                            }
-                        }
-                    })
-                    self.highlightedBackgroundNode.alpha = 0.0
-                } else {
-                    self.highlightedBackgroundNode.removeFromSupernode()
-                }
-            }
+    func animateTagColorIn(delay: Double) {
+        if let tagIconView = self.tagIconView {
+            tagIconView.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.12, delay: delay)
+            tagIconView.layer.animateSpring(from: 0.001 as NSNumber, to: 1.0 as NSNumber, keyPath: "transform.scale", duration: 0.4, delay: delay)
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) {
+        super.setHighlighted(highlighted, at: point, animated: animated)
+        
+        self.isHighlighted = highlighted
+        self.updateRevealOptionsHighlightedBackgroundNode(self.highlightedBackgroundNode, isHighlighted: self.isHighlighted, transition: (animated && !highlighted) ? .animated(duration: 0.3, curve: .easeInOut) : .immediate, aboveNodes: [self.bottomStripeNode, self.topStripeNode, self.backgroundNode])
+    }
+    
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
@@ -442,8 +545,10 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
         }
         
         let leftInset: CGFloat = 16.0 + params.leftInset
-        let rightArrowInset: CGFloat = 34.0 + params.rightInset
-        
+        var rightArrowInset: CGFloat = 34.0 + params.rightInset
+        if self.item?.isDisabled == true {
+            rightArrowInset -= 3.0
+        }
         let editingOffset: CGFloat
         if let editableControlNode = self.editableControlNode {
             editingOffset = editableControlNode.bounds.size.width
@@ -454,7 +559,7 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
             editingOffset = 0.0
         }
         
-        transition.updateFrame(node: self.titleNode, frame: CGRect(origin: CGPoint(x: leftInset + offset + editingOffset, y: self.titleNode.frame.minY), size: self.titleNode.bounds.size))
+        transition.updateFrame(node: self.titleNode.textNode, frame: CGRect(origin: CGPoint(x: leftInset + offset + editingOffset, y: self.titleNode.textNode.frame.minY), size: self.titleNode.textNode.bounds.size))
         
         var labelFrame = self.labelNode.frame
         labelFrame.origin.x = params.width - rightArrowInset - labelFrame.width + revealOffset
@@ -463,6 +568,25 @@ private final class ChatListFilterPresetListItemNode: ItemListRevealOptionsItemN
         var arrowFrame = self.arrowNode.frame
         arrowFrame.origin.x = params.width - params.rightInset - 7.0 - arrowFrame.width + revealOffset
         transition.updateFrame(node: self.arrowNode, frame: arrowFrame)
+        
+        var sharedIconFrame = self.sharedIconNode.frame
+        sharedIconFrame.origin.x = arrowFrame.minX + 2.0 - sharedIconFrame.width
+        if self.item?.tagColor != nil {
+            sharedIconFrame.origin.x -= 34.0
+        }
+        transition.updateFrame(node: self.sharedIconNode, frame: sharedIconFrame)
+        
+        if let tagIconView = self.tagIconView {
+            var tagIconFrame = tagIconView.frame
+            tagIconFrame.origin.x = arrowFrame.minX - 2.0 - tagIconFrame.width
+            transition.updateFrame(view: tagIconView, frame: tagIconFrame)
+        }
+    }
+
+    override func revealOptionsActiveStateUpdated(isActive: Bool, transition: ContainedViewLayoutTransition) {
+        super.revealOptionsActiveStateUpdated(isActive: isActive, transition: transition)
+
+        self.updateRevealOptionsHighlightedBackgroundNode(self.highlightedBackgroundNode, isHighlighted: self.isHighlighted, transition: transition, aboveNodes: [self.bottomStripeNode, self.topStripeNode, self.backgroundNode])
     }
     
     override func revealOptionsInteractivelyOpened() {

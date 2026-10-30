@@ -7,6 +7,8 @@ import CoreMedia
 import ManagedFile
 import Accelerate
 import TelegramCore
+import WebPBinding
+import UIKit
 
 private let sharedStoreQueue = Queue.concurrentDefaultQueue()
 
@@ -99,7 +101,7 @@ private final class VideoStickerFrameSourceCache {
             return true
         }
        
-        self.file.seek(position: 0)
+        let _ = self.file.seek(position: 0)
         var frameRate: Int32 = 0
         if self.file.read(&frameRate, 4) != 4 {
             return false
@@ -112,7 +114,7 @@ private final class VideoStickerFrameSourceCache {
         }
         self.frameRate = frameRate
         
-        self.file.seek(position: 4)
+        let _ = self.file.seek(position: 4)
         
         var frameCount: Int32 = 0
         if self.file.read(&frameCount, 4) != 4 {
@@ -143,7 +145,7 @@ private final class VideoStickerFrameSourceCache {
             return .notFound
         }
         
-        self.file.seek(position: Int64(8 + index * 4 * 2))
+        let _ = self.file.seek(position: Int64(8 + index * 4 * 2))
         var offset: Int32 = 0
         var length: Int32 = 0
         if self.file.read(&offset, 4) != 4 {
@@ -166,11 +168,11 @@ private final class VideoStickerFrameSourceCache {
     }
     
     func storeFrameRateAndCount(frameRate: Int, frameCount: Int) {
-        self.file.seek(position: 0)
+        let _ = self.file.seek(position: 0)
         var frameRate = Int32(frameRate)
         let _ = self.file.write(&frameRate, count: 4)
        
-        self.file.seek(position: 4)
+        let _ = self.file.seek(position: 4)
         var frameCount = Int32(frameCount)
         let _ = self.file.write(&frameCount, count: 4)
     }
@@ -202,12 +204,12 @@ private final class VideoStickerFrameSourceCache {
                     return
                 }
                 
-                strongSelf.file.seek(position: Int64(8 + index * 4 * 2))
+                let _ = strongSelf.file.seek(position: Int64(8 + index * 4 * 2))
                 var offset = Int32(currentSize)
                 var length = Int32(compressedData.count)
                 let _ = strongSelf.file.write(&offset, count: 4)
                 let _ = strongSelf.file.write(&length, count: 4)
-                strongSelf.file.seek(position: Int64(currentSize))
+                let _ = strongSelf.file.seek(position: Int64(currentSize))
                 compressedData.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Void in
                     if let baseAddress = buffer.baseAddress {
                         let _ = strongSelf.file.write(baseAddress, count: Int(length))
@@ -225,7 +227,7 @@ private final class VideoStickerFrameSourceCache {
         
         switch rangeResult {
         case let .range(range):
-            self.file.seek(position: Int64(range.lowerBound))
+            let _ = self.file.seek(position: Int64(range.lowerBound))
             let length = range.upperBound - range.lowerBound
             let compressedData = self.file.readData(count: length)
             if compressedData.count != length {
@@ -272,24 +274,34 @@ private final class VideoStickerFrameSourceCache {
 
 private let useCache = true
 
-final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
+public func makeVideoStickerDirectFrameSource(queue: Queue, path: String, hintVP9: Bool, width: Int, height: Int, cachePathPrefix: String?, unpremultiplyAlpha: Bool) -> AnimatedStickerFrameSource? {
+    return VideoStickerDirectFrameSource(queue: queue, path: path, isVP9: hintVP9, width: width, height: height, cachePathPrefix: cachePathPrefix, unpremultiplyAlpha: unpremultiplyAlpha)
+}
+
+public final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
     private let queue: Queue
     private let path: String
     private let width: Int
     private let height: Int
     private let cache: VideoStickerFrameSourceCache?
+    private let image: UIImage?
     private let bytesPerRow: Int
-    var frameCount: Int
-    let frameRate: Int
+    public var frameCount: Int
+    public let frameRate: Int
+    public var duration: Double
     fileprivate var currentFrame: Int
     
-    private let source: SoftwareVideoSource?
+    private var source: FFMpegFileReader?
     
-    var frameIndex: Int {
-        return self.currentFrame % self.frameCount
+    public var frameIndex: Int {
+        if self.frameCount == 0 {
+            return 0
+        } else {
+            return self.currentFrame % self.frameCount
+        }
     }
     
-    init?(queue: Queue, path: String, width: Int, height: Int, cachePathPrefix: String?) {
+    public init?(queue: Queue, path: String, isVP9: Bool = true, width: Int, height: Int, cachePathPrefix: String?, unpremultiplyAlpha: Bool = true) {
         self.queue = queue
         self.path = path
         self.width = width
@@ -303,12 +315,39 @@ final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
         
         if useCache, let cache = self.cache, cache.frameCount > 0 {
             self.source = nil
+            self.image = nil
             self.frameRate = Int(cache.frameRate)
             self.frameCount = Int(cache.frameCount)
+            if self.frameRate > 0 {
+                self.duration = Double(self.frameCount) / Double(self.frameRate)
+            } else {
+                self.duration = 0.0
+            }
+        } else if let data = try? Data(contentsOf: URL(fileURLWithPath: path)), let image = WebP.convert(fromWebP: data) {
+            self.source = nil
+            self.image = image
+            self.frameRate = 1
+            self.frameCount = 1
+            self.duration = 0.0
         } else {
-            let source = SoftwareVideoSource(path: path, hintVP9: true)
-            self.source = source
-            self.frameRate = min(30, source.getFramerate())
+            let source = FFMpegFileReader(
+                source: .file(path),
+                passthroughDecoder: false,
+                useHardwareAcceleration: false,
+                selectedStream: .mediaType(.video),
+                seek: nil,
+                maxReadablePts: nil
+            )
+            if let source {
+                self.source = source
+                self.frameRate = min(30, source.frameRate())
+                self.duration = source.duration().seconds
+            } else {
+                self.source = nil
+                self.frameRate = 30
+                self.duration = 0.0
+            }
+            self.image = nil
             self.frameCount = 0
         }
     }
@@ -317,7 +356,7 @@ final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
         assert(self.queue.isCurrent())
     }
     
-    func takeFrame(draw: Bool) -> AnimatedStickerFrame? {
+    public func takeFrame(draw: Bool) -> AnimatedStickerFrame? {
         let frameIndex: Int
         if self.frameCount > 0 {
             frameIndex = self.currentFrame % self.frameCount
@@ -327,59 +366,79 @@ final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
 
         self.currentFrame += 1
         if draw {
-            if useCache, let cache = self.cache, let yuvData = cache.readUncompressedYuvaFrame(index: frameIndex) {
-                return AnimatedStickerFrame(data: yuvData, type: .yuva, width: self.width, height: self.height, bytesPerRow: self.width * 2, index: frameIndex, isLastFrame: frameIndex == self.frameCount - 1, totalFrames: self.frameCount)
-            } else if let source = self.source {
-                let frameAndLoop = source.readFrame(maxPts: nil)
-                if frameAndLoop.0 == nil {
-                    if frameAndLoop.3 {
-                        if self.frameCount == 0 {
-                            if let cache = self.cache {
-                                if cache.storedFrames == frameIndex {
-                                    self.frameCount = frameIndex
-                                    cache.storeFrameRateAndCount(frameRate: self.frameRate, frameCount: self.frameCount)
-                                } else {
-                                    Logger.shared.log("VideoSticker", "Missed a frame? \(frameIndex) \(cache.storedFrames)")
-                                }
-                            } else {
-                                self.frameCount = frameIndex
-                            }
-                        }
-                        self.currentFrame = 0
-                    } else {
-                        Logger.shared.log("VideoSticker", "Skipped a frame?")
-                    }
+            if let image = self.image {
+                guard let context = DrawingContext(size: CGSize(width: self.width, height: self.height), scale: 1.0, opaque: false, clear: true, bytesPerRow: self.bytesPerRow) else {
                     return nil
                 }
-                
-                guard let frame = frameAndLoop.0 else {
-                    return nil
+                context.withFlippedContext { c in
+                    c.draw(image.cgImage!, in: CGRect(origin: CGPoint(), size: context.size))
                 }
-                
-                var frameData = Data(count: self.bytesPerRow * self.height)
-                frameData.withUnsafeMutableBytes { buffer -> Void in
-                    guard let bytes = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
-                        return
-                    }
-                    
-                    let imageBuffer = CMSampleBufferGetImageBuffer(frame.sampleBuffer)
-                    CVPixelBufferLockBaseAddress(imageBuffer!, CVPixelBufferLockFlags(rawValue: 0))
-                    let bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer!)
-                    let width = CVPixelBufferGetWidth(imageBuffer!)
-                    let height = CVPixelBufferGetHeight(imageBuffer!)
-                    let srcData = CVPixelBufferGetBaseAddress(imageBuffer!)
-                    
-                    var sourceBuffer = vImage_Buffer(data: srcData, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: bytesPerRow)
-                    var destBuffer = vImage_Buffer(data: bytes, height: vImagePixelCount(self.height), width: vImagePixelCount(self.width), rowBytes: self.bytesPerRow)
-                               
-                    let _ = vImageScale_ARGB8888(&sourceBuffer, &destBuffer, nil, vImage_Flags(kvImageDoNotTile))
-                    
-                    CVPixelBufferUnlockBaseAddress(imageBuffer!, CVPixelBufferLockFlags(rawValue: 0))
-                }
-
-                self.cache?.storeUncompressedRgbFrame(index: frameIndex, rgbData: frameData)
+                let frameData = Data(bytes: context.bytes, count: self.bytesPerRow * self.height)
                                 
                 return AnimatedStickerFrame(data: frameData, type: .argb, width: self.width, height: self.height, bytesPerRow: self.bytesPerRow, index: frameIndex, isLastFrame: frameIndex == self.frameCount - 1, totalFrames: self.frameCount, multiplyAlpha: true)
+            } else if useCache, let cache = self.cache, let yuvData = cache.readUncompressedYuvaFrame(index: frameIndex) {
+                return AnimatedStickerFrame(data: yuvData, type: .yuva, width: self.width, height: self.height, bytesPerRow: self.width * 2, index: frameIndex, isLastFrame: frameIndex == self.frameCount - 1, totalFrames: self.frameCount)
+            } else if let source = self.source {
+                let frameAndLoop = source.readFrame(argb: true)
+                switch frameAndLoop {
+                case let .frame(frame):
+                    var frameData = Data(count: self.bytesPerRow * self.height)
+                    frameData.withUnsafeMutableBytes { buffer -> Void in
+                        guard let bytes = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                            return
+                        }
+                        
+                        let imageBuffer = CMSampleBufferGetImageBuffer(frame.sampleBuffer)
+                        CVPixelBufferLockBaseAddress(imageBuffer!, CVPixelBufferLockFlags(rawValue: 0))
+                        let bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer!)
+                        let width = CVPixelBufferGetWidth(imageBuffer!)
+                        let height = CVPixelBufferGetHeight(imageBuffer!)
+                        let srcData = CVPixelBufferGetBaseAddress(imageBuffer!)
+                        
+                        var sourceBuffer = vImage_Buffer(data: srcData, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: bytesPerRow)
+                        var destBuffer = vImage_Buffer(data: bytes, height: vImagePixelCount(self.height), width: vImagePixelCount(self.width), rowBytes: self.bytesPerRow)
+                                   
+                        let _ = vImageScale_ARGB8888(&sourceBuffer, &destBuffer, nil, vImage_Flags(kvImageDoNotTile))
+                        
+                        CVPixelBufferUnlockBaseAddress(imageBuffer!, CVPixelBufferLockFlags(rawValue: 0))
+                    }
+
+                    self.cache?.storeUncompressedRgbFrame(index: frameIndex, rgbData: frameData)
+                                    
+                    return AnimatedStickerFrame(data: frameData, type: .argb, width: self.width, height: self.height, bytesPerRow: self.bytesPerRow, index: frameIndex, isLastFrame: frameIndex == self.frameCount - 1, totalFrames: self.frameCount, multiplyAlpha: true)
+                case .endOfStream:
+                    if self.frameCount == 0 {
+                        if let cache = self.cache {
+                            if cache.storedFrames == frameIndex {
+                                self.frameCount = frameIndex
+                                cache.storeFrameRateAndCount(frameRate: self.frameRate, frameCount: self.frameCount)
+                            } else {
+                                Logger.shared.log("VideoSticker", "Missed a frame? \(frameIndex) \(cache.storedFrames)")
+                            }
+                        } else {
+                            self.frameCount = frameIndex
+                        }
+                    }
+                    self.currentFrame = 0
+                    self.source = FFMpegFileReader(
+                        source: .file(self.path),
+                        passthroughDecoder: false,
+                        useHardwareAcceleration: false,
+                        selectedStream: .mediaType(.video),
+                        seek: nil,
+                        maxReadablePts: nil
+                    )
+                    
+                    if let cache = self.cache {
+                        if let yuvData = cache.readUncompressedYuvaFrame(index: self.currentFrame) {
+                            return AnimatedStickerFrame(data: yuvData, type: .yuva, width: self.width, height: self.height, bytesPerRow: self.width * 2, index: frameIndex, isLastFrame: frameIndex == self.frameCount - 1, totalFrames: self.frameCount)
+                        }
+                    }
+                    
+                    return nil
+                case .waitingForMoreData, .error:
+                    return nil
+                }
             } else {
                 return nil
             }
@@ -388,11 +447,11 @@ final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
         }
     }
     
-    func skipToEnd() {
+    public func skipToEnd() {
         self.currentFrame = self.frameCount - 1
     }
 
-    func skipToFrameIndex(_ index: Int) {
+    public func skipToFrameIndex(_ index: Int) {
         self.currentFrame = index
     }
 }

@@ -1,4 +1,6 @@
 
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
 objc_library(
     name = "SSignalKit",
     enable_modules = True,
@@ -14,6 +16,8 @@ objc_library(
     ]),
     includes = [
       "Source",
+    ],
+    deps = [
     ],
     sdk_frameworks = [
       "Foundation",

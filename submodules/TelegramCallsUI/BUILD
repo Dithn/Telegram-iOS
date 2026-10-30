@@ -1,4 +1,6 @@
 load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
+load("@build_bazel_rules_apple//apple:ios.bzl", "ios_unit_test")
+load("@build_bazel_rules_apple//apple/testing/default_runner:ios_test_runner.bzl", "ios_test_runner")
 load(
     "@build_bazel_rules_apple//apple:resources.bzl",
     "apple_resource_bundle",
@@ -53,6 +55,9 @@ swift_library(
         ":TelegramCallsUIBundle",
     ],
     deps = [
+        "//submodules/SSignalKit/SSignalKit",
+        "//submodules/LottieSettings:LottieSettings",
+        "//submodules/Postbox:Postbox",
     	"//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
         "//submodules/Display:Display",
         "//submodules/TelegramPresentationData:TelegramPresentationData",
@@ -83,18 +88,16 @@ swift_library(
         "//submodules/AnimatedAvatarSetNode:AnimatedAvatarSetNode",
         "//submodules/AlertUI:AlertUI",
         "//submodules/DirectionalPanGesture:DirectionalPanGesture",
-        "//submodules/PeerInfoUI:PeerInfoUI",
         "//submodules/AnimatedCountLabelNode:AnimatedCountLabelNode",
         "//submodules/DeviceProximity:DeviceProximity",
         "//submodules/ManagedAnimationNode:ManagedAnimationNode",
         "//submodules/TemporaryCachedPeerDataManager:TemporaryCachedPeerDataManager",
         "//submodules/PeerInfoAvatarListNode:PeerInfoAvatarListNode",
-        "//submodules/WebSearchUI:WebSearchUI",
         "//submodules/MapResourceToAvatarSizes:MapResourceToAvatarSizes",
         "//submodules/TextFormat:TextFormat",
         "//submodules/Markdown:Markdown",
         "//submodules/ChatTitleActivityNode:ChatTitleActivityNode",
-        "//third-party/libyuv:LibYuvBinding",
+        "//third-party/LibYuvBinding",
         "//submodules/ComponentFlow:ComponentFlow",
         "//submodules/Components/LottieAnimationComponent:LottieAnimationComponent",
         "//submodules/Components/ActivityIndicatorComponent:ActivityIndicatorComponent",
@@ -104,6 +107,69 @@ swift_library(
         "//submodules/Components/UndoPanelComponent:UndoPanelComponent",
         "//submodules/Components/HierarchyTrackingLayer:HierarchyTrackingLayer",
         "//submodules/PeerInfoUI/CreateExternalMediaStreamScreen:CreateExternalMediaStreamScreen",
+        "//submodules/PhoneNumberFormat:PhoneNumberFormat",
+        "//submodules/TelegramUI/Components/Calls/CallScreen",
+        "//submodules/Components/ComponentDisplayAdapters",
+        "//submodules/TinyThumbnail",
+        "//submodules/ImageBlur",
+        "//submodules/MetalEngine",
+        "//submodules/TelegramUI/Components/Calls/VoiceChatActionButton",
+        "//submodules/TelegramUI/Components/PlainButtonComponent",
+        "//submodules/TelegramUI/Components/LottieComponent",
+        "//submodules/TelegramUI/Components/Stories/PeerListItemComponent",
+        "//submodules/TelegramUI/Components/BackButtonComponent",
+        "//submodules/Components/BlurredBackgroundComponent",
+        "//submodules/DirectMediaImageCache",
+        "//submodules/FastBlur",
+        "//submodules/InviteLinksUI",
+        "//third-party/td:TdBinding",
+        "//submodules/TelegramUI/Components/AnimatedTextComponent",
+        "//submodules/TelegramUI/Components/GlassBackgroundComponent",
+        "//submodules/TelegramUI/Components/LiquidGlassShapes",
+        "//submodules/ChatPresentationInterfaceState",
+        "//submodules/TelegramUI/Components/MessageInputPanelComponent",
+        "//submodules/TelegramUI/Components/TextFieldComponent",
+        "//submodules/ReactionSelectionNode",
+        "//submodules/TelegramUI/Components/EntityKeyboard",
+        "//submodules/TelegramUI/Components/EdgeEffect",
+        "//submodules/PremiumUI",
+        "//submodules/TelegramUI/Components/Calls/VideoChatMicButtonComponent",
+        "//submodules/TelegramUI/Components/AlertComponent",
+        "//submodules/TelegramUI/Components/AlertComponent/AlertInputFieldComponent",
+        "//submodules/TelegramUI/Components/GlassControls",
+    ],
+    visibility = [
+        "//visibility:public",
+    ],
+)
+
+swift_library(
+    name = "TelegramCallsUITestsLib",
+    testonly = True,
+    srcs = glob([
+        "Tests/**/*.swift",
+    ]),
+    deps = [
+        ":TelegramCallsUI",
+        "//submodules/TelegramAudio:TelegramAudio",
+        "//submodules/TelegramUI/Components/Calls/CallScreen",
+        "//submodules/TelegramCore:TelegramCore",
+        "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
+    ],
+)
+
+ios_test_runner(
+    name = "TelegramCallsUITestRunner",
+    device_type = "iPhone 17",
+    os_version = "26.5",
+)
+
+ios_unit_test(
+    name = "TelegramCallsUITests",
+    minimum_os_version = "15.0",
+    runner = ":TelegramCallsUITestRunner",
+    deps = [
+        ":TelegramCallsUITestsLib",
     ],
     visibility = [
         "//visibility:public",

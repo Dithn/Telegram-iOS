@@ -3,12 +3,11 @@ import UIKit
 import Display
 import AsyncDisplayKit
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
+import TelegramStringFormatting
 import AccountContext
 import RadialStatusNode
-import ShareController
 import PhotoResources
 import GalleryUI
 import TelegramUniversalVideoContent
@@ -16,10 +15,10 @@ import UndoUI
 
 private struct PeerAvatarImageGalleryThumbnailItem: GalleryThumbnailItem {
     let account: Account
-    let peer: Peer
+    let peer: EnginePeer
     let content: [ImageRepresentationWithReference]
     
-    init(account: Account, peer: Peer, content: [ImageRepresentationWithReference]) {
+    init(account: Account, peer: EnginePeer, content: [ImageRepresentationWithReference]) {
         self.account = account
         self.peer = peer
         self.content = content
@@ -48,15 +47,15 @@ class PeerAvatarImageGalleryItem: GalleryItem {
     }
     
     let context: AccountContext
-    let peer: Peer
+    let peer: EnginePeer
     let presentationData: PresentationData
     let entry: AvatarGalleryEntry
     let sourceCorners: AvatarGalleryController.SourceCorners
-    let delete: (() -> Void)?
+    let delete: ((UIView) -> Void)?
     let setMain: (() -> Void)?
-    let edit: (() -> Void)?
+    let edit: ((UIView, ContextGesture?) -> Void)?
     
-    init(context: AccountContext, peer: Peer, presentationData: PresentationData, entry: AvatarGalleryEntry, sourceCorners: AvatarGalleryController.SourceCorners, delete: (() -> Void)?, setMain: (() -> Void)?, edit: (() -> Void)?) {
+    init(context: AccountContext, peer: EnginePeer, presentationData: PresentationData, entry: AvatarGalleryEntry, sourceCorners: AvatarGalleryController.SourceCorners, delete: ((UIView) -> Void)?, setMain: (() -> Void)?, edit: ((UIView, ContextGesture?) -> Void)?) {
         self.context = context
         self.peer = peer
         self.presentationData = presentationData
@@ -70,10 +69,6 @@ class PeerAvatarImageGalleryItem: GalleryItem {
     func node(synchronous: Bool) -> GalleryItemNode {
         let node = PeerAvatarImageGalleryItemNode(context: self.context, presentationData: self.presentationData, peer: self.peer, sourceCorners: self.sourceCorners)
         
-        if let indexData = self.entry.indexData {
-            node._title.set(.single(self.presentationData.strings.Items_NOfM("\(indexData.position + 1)", "\(indexData.totalCount)").string))
-        }
-        
         node.setEntry(self.entry, synchronous: synchronous)
         node.footerContentNode.delete = self.delete
         node.footerContentNode.setMain = self.setMain
@@ -84,9 +79,6 @@ class PeerAvatarImageGalleryItem: GalleryItem {
     
     func updateNode(node: GalleryItemNode, synchronous: Bool) {
         if let node = node as? PeerAvatarImageGalleryItemNode {
-            if let indexData = self.entry.indexData {
-                node._title.set(.single(self.presentationData.strings.Items_NOfM("\(indexData.position + 1)", "\(indexData.totalCount)").string))
-            }
             let previousContentAnimations = node.imageNode.contentAnimations
             if synchronous {
                 node.imageNode.contentAnimations = []
@@ -106,7 +98,7 @@ class PeerAvatarImageGalleryItem: GalleryItem {
         switch self.entry {
             case let .topImage(representations, _, _, _, _, _):
                 content = representations
-            case let .image(_, _, representations, _, _, _, _, _, _, _):
+            case let .image(_, _, representations, _, _, _, _, _, _, _, _, _):
                 content = representations
         }
         
@@ -126,10 +118,67 @@ private class PeerAvatarImageGalleryContentNode: ASDisplayNode {
     }
 }
 
+private final class AvatarGalleryEditButtonNode: HighlightableButtonNode {
+    let referenceNode: ContextReferenceContentNode
+    let containerNode: ContextControllerSourceNode
+
+    private let textNode: ASTextNode
+
+    var contextAction: ((UIView, ContextGesture?) -> Void)?
+
+    init(title: String) {
+        self.referenceNode = ContextReferenceContentNode()
+        self.containerNode = ContextControllerSourceNode()
+        self.containerNode.animateScale = false
+
+        self.textNode = ASTextNode()
+        self.textNode.displaysAsynchronously = false
+        self.textNode.isUserInteractionEnabled = false
+        self.textNode.attributedText = NSAttributedString(string: title, font: Font.regular(17.0), textColor: .white)
+
+        super.init()
+
+        self.addSubnode(self.containerNode)
+        self.containerNode.addSubnode(self.referenceNode)
+        self.referenceNode.addSubnode(self.textNode)
+
+        self.containerNode.shouldBegin = { [weak self] _ in
+            guard let self else {
+                return false
+            }
+            return self.contextAction != nil
+        }
+        self.containerNode.activated = { [weak self] gesture, _ in
+            guard let self else {
+                return
+            }
+            self.contextAction?(self.referenceNode.view, gesture)
+        }
+
+        self.addTarget(self, action: #selector(self.buttonPressed), forControlEvents: .touchUpInside)
+    }
+
+    override func calculateSizeThatFits(_ constrainedSize: CGSize) -> CGSize {
+        let textSize = self.textNode.measure(CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
+        let size = CGSize(width: ceil(textSize.width) + 20.0, height: 44.0)
+        let bounds = CGRect(origin: CGPoint(), size: size)
+
+        self.containerNode.frame = bounds
+        self.referenceNode.frame = bounds
+        self.textNode.frame = CGRect(origin: CGPoint(x: floor((size.width - textSize.width) / 2.0), y: floor((size.height - textSize.height) / 2.0)), size: textSize)
+
+        return size
+    }
+
+    @objc private func buttonPressed() {
+        self.contextAction?(self.referenceNode.view, nil)
+    }
+}
+
 final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
     private let context: AccountContext
     private let presentationData: PresentationData
-    private let peer: Peer
+    private let peer: EnginePeer
     private let sourceCorners: AvatarGalleryController.SourceCorners
     
     private var entry: AvatarGalleryEntry?
@@ -142,6 +191,7 @@ final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
     
     fileprivate let _ready = Promise<Void>()
     fileprivate let _title = Promise<String>()
+    fileprivate let _titleContent = Promise<GalleryTitleView.Content?>(nil)
     fileprivate let _rightBarButtonItems = Promise<[UIBarButtonItem]?>()
     
     private let statusNodeContainer: HighlightableButtonNode
@@ -150,12 +200,12 @@ final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
     
     private let fetchDisposable = MetaDisposable()
     private let statusDisposable = MetaDisposable()
-    private var status: MediaResourceStatus?
+    private var status: EngineMediaResource.FetchStatus?
     private let playbackStatusDisposable = MetaDisposable()
     
-    fileprivate var edit: (() -> Void)?
+    fileprivate var edit: ((UIView, ContextGesture?) -> Void)?
     
-    init(context: AccountContext, presentationData: PresentationData, peer: Peer, sourceCorners: AvatarGalleryController.SourceCorners) {
+    init(context: AccountContext, presentationData: PresentationData, peer: EnginePeer, sourceCorners: AvatarGalleryController.SourceCorners) {
         self.context = context
         self.presentationData = presentationData
         self.peer = peer
@@ -164,15 +214,17 @@ final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
         self.contentNode = PeerAvatarImageGalleryContentNode()
         self.imageNode = TransformImageNode()
         self.footerContentNode = AvatarGalleryItemFooterContentNode(context: context, presentationData: presentationData)
-        
+
         self.statusNodeContainer = HighlightableButtonNode()
         self.statusNode = RadialStatusNode(backgroundNodeColor: UIColor(white: 0.0, alpha: 0.5))
         self.statusNode.isHidden = true
         
         super.init()
-        
+
+        self._title.set(.single(""))
+
         self.contentNode.addSubnode(self.imageNode)
-                
+
         self.imageNode.contentAnimations = .subsequentUpdates
         self.imageNode.view.contentMode = .scaleAspectFill
         self.imageNode.clipsToBounds = true
@@ -188,20 +240,25 @@ final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
                 let subject: ShareControllerSubject
                 var actionCompletionText: String?
                 if let video = entry.videoRepresentations.last, let peerReference = PeerReference(peer) {
-                    let videoFileReference = FileMediaReference.avatarList(peer: peerReference, media: TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: 0), partialReference: nil, resource: video.representation.resource, previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: nil, attributes: [.Animated, .Video(duration: 0, size: video.representation.dimensions, flags: [])]))
-                    subject = .media(videoFileReference.abstract)
+                    let videoFileReference = FileMediaReference.avatarList(peer: peerReference, media: TelegramMediaFile(fileId: EngineMedia.Id(namespace: Namespaces.Media.LocalFile, id: 0), partialReference: nil, resource: video.representation.resource, previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: nil, attributes: [.Animated, .Video(duration: 0, size: video.representation.dimensions, flags: [], preloadSize: nil, coverTime: nil, videoCodec: nil)], alternativeRepresentations: []))
+                    subject = .media(videoFileReference.abstract, nil)
                     actionCompletionText = strongSelf.presentationData.strings.Gallery_VideoSaved
                 } else {
                     subject = .image(entry.representations)
                     actionCompletionText = strongSelf.presentationData.strings.Gallery_ImageSaved
                 }
-                let shareController = ShareController(context: strongSelf.context, subject: subject, preferredAction: .saveToCameraRoll)
-                shareController.actionCompleted = { [weak self] in
-                    if let strongSelf = self, let actionCompletionText = actionCompletionText {
-                        let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
+                
+                let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
+                var forceTheme: PresentationTheme?
+                if !presentationData.theme.overallDarkAppearance {
+                    forceTheme = defaultDarkColorPresentationTheme
+                }
+                
+                let shareController = strongSelf.context.sharedContext.makeShareScreen(context: strongSelf.context, params: ShareControllerParams(subject: subject, preferredAction: .saveToCameraRoll, forceTheme: forceTheme, actionCompleted: {
+                    if let actionCompletionText = actionCompletionText {
                         interaction.presentController(UndoOverlayController(presentationData: presentationData, content: .mediaSaved(text: actionCompletionText), elevatedLayout: true, animateInAsReplacement: false, action: { _ in return true }), nil)
                     }
-                }
+                }))
                 interaction.presentController(shareController, nil)
             }
         }
@@ -224,7 +281,36 @@ final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
         transition.updateFrame(node: self.statusNodeContainer, frame: CGRect(origin: CGPoint(x: floor((layout.size.width - statusSize.width) / 2.0), y: floor((layout.size.height - statusSize.height) / 2.0)), size: statusSize))
         transition.updateFrame(node: self.statusNode, frame: CGRect(origin: CGPoint(), size: statusSize))
     }
-    
+
+    private func makeTitleContent(entry: AvatarGalleryEntry) -> GalleryTitleView.Content? {
+        var counterText: String?
+        if let indexData = entry.indexData {
+            counterText = self.presentationData.strings.Items_NOfM("\(indexData.position + 1)", "\(indexData.totalCount)").string
+        }
+
+        var authorTitle: String?
+        var dateTitle: String?
+        switch entry {
+            case let .image(_, _, _, videoRepresentations, peer, date, _, _, _, _, isFallback, _):
+                if date != 0 || isFallback {
+                    authorTitle = peer?.displayTitle(strings: self.presentationData.strings, displayOrder: self.presentationData.nameDisplayOrder) ?? ""
+                }
+                if let date = date, date != 0 {
+                    dateTitle = humanReadableStringForTimestamp(strings: self.presentationData.strings, dateTimeFormat: self.presentationData.dateTimeFormat, timestamp: date).string
+                } else if isFallback {
+                    dateTitle = !videoRepresentations.isEmpty ? self.presentationData.strings.ProfilePhoto_PublicVideo : self.presentationData.strings.ProfilePhoto_PublicPhoto
+                }
+            default:
+                break
+        }
+
+        if counterText == nil && authorTitle == nil && dateTitle == nil {
+            return nil
+        }
+
+        return GalleryTitleView.Content(authorTitle: authorTitle, dateTitle: dateTitle, title: counterText, action: nil)
+    }
+
     fileprivate func setEntry(_ entry: AvatarGalleryEntry, synchronous: Bool) {
         let previousRepresentations = self.entry?.representations
         let previousVideoRepresentations = self.entry?.videoRepresentations
@@ -234,10 +320,17 @@ final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
             var barButtonItems: [UIBarButtonItem] = []
             let footerContent: AvatarGalleryItemFooterContent = .info
             if self.peer.id == self.context.account.peerId {
-                let rightBarButtonItem =  UIBarButtonItem(title: entry.videoRepresentations.isEmpty ? self.presentationData.strings.Settings_EditPhoto : self.presentationData.strings.Settings_EditVideo, style: .plain, target: self, action: #selector(self.editPressed))
+                let editTitle = entry.videoRepresentations.isEmpty ? self.presentationData.strings.Settings_EditPhoto : self.presentationData.strings.Settings_EditVideo
+                let editButtonNode = AvatarGalleryEditButtonNode(title: editTitle)
+                editButtonNode.contextAction = { [weak self] sourceView, gesture in
+                    self?.edit?(sourceView, gesture)
+                }
+                let rightBarButtonItem = UIBarButtonItem(customDisplayNode: editButtonNode)!
+                rightBarButtonItem.accessibilityLabel = editTitle
                 barButtonItems.append(rightBarButtonItem)
             }
             self._rightBarButtonItems.set(.single(barButtonItems))
+            self._titleContent.set(.single(self.makeTitleContent(entry: entry)))
                         
             self.footerContentNode.setEntry(entry, content: footerContent)
             
@@ -257,12 +350,12 @@ final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
                 self.zoomableContent = (largestSize.dimensions.cgSize, self.contentNode)
 
                 if let largestIndex = representations.firstIndex(where: { $0.representation == largestSize }) {
-                    self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.context.account.postbox.mediaBox, reference: representations[largestIndex].reference).start())
+                    self.fetchDisposable.set(self.context.engine.resources.fetch(reference: representations[largestIndex].reference, userLocation: .other, userContentType: .image).start())
                 }
                 
                 var id: Int64
                 var category: String?
-                if case let .image(mediaId, _, _, _, _, _, _, _, _, categoryValue) = entry {
+                if case let .image(mediaId, _, _, _, _, _, _, _, _, categoryValue, _, _) = entry {
                     id = mediaId.id
                     category = categoryValue
                 } else {
@@ -274,9 +367,9 @@ final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
                 if let video = entry.videoRepresentations.last, let peerReference = PeerReference(self.peer) {
                     if video != previousVideoRepresentations?.last {
                         let mediaManager = self.context.sharedContext.mediaManager
-                        let videoFileReference = FileMediaReference.avatarList(peer: peerReference, media: TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: 0), partialReference: nil, resource: video.representation.resource, previewRepresentations: representations.map { $0.representation }, videoThumbnails: [], immediateThumbnailData: entry.immediateThumbnailData, mimeType: "video/mp4", size: nil, attributes: [.Animated, .Video(duration: 0, size: video.representation.dimensions, flags: [])]))
-                        let videoContent = NativeVideoContent(id: .profileVideo(id, category), fileReference: videoFileReference, streamVideo: isMediaStreamable(resource: video.representation.resource) ? .conservative : .none, loopVideo: true, enableSound: false, fetchAutomatically: true, onlyFullSizeThumbnail: true, useLargeThumbnail: true, continuePlayingWithoutSoundOnLostAudioSession: false, placeholderColor: .clear)
-                        let videoNode = UniversalVideoNode(postbox: self.context.account.postbox, audioSession: mediaManager.audioSession, manager: mediaManager.universalVideoManager, decoration: GalleryVideoDecoration(), content: videoContent, priority: .overlay)
+                        let videoFileReference = FileMediaReference.avatarList(peer: peerReference, media: TelegramMediaFile(fileId: EngineMedia.Id(namespace: Namespaces.Media.LocalFile, id: 0), partialReference: nil, resource: video.representation.resource, previewRepresentations: representations.map { $0.representation }, videoThumbnails: [], immediateThumbnailData: entry.immediateThumbnailData, mimeType: "video/mp4", size: nil, attributes: [.Animated, .Video(duration: 0, size: video.representation.dimensions, flags: [], preloadSize: nil, coverTime: nil, videoCodec: nil)], alternativeRepresentations: []))
+                        let videoContent = NativeVideoContent(id: .profileVideo(id, category), userLocation: .other, fileReference: videoFileReference, streamVideo: isMediaStreamable(resource: video.representation.resource) ? .conservative : .none, loopVideo: true, enableSound: false, fetchAutomatically: true, onlyFullSizeThumbnail: true, useLargeThumbnail: true, continuePlayingWithoutSoundOnLostAudioSession: false, placeholderColor: .clear, storeAfterDownload: nil)
+                        let videoNode = UniversalVideoNode(context: self.context, postbox: self.context.account.postbox, audioSession: mediaManager.audioSession, manager: mediaManager.universalVideoManager, decoration: GalleryVideoDecoration(), content: videoContent, priority: .overlay)
                         videoNode.isUserInteractionEnabled = false
                         videoNode.isHidden = true
                         self.videoStartTimestamp = video.representation.startTimestamp
@@ -312,27 +405,45 @@ final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
         guard let videoNode = self.videoNode, self.isCentral else {
             return
         }
-        if let _ = self.videoStartTimestamp {
+        if let videoStartTimestamp = self.videoStartTimestamp {
             videoNode.isHidden = true
             self.playbackStatusDisposable.set((videoNode.status
-                |> map { status -> Bool in
-                    if let status = status, case .playing = status.status {
-                        return true
-                    } else {
-                        return false
+            |> castError(Bool.self)
+            |> mapToSignal { status -> Signal<Bool, Bool> in
+                if let status = status, case .playing = status.status {
+                    if videoStartTimestamp > 0.0 && videoStartTimestamp > status.duration - 1.0 {
+                        return .fail(true)
                     }
+                    return .single(true)
+                } else {
+                    return .single(false)
                 }
-                |> filter { playing in
-                    return playing
-                }
-                |> take(1)
-                |> deliverOnMainQueue).start(completed: { [weak self] in
-                    if let strongSelf = self {
+            }
+            |> filter { playing in
+                return playing
+            }
+            |> take(1)
+            |> deliverOnMainQueue).start(error: { [weak self] _ in
+                if let strongSelf = self {
+                    if let _ = strongSelf.videoNode {
+                        videoNode.seek(0.0)
                         Queue.mainQueue().after(0.1) {
+                            strongSelf.videoNode?.layer.allowsGroupOpacity = true
+                            strongSelf.videoNode?.alpha = 0.0
                             strongSelf.videoNode?.isHidden = false
+                            
+                            strongSelf.videoNode?.alpha = 1.0
+                            strongSelf.videoNode?.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25, delay: 0.01)
                         }
                     }
-                }))
+                }
+            }, completed: { [weak self] in
+                if let strongSelf = self {
+                    Queue.mainQueue().after(0.1) {
+                        strongSelf.videoNode?.isHidden = false
+                    }
+                }
+            }))
         } else {
             self.playbackStatusDisposable.set(nil)
             videoNode.isHidden = false
@@ -569,6 +680,10 @@ final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
     override func title() -> Signal<String, NoError> {
         return self._title.get()
     }
+
+    override func titleContent() -> Signal<GalleryTitleView.Content?, NoError> {
+        return self._titleContent.get()
+    }
     
     override func rightBarButtonItems() -> Signal<[UIBarButtonItem]?, NoError> {
         return self._rightBarButtonItems.get()
@@ -578,27 +693,23 @@ final class PeerAvatarImageGalleryItemNode: ZoomableContentGalleryItemNode {
         if let entry = self.entry, let largestSize = largestImageRepresentation(entry.representations.map({ $0.representation })), let status = self.status {
             switch status {
                 case .Fetching:
-                    self.context.account.postbox.mediaBox.cancelInteractiveResourceFetch(largestSize.resource)
+                    self.context.engine.resources.cancelInteractiveResourceFetch(id: EngineMediaResource.Id(largestSize.resource.id))
                 case .Remote:
                     let representations: [ImageRepresentationWithReference]
                     switch entry {
                         case let .topImage(topRepresentations, _, _, _, _, _):
                             representations = topRepresentations
-                        case let .image(_, _, imageRepresentations, _, _, _, _, _, _, _):
+                        case let .image(_, _, imageRepresentations, _, _, _, _, _, _, _, _, _):
                             representations = imageRepresentations
                     }
                     
                     if let largestIndex = representations.firstIndex(where: { $0.representation == largestSize }) {
-                        self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.context.account.postbox.mediaBox, reference: representations[largestIndex].reference).start())
+                        self.fetchDisposable.set(self.context.engine.resources.fetch(reference: representations[largestIndex].reference, userLocation: .other, userContentType: .image).start())
                     }
                 default:
                     break
             }
         }
-    }
-    
-    @objc private func editPressed() {
-        self.edit?()
     }
     
     override func footerContent() -> Signal<(GalleryFooterContentNode?, GalleryOverlayContentNode?), NoError> {

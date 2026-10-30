@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "TelegramCore",
-    platforms: [.macOS(.v10_11)],
+    platforms: [.macOS(.v10_13)],
     products: [
         // Products define the executables and libraries a package produces, and make them visible to other packages.
         .library(
@@ -15,14 +15,20 @@ let package = Package(
     dependencies: [
         // Dependencies declare other packages that this package depends on.
         // .package(url: /* package url */, from: "1.0.0"),
+        .package(name: "FlatBuffers", path: "./FlatBuffers"),
+        .package(name: "FlatSerialization", path: "./FlatSerialization"),
         .package(name: "Postbox", path: "../Postbox"),
         .package(name: "SSignalKit", path: "../SSignalKit"),
         .package(name: "MtProtoKit", path: "../MtProtoKit"),
+        .package(name: "WebProxyTransport", path: "../WebProxyTransport"),
         .package(name: "TelegramApi", path: "../TelegramApi"),
         .package(name: "CryptoUtils", path: "../CryptoUtils"),
         .package(name: "NetworkLogging", path: "../NetworkLogging"),
         .package(name: "Reachability", path: "../Reachability"),
+        .package(name: "DarwinDirStat", path: "../Utils/DarwinDirStat"),
         .package(name: "EncryptionProvider", path: "../EncryptionProvider"),
+        .package(name: "Emoji", path: "../Emoji"),
+        .package(name: "MediaPreuploadRegistry", path: "../MediaPreuploadRegistry"),
     ],
     targets: [
         // Targets are the basic building blocks of a package. A target can define a module or a test suite.
@@ -32,11 +38,23 @@ let package = Package(
             dependencies: [.product(name: "Postbox", package: "Postbox", condition: nil),
                             .product(name: "SwiftSignalKit", package: "SSignalKit", condition: nil),
                             .product(name: "MtProtoKit", package: "MtProtoKit", condition: nil),
+                           .product(name: "WebProxyTransport", package: "WebProxyTransport", condition: nil),
                            .product(name: "TelegramApi", package: "TelegramApi", condition: nil),
                            .product(name: "CryptoUtils", package: "CryptoUtils", condition: nil),
                            .product(name: "NetworkLogging", package: "NetworkLogging", condition: nil),
+                           .product(name: "DarwinDirStat", package: "DarwinDirStat", condition: nil),
                            .product(name: "Reachability", package: "Reachability", condition: nil),
-                           .product(name: "EncryptionProvider", package: "EncryptionProvider", condition: nil)],
-            path: "Sources"),
+                           .product(name: "Emoji", package: "Emoji", condition: nil),
+                           .product(name: "FlatBuffers", package: "FlatBuffers", condition: nil),
+                           .product(name: "FlatSerialization", package: "FlatSerialization", condition: nil),
+                           .product(name: "EncryptionProvider", package: "EncryptionProvider", condition: nil),
+                           .product(name: "MediaPreuploadRegistry", package: "MediaPreuploadRegistry", condition: nil)],
+            path: "Sources",
+            swiftSettings: [.unsafeFlags(["-warnings-as-errors"])]),
+        .testTarget(
+            name: "TelegramCoreTests",
+            dependencies: ["TelegramCore"],
+            path: "Tests"
+        ),
     ]
 )

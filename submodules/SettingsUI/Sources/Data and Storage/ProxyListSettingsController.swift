@@ -2,15 +2,14 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import MtProtoKit
 import ItemListUI
 import PresentationDataUtils
 import AccountContext
-import UrlEscaping
 import ShareController
+import UrlEscaping
 
 private final class ProxySettingsControllerArguments {
     let toggleEnabled: (Bool) -> Void
@@ -56,6 +55,21 @@ private struct DisplayProxyServerStatus: Equatable {
 private enum ProxySettingsControllerEntryId: Equatable, Hashable {
     case index(Int)
     case server(String, Int32, ProxyServerConnection)
+}
+
+public enum ProxySettingsEntryTag: ItemListItemTag, Equatable {
+    case edit
+    case useProxy
+    case shareList
+    case useForCalls
+    
+    public func isEqual(to other: ItemListItemTag) -> Bool {
+        if let other = other as? ProxySettingsEntryTag, self == other {
+            return true
+        } else {
+            return false
+        }
+    }
 }
 
 private enum ProxySettingsControllerEntry: ItemListNodeEntry {
@@ -201,21 +215,21 @@ private enum ProxySettingsControllerEntry: ItemListNodeEntry {
         let arguments = arguments as! ProxySettingsControllerArguments
         switch self {
             case let .enabled(_, text, value, createsNew):
-                return ItemListSwitchItem(presentationData: presentationData, title: text, value: value, enableInteractiveChanges: !createsNew, enabled: true, sectionId: self.section, style: .blocks, updated: { value in
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, enableInteractiveChanges: !createsNew, enabled: true, sectionId: self.section, style: .blocks, updated: { value in
                     if createsNew {
                         arguments.addNewServer()
                     } else {
                         arguments.toggleEnabled(value)
                     }
-                })
+                }, tag: ProxySettingsEntryTag.useProxy)
             case let .serversHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
             case let .addServer(_, text, _):
-                return ProxySettingsActionItem(presentationData: presentationData, title: text, icon: .add, sectionId: self.section, editing: false, action: {
+                return ProxySettingsActionItem(presentationData: presentationData, systemStyle: .glass, title: text, icon: .add, sectionId: self.section, editing: false, action: {
                     arguments.addNewServer()
                 })
             case let .server(_, theme, strings, settings, active, status, editing, enabled):
-                return ProxySettingsServerItem(theme: theme, strings: strings, server: settings, activity: status.activity, active: active, color: enabled ? .accent : .secondary, label: status.text, labelAccent: status.textActive, editing: editing, sectionId: self.section, action: {
+                return ProxySettingsServerItem(theme: theme, strings: strings, systemStyle: .glass, server: settings, activity: status.activity, active: active, color: enabled ? .accent : .secondary, label: status.text, labelAccent: status.textActive, editing: editing, sectionId: self.section, action: {
                     arguments.activateServer(settings)
                 }, infoAction: {
                     arguments.editServer(settings)
@@ -225,13 +239,13 @@ private enum ProxySettingsControllerEntry: ItemListNodeEntry {
                     arguments.removeServer(settings)
                 })
             case let .shareProxyList(_, text):
-                return ProxySettingsActionItem(presentationData: presentationData, title: text, sectionId: self.section, editing: false, action: {
+                return ProxySettingsActionItem(presentationData: presentationData, systemStyle: .glass, title: text, sectionId: self.section, editing: false, action: {
                     arguments.shareProxyList()
-                })
+                }, tag: ProxySettingsEntryTag.shareList)
             case let .useForCalls(_, text, value):
-                return ItemListSwitchItem(presentationData: presentationData, title: text, value: value, enableInteractiveChanges: true, enabled: true, sectionId: self.section, style: .blocks, updated: { value in
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, enableInteractiveChanges: true, enabled: true, sectionId: self.section, style: .blocks, updated: { value in
                     arguments.toggleUseForCalls(value)
-                })
+                }, tag: ProxySettingsEntryTag.useForCalls)
             case let .useForCallsInfo(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         }
@@ -245,7 +259,11 @@ private func proxySettingsControllerEntries(theme: PresentationTheme, strings: P
     entries.append(.serversHeader(theme, strings.SocksProxySetup_SavedProxies))
     entries.append(.addServer(theme, strings.SocksProxySetup_AddProxy, state.editing))
     var index = 0
+    var existingServers = Set<ProxyServerSettings>()
     for server in proxySettings.servers {
+        if !existingServers.insert(server).inserted {
+            continue
+        }
         let status: ProxyServerStatus = statuses[server] ?? .checking
         let displayStatus: DisplayProxyServerStatus
         if proxySettings.enabled && server == proxySettings.activeServer {
@@ -262,6 +280,11 @@ private func proxySettingsControllerEntries(theme: PresentationTheme, strings: P
                     }
                     displayStatus = DisplayProxyServerStatus(activity: false, text: text, textActive: true)
             }
+        } else if case .web = server.connection {
+            // ProxyServersStatuses never pings WEB servers, so consulting `status` here
+            // would leave the row reading "checking..." forever. Composed the same way as the
+            // active row below, which appends its ping to the type the same way.
+            displayStatus = DisplayProxyServerStatus(activity: false, text: "\(strings.SocksProxySetup_ProxyWeb), \(strings.SocksProxySetup_ProxyStatusNotTested)", textActive: false)
         } else {
             var text: String
             switch server.connection {
@@ -269,6 +292,10 @@ private func proxySettingsControllerEntries(theme: PresentationTheme, strings: P
                     text = strings.ChatSettings_ConnectionType_UseSocks5
                 case .mtp:
                     text = strings.SocksProxySetup_ProxyTelegram
+                case .web:
+                    // Unreachable - the branch above catches every WEB server - but naming it
+                    // MTProto here would be wrong if that ordering ever changed.
+                    text = strings.SocksProxySetup_ProxyWeb
             }
             switch status {
                 case .notAvailable:
@@ -286,7 +313,7 @@ private func proxySettingsControllerEntries(theme: PresentationTheme, strings: P
         entries.append(.server(index, theme, strings, server, server == proxySettings.activeServer, displayStatus, ProxySettingsServerItemEditing(editable: true, editing: state.editing, revealed: state.revealedServer == server), proxySettings.enabled))
         index += 1
     }
-    if !proxySettings.servers.isEmpty {
+    if !existingServers.isEmpty {
         entries.append(.shareProxyList(theme, strings.SocksProxySetup_ShareProxyList))
     }
     
@@ -308,12 +335,12 @@ public enum ProxySettingsControllerMode {
     case modal
 }
 
-public func proxySettingsController(context: AccountContext, mode: ProxySettingsControllerMode = .default) -> ViewController {
+public func proxySettingsController(context: AccountContext, mode: ProxySettingsControllerMode = .default, focusOnItemTag: ProxySettingsEntryTag? = nil) -> ViewController {
     let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-    return proxySettingsController(accountManager: context.sharedContext.accountManager, context: context, postbox: context.account.postbox, network: context.account.network, mode: mode, presentationData: presentationData, updatedPresentationData: context.sharedContext.presentationData)
+    return proxySettingsController(accountManager: context.sharedContext.accountManager, sharedContext: context.sharedContext, context: context, network: context.account.network, mode: mode, presentationData: presentationData, updatedPresentationData: context.sharedContext.presentationData, focusOnItemTag: focusOnItemTag)
 }
 
-public func proxySettingsController(accountManager: AccountManager<TelegramAccountManagerTypes>, context: AccountContext? = nil, postbox: Postbox, network: Network, mode: ProxySettingsControllerMode, presentationData: PresentationData, updatedPresentationData: Signal<PresentationData, NoError>) -> ViewController {
+public func proxySettingsController(accountManager: AccountManager<TelegramAccountManagerTypes>, sharedContext: SharedAccountContext, context: AccountContext? = nil, network: Network, mode: ProxySettingsControllerMode, presentationData: PresentationData, updatedPresentationData: Signal<PresentationData, NoError>, focusOnItemTag: ProxySettingsEntryTag? = nil) -> ViewController {
     var pushControllerImpl: ((ViewController) -> Void)?
     var dismissImpl: (() -> Void)?
     let stateValue = Atomic(value: ProxySettingsControllerState())
@@ -332,6 +359,14 @@ public func proxySettingsController(accountManager: AccountManager<TelegramAccou
         }
     }
     
+    if focusOnItemTag == ProxySettingsEntryTag.edit {
+        updateState { state in
+            var state = state
+            state.editing = true
+            return state
+        }
+    }
+    
     var shareProxyListImpl: (() -> Void)?
     
     let arguments = ProxySettingsControllerArguments(toggleEnabled: { value in
@@ -341,7 +376,7 @@ public func proxySettingsController(accountManager: AccountManager<TelegramAccou
             return current
         }).start()
     }, addNewServer: {
-        pushControllerImpl?(proxyServerSettingsController(presentationData: presentationData, updatedPresentationData: updatedPresentationData, accountManager: accountManager, postbox: postbox, network: network, currentSettings: nil))
+        pushControllerImpl?(proxyServerSettingsController(sharedContext: sharedContext, presentationData: presentationData, updatedPresentationData: updatedPresentationData, accountManager: accountManager, network: network, currentSettings: nil))
     }, activateServer: { server in
         let _ = updateProxySettingsInteractively(accountManager: accountManager, { current in
             var current = current
@@ -354,7 +389,7 @@ public func proxySettingsController(accountManager: AccountManager<TelegramAccou
             return current
         }).start()
     }, editServer: { server in
-        pushControllerImpl?(proxyServerSettingsController(presentationData: presentationData, updatedPresentationData: updatedPresentationData, accountManager: accountManager, postbox: postbox, network: network, currentSettings: server))
+        pushControllerImpl?(proxyServerSettingsController(sharedContext: sharedContext, presentationData: presentationData, updatedPresentationData: updatedPresentationData, accountManager: accountManager, network: network, currentSettings: server))
     }, removeServer: { server in
         let _ = updateProxySettingsInteractively(accountManager: accountManager, { current in
             var current = current
@@ -402,9 +437,13 @@ public func proxySettingsController(accountManager: AccountManager<TelegramAccou
     
     let signal = combineLatest(updatedPresentationData, statePromise.get(), proxySettings.get(), statusesContext.statuses(), network.connectionStatus)
     |> map { presentationData, state, proxySettings, statuses, connectionStatus -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        var presentationData = presentationData
+        let updatedTheme = presentationData.theme.withModalBlocksBackground()
+        presentationData = presentationData.withUpdated(theme: updatedTheme)
+        
         var leftNavigationButton: ItemListNavigationButton?
         if case .modal = mode {
-            leftNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Cancel), style: .regular, enabled: true, action: {
+            leftNavigationButton = ItemListNavigationButton(content: .icon(.close), style: .regular, enabled: true, action: {
                 dismissImpl?()
             })
         }
@@ -413,7 +452,7 @@ public func proxySettingsController(accountManager: AccountManager<TelegramAccou
         if proxySettings.servers.isEmpty {
             rightNavigationButton = nil
         } else if state.editing {
-            rightNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Done), style: .bold, enabled: true, action: {
+            rightNavigationButton = ItemListNavigationButton(content: .icon(.done), style: .bold, enabled: true, staysInRow: true, action: {
                 updateState { state in
                     var state = state
                     state.editing = false
@@ -431,7 +470,7 @@ public func proxySettingsController(accountManager: AccountManager<TelegramAccou
         }
         
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.SocksProxySetup_Title), leftNavigationButton: leftNavigationButton, rightNavigationButton: rightNavigationButton, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: proxySettingsControllerEntries(theme: presentationData.theme, strings: presentationData.strings, state: state, proxySettings: proxySettings, statuses: statuses, connectionStatus: connectionStatus), style: .blocks)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: proxySettingsControllerEntries(theme: presentationData.theme, strings: presentationData.strings, state: state, proxySettings: proxySettings, statuses: statuses, connectionStatus: connectionStatus), style: .blocks, ensureVisibleItemTag: focusOnItemTag)
         
         return (controllerState, (listState, arguments))
     }
@@ -506,10 +545,6 @@ public func proxySettingsController(accountManager: AccountManager<TelegramAccou
             |> deliverOnMainQueue).start(next: { settings in
                 var result = ""
                 for server in settings.servers {
-                    if !result.isEmpty {
-                        result += "\n\n"
-                    }
-                    
                     var string: String
                     switch server.connection {
                     case let .mtp(secret):
@@ -521,13 +556,37 @@ public func proxySettingsController(accountManager: AccountManager<TelegramAccou
                         if let username = username, let password = password {
                             string += "&user=\((username as NSString).addingPercentEncoding(withAllowedCharacters: CharacterSet.urlQueryValueAllowed) ?? "")&pass=\((password as NSString).addingPercentEncoding(withAllowedCharacters: CharacterSet.urlQueryValueAllowed) ?? "")"
                         }
+                    case .web:
+                        // nil when a stored server no longer canonicalizes. Skip it rather
+                        // than contributing an empty entry and a stray blank line.
+                        guard let link = webProxySettingsLink(server) else {
+                            continue
+                        }
+                        string = link
                     }
                     
+                    if !result.isEmpty {
+                        result += "\n\n"
+                    }
                     result += string
                 }
                 
                 presentExternalShare(context: context, text: result, parentController: strongController)
             })
+    }
+    
+    if let focusOnItemTag {
+        var didFocusOnItem = false
+        controller.afterTransactionCompleted = { [weak controller] in
+            if !didFocusOnItem, let controller {
+                controller.forEachItemNode { itemNode in
+                    if let itemNode = itemNode as? ItemListItemNode, let tag = itemNode.tag, tag.isEqual(to: focusOnItemTag) {
+                        didFocusOnItem = true
+                        itemNode.displayHighlight()
+                    }
+                }
+            }
+        }
     }
     
     return controller

@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 
 #import <MtProtoKit/MTDatacenterAuthInfo.h>
+#import <MtProtoKit/MTNetworkUsageCalculationInfo.h>
 
 #import <EncryptionProvider/EncryptionProvider.h>
 
@@ -15,6 +16,43 @@
 @class MTSignal;
 @class MTQueue;
 
+@protocol MTTcpConnectionInterface;
+
+@protocol MTTcpConnectionInterfaceDelegate <NSObject>
+
+- (void)connectionInterfaceDidReadPartialDataOfLength:(NSUInteger)partialLength tag:(long)tag;
+- (void)connectionInterfaceDidReadData:(NSData * _Nonnull)rawData withTag:(long)tag networkType:(int32_t)networkType;
+- (void)connectionInterfaceDidConnect;
+- (void)connectionInterfaceDidDisconnectWithError:(NSError * _Nullable)error;
+
+@end
+
+@protocol MTTcpConnectionInterface<NSObject>
+
+- (void)setGetLogPrefix:(NSString * _Nonnull(^_Nullable)())getLogPrefix;
+- (void)setUsageCalculationInfo:(MTNetworkUsageCalculationInfo * _Nullable)usageCalculationInfo;
+- (bool)connectToHost:(NSString * _Nonnull)inHost
+               onPort:(uint16_t)port
+         viaInterface:(NSString * _Nullable)inInterface
+          withTimeout:(NSTimeInterval)timeout
+                error:(NSError * _Nullable * _Nullable)errPtr;
+- (void)writeData:(NSData * _Nonnull)data;
+- (void)readDataToLength:(NSUInteger)length withTimeout:(NSTimeInterval)timeout tag:(long)tag;
+- (void)disconnect;
+- (void)resetDelegate;
+
+@optional
+
+/// True only for the WEB proxy carrier, which multiplexes the connection over a hidden
+/// WebView instead of opening a socket, and therefore IGNORES the host and port it is
+/// handed. `MTTcpConnection` uses that to pair the interface with
+/// `MTSocksProxySettings.webProxy`: a connection that has a real address to reach must
+/// never be given the carrier, and a WEB proxy connection must never fall back to a socket.
+- (bool)isWebProxyCarrier;
+
+@end
+
+
 @protocol MTContextChangeListener <NSObject>
 
 @optional
@@ -22,6 +60,13 @@
 - (void)contextDatacenterAddressSetUpdated:(MTContext * _Nonnull)context datacenterId:(NSInteger)datacenterId addressSet:(MTDatacenterAddressSet * _Nonnull)addressSet;
 - (void)contextDatacenterAuthInfoUpdated:(MTContext * _Nonnull)context datacenterId:(NSInteger)datacenterId authInfo:(MTDatacenterAuthInfo * _Nonnull)authInfo selector:(MTDatacenterAuthInfoSelector)selector;
 - (void)contextDatacenterAuthTokenUpdated:(MTContext * _Nonnull)context datacenterId:(NSInteger)datacenterId authToken:(id _Nullable)authToken;
+// Creating the datacenter's auth key for this selector ended without a key
+// (or was abandoned). A listener still waiting for that key asks for it again;
+// the context starts nothing on its own.
+- (void)contextDatacenterAuthInfoRequestFailed:(MTContext * _Nonnull)context datacenterId:(NSInteger)datacenterId selector:(MTDatacenterAuthInfoSelector)selector;
+// Transferring the datacenter's auth token ended without a token (or was
+// cancelled). A listener still waiting for the token asks for it again.
+- (void)contextDatacenterAuthTokenTransferFailed:(MTContext * _Nonnull)context datacenterId:(NSInteger)datacenterId;
 - (void)contextDatacenterTransportSchemesUpdated:(MTContext * _Nonnull)context datacenterId:(NSInteger)datacenterId shouldReset:(bool)shouldReset;
 - (void)contextIsPasswordRequiredUpdated:(MTContext * _Nonnull)context datacenterId:(NSInteger)datacenterId;
 - (void)contextDatacenterPublicKeysUpdated:(MTContext * _Nonnull)context datacenterId:(NSInteger)datacenterId publicKeys:(NSArray<NSDictionary *> * _Nonnull)publicKeys;
@@ -29,6 +74,10 @@
 - (void)contextApiEnvironmentUpdated:(MTContext * _Nonnull)context apiEnvironment:(MTApiEnvironment * _Nonnull)apiEnvironment;
 - (MTSignal * _Nonnull)isContextNetworkAccessAllowed:(MTContext * _Nonnull)context;
 - (void)contextLoggedOut:(MTContext * _Nonnull)context;
+// The logout check found that the server no longer knows this permanent key
+// of the datacenter. Sent right before contextLoggedOut:, on the context queue,
+// while the key is still the context's.
+- (void)contextDatacenterPermanentKeyUnknown:(MTContext * _Nonnull)context datacenterId:(NSInteger)datacenterId authKeyId:(int64_t)authKeyId;
 
 @end
 
@@ -50,6 +99,10 @@
 @property (nonatomic, readonly) bool isTestingEnvironment;
 @property (nonatomic, readonly) bool useTempAuthKeys;
 @property (nonatomic) int32_t tempKeyExpiration;
+// Replaces bound temporary keys this process uses before they expire. Off by default; app extensions keep it off.
+@property (nonatomic) bool refreshesTemporaryKeys;
+
+@property (nonatomic, copy) id<MTTcpConnectionInterface> _Nonnull (^ _Nullable makeTcpConnectionInterface)(id<MTTcpConnectionInterfaceDelegate> _Nonnull delegate, dispatch_queue_t _Nonnull delegateQueue);
 
 + (int32_t)fixedTimeDifference;
 + (void)setFixedTimeDifference:(int32_t)fixedTimeDifference;
@@ -57,6 +110,8 @@
 + (MTQueue * _Nonnull)contextQueue;
 
 + (void)performWithObjCTry:(dispatch_block_t _Nonnull)block;
+
++ (void)copyAuthInfoFrom:(id<MTKeychain> _Nonnull)keychain toTempKeychain:(id<MTKeychain> _Nonnull)tempKeychain;
 
 - (instancetype _Nonnull)initWithSerialization:(id<MTSerialization> _Nonnull)serialization encryptionProvider:(id<EncryptionProvider> _Nonnull)encryptionProvider apiEnvironment:(MTApiEnvironment * _Nonnull)apiEnvironment isTestingEnvironment:(bool)isTestingEnvironment useTempAuthKeys:(bool)useTempAuthKeys;
 
@@ -66,6 +121,10 @@
 - (void)removeChangeListener:(id<MTContextChangeListener> _Nonnull)changeListener;
 
 - (void)setDiscoverBackupAddressListSignal:(MTSignal * _Nonnull)signal;
+- (void)setExternalRequestVerification:(MTSignal * _Nonnull (^ _Nonnull)(NSString * _Nonnull))externalRequestVerification;
+- (void)setExternalRecaptchaRequestVerification:(MTSignal * _Nonnull (^ _Nonnull)(NSString * _Nonnull, NSString * _Nonnull))externalRecaptchaRequestVerification;
+- (MTSignal * _Nullable)performExternalRequestVerificationWithNonce:(NSString * _Nonnull)nonce;
+- (MTSignal * _Nullable)performExternalRecaptchaRequestVerificationWithMethod:(NSString * _Nonnull)method siteKey:(NSString * _Nonnull)siteKey;
 
 - (NSTimeInterval)globalTime;
 - (NSTimeInterval)globalTimeDifference;

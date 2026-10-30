@@ -26,19 +26,33 @@ typedef enum
 @property (nonatomic, readonly) NSTimeInterval trimStartValue;
 @property (nonatomic, readonly) NSTimeInterval trimEndValue;
 @property (nonatomic, readonly) TGMediaVideoConversionPreset preset;
+@property (nonatomic, readonly) bool bounce;
+
+@property (nonatomic, readonly) int64_t stickerPackId;
+@property (nonatomic, readonly) int64_t stickerPackAccessHash;
+@property (nonatomic, readonly) int64_t documentId;
+@property (nonatomic, strong, readonly) NSArray *colors;
 
 - (CMTimeRange)trimTimeRange;
+
+- (NSDictionary *)tintValue;
+- (NSDictionary *)curvesValue;
 
 - (bool)trimApplied;
 
 - (bool)isCropAndRotationEqualWith:(id<TGMediaEditAdjustments>)adjustments;
+- (bool)isDefaultValuesForGif;
 
 - (NSDictionary *)dictionary;
 
 - (instancetype)editAdjustmentsWithPreset:(TGMediaVideoConversionPreset)preset maxDuration:(NSTimeInterval)maxDuration;
 - (instancetype)editAdjustmentsWithPreset:(TGMediaVideoConversionPreset)preset videoStartValue:(NSTimeInterval)videoStartValue trimStartValue:(NSTimeInterval)trimStartValue trimEndValue:(NSTimeInterval)trimEndValue;
 + (instancetype)editAdjustmentsWithOriginalSize:(CGSize)originalSize preset:(TGMediaVideoConversionPreset)preset;
++ (instancetype)editAdjustmentsWithOriginalSize:(CGSize)originalSize preset:(TGMediaVideoConversionPreset)preset bounce:(bool)bounce;
 + (instancetype)editAdjustmentsWithPhotoEditorValues:(PGPhotoEditorValues *)values preset:(TGMediaVideoConversionPreset)preset;
++ (instancetype)editAdjustmentsWithPhotoEditorValues:(PGPhotoEditorValues *)values preset:(TGMediaVideoConversionPreset)preset bounce:(bool)bounce sendAsGif:(bool)sendAsGif;
++ (instancetype)editAdjustmentsWithPhotoEditorValues:(PGPhotoEditorValues *)values preset:(TGMediaVideoConversionPreset)preset documentId:(int64_t)documentId colors:(NSArray *)colors;
++ (instancetype)editAdjustmentsWithPhotoEditorValues:(PGPhotoEditorValues *)values preset:(TGMediaVideoConversionPreset)preset stickerPackId:(int64_t)stickerPackId stickerPackAccessHash:(int64_t)stickerPackAccessHash documentId:(int64_t)documentId colors:(NSArray *)colors;
 + (instancetype)editAdjustmentsWithDictionary:(NSDictionary *)dictionary;
 
 + (instancetype)editAdjustmentsWithOriginalSize:(CGSize)originalSize

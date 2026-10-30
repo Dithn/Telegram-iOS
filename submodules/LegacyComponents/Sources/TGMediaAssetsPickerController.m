@@ -1,3 +1,4 @@
+#import <LegacyComponents/LegacyComponents.h>
 #import "TGMediaAssetsPickerController.h"
 
 #import "LegacyComponentsInternal.h"
@@ -16,7 +17,7 @@
 #import <LegacyComponents/TGMediaAssetImageSignals.h>
 #import <LegacyComponents/TGMediaAssetFetchResultChange.h>
 
-#import "TGModernBarButton.h"
+#import <LegacyComponents/TGModernBarButton.h>
 
 #import <LegacyComponents/TGMediaAsset+TGMediaEditableItem.h>
 #import <LegacyComponents/TGPhotoEditorController.h>
@@ -25,7 +26,7 @@
 #import <LegacyComponents/TGMediaPickerModernGalleryMixin.h>
 #import <LegacyComponents/TGMediaPickerGalleryItem.h>
 
-@interface TGMediaAssetsPickerController () <UIViewControllerPreviewingDelegate>
+@interface TGMediaAssetsPickerController ()
 {
     TGMediaAssetsControllerIntent _intent;
     TGMediaAssetsLibrary *_assetsLibrary;
@@ -37,12 +38,8 @@
     TGModernBarButton *_searchBarButton;
     
     TGMediaPickerModernGalleryMixin *_galleryMixin;
-    TGMediaPickerModernGalleryMixin *_previewGalleryMixin;
-    NSIndexPath *_previewIndexPath;
     
     id<SDisposable> _selectionChangedDisposable;
-    
-    bool _checked3dTouch;
     
     id<LegacyComponentsContext> _context;
     bool _saveEditedPhotos;
@@ -134,12 +131,12 @@
         return [strongSelf _itemAtIndexPath:indexPath];
     };
     
-    _selectionChangedDisposable = [[self.selectionContext selectionChangedSignal] startWithNext:^(id next)
+    _selectionChangedDisposable = [[self.selectionContext selectionChangedSignal] startStrictWithNext:^(id next)
     {
         __strong TGMediaAssetsPickerController *strongSelf = weakSelf;
         if (strongSelf != nil)
             return [strongSelf updateSelectionIndexes];
-    }];
+    } file:__FILE_NAME__ line:__LINE__];
 }
 
 - (void)updateSelectionIndexes
@@ -194,7 +191,7 @@
             [strongSelf setTitle:assetGroup.title];
         }
         return [strongSelf->_assetsLibrary assetsOfAssetGroup:assetGroup reversed:reversed];
-    }] deliverOn:[SQueue mainQueue]] startWithNext:^(id next)
+    }] deliverOn:[SQueue mainQueue]] startStrictWithNext:^(id next)
     {
         __strong TGMediaAssetsPickerController *strongSelf = weakSelf;
         if (strongSelf == nil)
@@ -238,14 +235,13 @@
         
         if (strongSelf->_galleryMixin != nil && strongSelf->_fetchResult != nil)
             [strongSelf->_galleryMixin updateWithFetchResult:strongSelf->_fetchResult];
-    }]];
+    } file:__FILE_NAME__ line:__LINE__]];
 }
 
 - (void)viewWillAppear:(BOOL)animated
 {
     [super viewWillAppear:animated];
     
-    [self setup3DTouch];
     [self setLeftBarButtonItem:[(TGMediaAssetsController *)self.navigationController leftBarButtonItem]];
     [self setRightBarButtonItem:[(TGMediaAssetsController *)self.navigationController rightBarButtonItem]];
 }
@@ -359,7 +355,7 @@
 
 - (TGMediaPickerModernGalleryMixin *)_galleryMixinForContext:(id<LegacyComponentsContext>)context item:(id)item thumbnailImage:(UIImage *)thumbnailImage selectionContext:(TGMediaSelectionContext *)selectionContext editingContext:(TGMediaEditingContext *)editingContext hasCaptions:(bool)hasCaptions allowCaptionEntities:(bool)allowCaptionEntities inhibitDocumentCaptions:(bool)inhibitDocumentCaptions asFile:(bool)asFile
 {
-    return [[TGMediaPickerModernGalleryMixin alloc] initWithContext:context item:item fetchResult:_fetchResult parentController:self thumbnailImage:thumbnailImage selectionContext:selectionContext editingContext:editingContext hasCaptions:hasCaptions allowCaptionEntities:allowCaptionEntities hasTimer:self.hasTimer onlyCrop:self.onlyCrop inhibitDocumentCaptions:inhibitDocumentCaptions inhibitMute:self.inhibitMute asFile:asFile itemsLimit:0 recipientName:self.recipientName hasSilentPosting:self.hasSilentPosting hasSchedule:self.hasSchedule reminder:self.reminder stickersContext:self.stickersContext];
+    return [[TGMediaPickerModernGalleryMixin alloc] initWithContext:context item:item fetchResult:_fetchResult parentController:self thumbnailImage:thumbnailImage selectionContext:selectionContext editingContext:editingContext hasCaptions:hasCaptions allowCaptionEntities:allowCaptionEntities hasTimer:self.hasTimer onlyCrop:self.onlyCrop inhibitDocumentCaptions:inhibitDocumentCaptions inhibitMute:self.inhibitMute asFile:asFile itemsLimit:0 recipientName:self.recipientName hasSilentPosting:self.hasSilentPosting hasSchedule:self.hasSchedule reminder:self.reminder hasCoverButton:self.hasCoverButton stickersContext:self.stickersContext];
 }
 
 - (TGMediaPickerModernGalleryMixin *)galleryMixinForIndexPath:(NSIndexPath *)indexPath previewMode:(bool)previewMode outAsset:(TGMediaAsset **)outAsset
@@ -435,12 +431,21 @@
             intent = TGPhotoEditorControllerSignupAvatarIntent;
         }
         
+        if (self.forum) {
+            intent |= TGPhotoEditorControllerForumAvatarIntent;
+        }
+        
+        if (self.isSuggesting) {
+            intent |= TGPhotoEditorControllerSuggestingAvatarIntent;
+        }
+        
         id<TGMediaEditableItem> editableItem = asset;
         if (asset.type == TGMediaAssetGifType) {
             editableItem = [[TGCameraCapturedVideo alloc] initWithAsset:asset livePhoto:false];
         }
         
-        TGPhotoEditorController *controller = [[TGPhotoEditorController alloc] initWithContext:_context item:editableItem intent:intent adjustments:nil caption:nil screenImage:thumbnailImage availableTabs:[TGPhotoEditorController defaultTabsForAvatarIntent] selectedTab:TGPhotoEditorCropTab];
+        TGPhotoEditorController *controller = [[TGPhotoEditorController alloc] initWithContext:_context item:editableItem intent:intent adjustments:nil caption:nil screenImage:thumbnailImage availableTabs:[TGPhotoEditorController defaultTabsForAvatarIntent:_intent != TGMediaAssetsControllerSetSignupProfilePhotoIntent] selectedTab:TGPhotoEditorCropTab];
+        controller.modalPresentationStyle = UIModalPresentationFullScreen;
         controller.stickersContext = self.stickersContext;
         controller.editingContext = self.editingContext;
         controller.didFinishRenderingFullSizeImage = ^(UIImage *resultImage)
@@ -451,7 +456,7 @@
             
             [[strongSelf->_assetsLibrary saveAssetWithImage:resultImage] startWithNext:nil];
         };
-        controller.didFinishEditing = ^(id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, __unused UIImage *thumbnailImage, bool hasChanges)
+        controller.didFinishEditing = ^(id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, __unused UIImage *thumbnailImage, bool hasChanges, void(^commit)(void))
         {
             if (!hasChanges)
                 return;
@@ -483,12 +488,12 @@
                         previewImage = thumbnailImage;
                     }
                 }
-                [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarVideo:[NSURL fileURLWithPath:filePath] adjustments:videoAdjustments image:previewImage];
+                [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarVideo:[NSURL fileURLWithPath:filePath] adjustments:videoAdjustments image:previewImage commit:commit];
             } else {
-                [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarImage:resultImage];
+                [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarImage:resultImage commit:commit];
             }
         };
-        controller.didFinishEditingVideo = ^(AVAsset *asset, id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, UIImage *thumbnailImage, bool hasChanges) {
+        controller.didFinishEditingVideo = ^(AVAsset *asset, id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, UIImage *thumbnailImage, bool hasChanges, void(^commit)(void)) {
             if (!hasChanges)
                 return;
             
@@ -496,7 +501,7 @@
             if (strongSelf == nil)
                 return;
             
-            [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarVideo:asset adjustments:adjustments image:resultImage];
+            [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarVideo:asset adjustments:adjustments image:resultImage commit:commit];
         };
         controller.requestThumbnailImage = ^(id<TGMediaEditableItem> editableItem)
         {
@@ -530,55 +535,6 @@
         _galleryMixin = [self galleryMixinForIndexPath:indexPath previewMode:false outAsset:NULL];
         [_galleryMixin present];
     }
-}
-
-#pragma mark - 
-
-- (void)setup3DTouch
-{
-    if (_checked3dTouch)
-        return;
-    
-    _checked3dTouch = true;
-    
-    if (_intent == TGMediaAssetsControllerSetProfilePhotoIntent || _intent == TGMediaAssetsControllerSetSignupProfilePhotoIntent || _intent == TGMediaAssetsControllerSetCustomWallpaperIntent) {
-        return;
-    }
-    
-    if (iosMajorVersion() >= 9)
-    {
-        if (self.traitCollection.forceTouchCapability == UIForceTouchCapabilityAvailable)
-            [self registerForPreviewingWithDelegate:(id)self sourceView:self.view];
-    }
-}
-
-- (UIViewController *)previewingContext:(id<UIViewControllerPreviewing>)previewingContext viewControllerForLocation:(CGPoint)location
-{
-    CGPoint point = [self.view convertPoint:location toView:_collectionView];
-    NSIndexPath *indexPath = [_collectionView indexPathForItemAtPoint:point];
-    if (indexPath == nil)
-        return nil;
-    
-    [self _cancelSelectionGestureRecognizer];
-    
-    CGRect cellFrame = [_collectionView.collectionViewLayout layoutAttributesForItemAtIndexPath:indexPath].frame;
-    previewingContext.sourceRect = [self.view convertRect:cellFrame fromView:_collectionView];
-    
-    TGMediaAsset *asset = nil;
-    _previewGalleryMixin = [self galleryMixinForIndexPath:indexPath previewMode:true outAsset:&asset];
-    UIViewController *controller = [_previewGalleryMixin galleryController];
-    controller.preferredContentSize = TGFitSize(asset.dimensions, self.view.frame.size);
-    [_previewGalleryMixin setPreviewMode];
-    return controller;
-}
-
-- (void)previewingContext:(id<UIViewControllerPreviewing>)__unused previewingContext commitViewController:(UIViewController *)__unused viewControllerToCommit
-{
-    _galleryMixin = _previewGalleryMixin;
-    _previewGalleryMixin = nil;
-    
-    [self _setupGalleryMixin:_galleryMixin];
-    [_galleryMixin present];
 }
 
 #pragma mark - Asset Image Preheating

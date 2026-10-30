@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "GraphCore",
-    platforms: [.macOS(.v10_11)],
+    platforms: [.macOS(.v10_13)],
     products: [
         // Products define the executables and libraries a package produces, and make them visible to other packages.
         .library(
@@ -22,6 +22,6 @@ let package = Package(
         .target(
             name: "GraphCore",
             dependencies: [],
-            path: "Sources"),
+            path: "GraphCore2/Sources"),
     ]
 )

@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 
 
 private func normalizedPhoneNumber(_ value: String) -> String {
@@ -179,7 +179,9 @@ private final class ContactSyncManagerImpl {
     func startOperation(_ operation: ContactSyncOperationContent, disposable: DisposableSet, completion: @escaping () -> Void) {
         switch operation {
             case .waitForUpdatedState:
-                disposable.add((self.stateManager.pollStateUpdateCompletion()
+                disposable.add((self.stateManager.isUpdating
+                |> filter { !$0 }
+                |> take(1)
                 |> deliverOn(self.queue)).start(next: { _ in
                     completion()
                 }))
@@ -190,7 +192,7 @@ private final class ContactSyncManagerImpl {
             case let .sync(importableContacts):
                 let importSignal: Signal<PushDeviceContactsResult, NoError>
                 if let importableContacts = importableContacts {
-                    importSignal = pushDeviceContacts(postbox: self.postbox, network: self.network, importableContacts: importableContacts, reimportAttempts: self.reimportAttempts)
+                    importSignal = pushDeviceContacts(accountPeerId: self.accountPeerId, postbox: self.postbox, network: self.network, importableContacts: importableContacts, reimportAttempts: self.reimportAttempts)
                 } else {
                     importSignal = .single(PushDeviceContactsResult(addedReimportAttempts: [:]))
                 }
@@ -233,7 +235,7 @@ private struct PushDeviceContactsResult {
     let addedReimportAttempts: [TelegramDeviceContactImportIdentifier: Double]
 }
 
-private func pushDeviceContacts(postbox: Postbox, network: Network, importableContacts: [DeviceContactNormalizedPhoneNumber: ImportableDeviceContactData], reimportAttempts: [TelegramDeviceContactImportIdentifier: Double]) -> Signal<PushDeviceContactsResult, NoError> {
+private func pushDeviceContacts(accountPeerId: PeerId, postbox: Postbox, network: Network, importableContacts: [DeviceContactNormalizedPhoneNumber: ImportableDeviceContactData], reimportAttempts: [TelegramDeviceContactImportIdentifier: Double]) -> Signal<PushDeviceContactsResult, NoError> {
     return postbox.transaction { transaction -> Signal<PushDeviceContactsResult, NoError> in
         var noLongerImportedIdentifiers = Set<TelegramDeviceContactImportIdentifier>()
         var updatedDataIdentifiers = Set<TelegramDeviceContactImportIdentifier>()
@@ -249,7 +251,7 @@ private func pushDeviceContacts(postbox: Postbox, network: Network, importableCo
                         if let updatedData = importableContacts[number] {
                             if let value = value as? TelegramDeviceContactImportedData {
                                 switch value {
-                                    case let .imported(data, _):
+                                    case let .imported(data, _, _):
                                         if data != updatedData {
                                            updatedDataIdentifiers.insert(identifier)
                                         }
@@ -289,7 +291,10 @@ private func pushDeviceContacts(postbox: Postbox, network: Network, importableCo
         outer: for i in (0 ..< orderedPushIdentifiers.count).reversed() {
             if let user = currentContactDetails[orderedPushIdentifiers[i]], case let .phoneNumber(number) = orderedPushIdentifiers[i], let data = importableContacts[number] {
                 if (user.firstName ?? "") == data.firstName && (user.lastName ?? "") == data.lastName {
-                    transaction.setDeviceContactImportInfo(orderedPushIdentifiers[i].key, value: TelegramDeviceContactImportedData.imported(data: data, importedByCount: 0))
+                    if data.localIdentifiers.contains("5DFF1D6F-8C0A-48C9-800D-F4BEC59C0E50") {
+                        assert(true)
+                    }
+                    transaction.setDeviceContactImportInfo(orderedPushIdentifiers[i].key, value: TelegramDeviceContactImportedData.imported(data: data, importedByCount: 0, peerId: user.id))
                     orderedPushIdentifiers.remove(at: i)
                     continue outer
                 }
@@ -307,21 +312,21 @@ private func pushDeviceContacts(postbox: Postbox, network: Network, importableCo
             }
         }
         
-        return pushDeviceContactData(postbox: postbox, network: network, contacts: preparedContactData)
+        return pushDeviceContactData(accountPeerId: accountPeerId, postbox: postbox, network: network, contacts: preparedContactData)
     }
     |> switchToLatest
 }
 
 private let importBatchCount: Int = 500
 
-private func pushDeviceContactData(postbox: Postbox, network: Network, contacts: [(DeviceContactNormalizedPhoneNumber, ImportableDeviceContactData)]) -> Signal<PushDeviceContactsResult, NoError> {
+private func pushDeviceContactData(accountPeerId: PeerId, postbox: Postbox, network: Network, contacts: [(DeviceContactNormalizedPhoneNumber, ImportableDeviceContactData)]) -> Signal<PushDeviceContactsResult, NoError> {
     var batches: Signal<PushDeviceContactsResult, NoError> = .single(PushDeviceContactsResult(addedReimportAttempts: [:]))
     for s in stride(from: 0, to: contacts.count, by: importBatchCount) {
         let batch = Array(contacts[s ..< min(s + importBatchCount, contacts.count)])
         batches = batches
         |> mapToSignal { intermediateResult -> Signal<PushDeviceContactsResult, NoError> in
             return network.request(Api.functions.contacts.importContacts(contacts: zip(0 ..< batch.count, batch).map { index, item -> Api.InputContact in
-                return .inputPhoneContact(clientId: Int64(index), phone: item.0.rawValue, firstName: item.1.firstName, lastName: item.1.lastName)
+                return .inputPhoneContact(.init(flags: 0, clientId: Int64(index), phone: item.0.rawValue, firstName: item.1.firstName, lastName: item.1.lastName, note: nil))
             }))
             |> map(Optional.init)
             |> `catch` { _ -> Signal<Api.contacts.ImportedContacts?, NoError> in
@@ -334,16 +339,19 @@ private func pushDeviceContactData(postbox: Postbox, network: Network, contacts:
                         var addedContactPeerIds = Set<PeerId>()
                         var retryIndices = Set<Int>()
                         var importedCounts: [Int: Int32] = [:]
+                        var peerIdByClientId: [Int64: PeerId] = [:]
                         switch result {
-                            case let .importedContacts(imported, popularInvites, retryContacts, users):
-                                let peers = users.map { TelegramUser(user: $0) as Peer }
-                                updatePeers(transaction: transaction, peers: peers, update: { _, updated in
-                                    return updated
-                                })
+                            case let .importedContacts(importedContactsData):
+                                let (imported, popularInvites, retryContacts, users) = (importedContactsData.imported, importedContactsData.popularInvites, importedContactsData.retryContacts, importedContactsData.users)
+                                updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: AccumulatedPeers(users: users))
+                            
                                 for item in imported {
                                     switch item {
-                                        case let .importedContact(userId, _):
-                                            addedContactPeerIds.insert(PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId)))
+                                    case let .importedContact(importedContactData):
+                                        let (userId, clientId) = (importedContactData.userId, importedContactData.clientId)
+                                        let peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))
+                                        addedContactPeerIds.insert(peerId)
+                                        peerIdByClientId[clientId] = peerId
                                     }
                                 }
                                 for item in retryContacts {
@@ -351,7 +359,8 @@ private func pushDeviceContactData(postbox: Postbox, network: Network, contacts:
                                 }
                                 for item in popularInvites {
                                     switch item {
-                                        case let .popularContact(clientId, importers):
+                                        case let .popularContact(popularContactData):
+                                            let (clientId, importers) = (popularContactData.clientId, popularContactData.importers)
                                             importedCounts[Int(clientId)] = importers
                                     }
                                 }
@@ -363,7 +372,10 @@ private func pushDeviceContactData(postbox: Postbox, network: Network, contacts:
                                 importedData = .retryLater
                                 addedReimportAttempts[.phoneNumber(batch[i].0)] = timestamp
                             } else {
-                                importedData = .imported(data: batch[i].1, importedByCount: importedCounts[i] ?? 0)
+                                if batch[i].1.localIdentifiers.contains("5DFF1D6F-8C0A-48C9-800D-F4BEC59C0E50") {
+                                    assert(true)
+                                }
+                                importedData = .imported(data: batch[i].1, importedByCount: importedCounts[i] ?? 0, peerId: peerIdByClientId[Int64(i)])
                             }
                             transaction.setDeviceContactImportInfo(TelegramDeviceContactImportIdentifier.phoneNumber(batch[i].0).key, value: importedData)
                         }
@@ -393,14 +405,15 @@ private func updateContactPresences(postbox: Postbox, network: Network, accountP
     }
     |> mapToSignal { statuses -> Signal<Never, NoError> in
         return postbox.transaction { transaction -> Void in
-            var peerPresences: [PeerId: PeerPresence] = [:]
+            var peerPresences: [PeerId: UpdatedApiPresence] = [:]
             for status in statuses {
                 switch status {
-                    case let .contactStatus(userId, status):
-                        peerPresences[PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))] = TelegramUserPresence(apiStatus: status)
+                case let .contactStatus(contactStatusData):
+                    let (userId, status) = (contactStatusData.userId, contactStatusData.status)
+                    peerPresences[PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))] = UpdatedApiPresence(status: status, isMin: false)
                 }
             }
-            updatePeerPresences(transaction: transaction, accountPeerId: accountPeerId, peerPresences: peerPresences)
+            updatePeerPresencesClean(transaction: transaction, accountPeerId: accountPeerId, peerPresences: peerPresences)
         }
         |> ignoreValues
     }

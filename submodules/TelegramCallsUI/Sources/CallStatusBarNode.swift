@@ -3,12 +3,13 @@ import UIKit
 import AsyncDisplayKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
 import AccountContext
 import AnimatedCountLabelNode
+import ComponentFlow
+import ReactionSelectionNode
 
 private let blue = UIColor(rgb: 0x007fff)
 private let lightBlue = UIColor(rgb: 0x00affe)
@@ -19,6 +20,22 @@ private let pink = UIColor(rgb: 0xef436c)
 private let latePurple = UIColor(rgb: 0xaa56a6)
 private let latePink = UIColor(rgb: 0xef476f)
 
+private func textForTimeout(value: Int32) -> String {
+    if value < 3600 {
+        let minutes = value / 60
+        let seconds = value % 60
+        let secondsPadding = seconds < 10 ? "0" : ""
+        return "\(minutes):\(secondsPadding)\(seconds)"
+    } else {
+        let hours = value / 3600
+        let minutes = (value % 3600) / 60
+        let minutesPadding = minutes < 10 ? "0" : ""
+        let seconds = value % 60
+        let secondsPadding = seconds < 10 ? "0" : ""
+        return "\(hours):\(minutesPadding)\(minutes):\(secondsPadding)\(seconds)"
+    }
+}
+
 private class CallStatusBarBackgroundNode: ASDisplayNode {
     enum State {
         case connecting
@@ -27,14 +44,12 @@ private class CallStatusBarBackgroundNode: ASDisplayNode {
         case active
         case speaking
     }
-    private let foregroundView: UIView
-    private let foregroundGradientLayer: CAGradientLayer
-    private let maskCurveView: VoiceCurveView
+    private let wavesLayer: CallStatusBarWavesLayer
     private let initialTimestamp = CACurrentMediaTime()
     
     var audioLevel: Float = 0.0  {
         didSet {
-            self.maskCurveView.updateLevel(CGFloat(audioLevel))
+            self.wavesLayer.updateAudioLevel(CGFloat(self.audioLevel))
         }
     }
     
@@ -54,41 +69,39 @@ private class CallStatusBarBackgroundNode: ASDisplayNode {
         }
     }
     
-    private func updateGradientColors() {
-        let initialColors = self.foregroundGradientLayer.colors
-        let targetColors: [CGColor]
-        switch self.state {
-            case .connecting:
-                targetColors = [connectingColor.cgColor, connectingColor.cgColor]
-            case .active:
-                targetColors = [blue.cgColor, lightBlue.cgColor]
-            case .speaking:
-                targetColors = [green.cgColor, activeBlue.cgColor]
-            case .cantSpeak:
-                targetColors = [purple.cgColor, pink.cgColor]
-            case .late:
-                targetColors = [latePurple.cgColor, latePink.cgColor]
-        }
-
-        if CACurrentMediaTime() - self.initialTimestamp > 0.1 {
-            self.foregroundGradientLayer.colors = targetColors
-            self.foregroundGradientLayer.animate(from: initialColors as AnyObject, to: targetColors as AnyObject, keyPath: "colors", timingFunction: CAMediaTimingFunctionName.linear.rawValue, duration: 0.3)
-        } else {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            self.foregroundGradientLayer.colors = targetColors
-            CATransaction.commit()
+    var isDarkAppearance: Bool = false {
+        didSet {
+            self.wavesLayer.isDarkAppearance = self.isDarkAppearance
         }
     }
     
+    private func updateGradientColors() {
+        let targetColors: (UIColor, UIColor)
+        switch self.state {
+            case .connecting:
+                targetColors = (self.connectingColor, self.connectingColor)
+            case .active:
+                targetColors = (blue, lightBlue)
+            case .speaking:
+                targetColors = (green, activeBlue)
+            case .cantSpeak:
+                targetColors = (purple, pink)
+            case .late:
+                targetColors = (latePurple, latePink)
+        }
+        self.wavesLayer.updateColors(targetColors, animated: CACurrentMediaTime() - self.initialTimestamp > 0.1)
+    }
+    
     private let hierarchyTrackingNode: HierarchyTrackingNode
-    private var isCurrentlyInHierarchy = true
+    
+    var animationsEnabled: Bool = false {
+        didSet {
+            self.wavesLayer.isFlat = !self.animationsEnabled
+        }
+    }
 
     override init() {
-        self.foregroundView = UIView()
-        self.foregroundGradientLayer = CAGradientLayer()
-        self.maskCurveView = VoiceCurveView(frame: CGRect(), maxLevel: 1.5, smallCurveRange: (0.0, 0.0), mediumCurveRange: (0.1, 0.55), bigCurveRange: (0.1, 1.0))
-        self.maskCurveView.setColor(UIColor(rgb: 0xffffff))
+        self.wavesLayer = CallStatusBarWavesLayer(colors: (blue, lightBlue))
         
         var updateInHierarchy: ((Bool) -> Void)?
         self.hierarchyTrackingNode = HierarchyTrackingNode({ value in
@@ -99,20 +112,11 @@ private class CallStatusBarBackgroundNode: ASDisplayNode {
         
         self.addSubnode(self.hierarchyTrackingNode)
         
-        self.foregroundGradientLayer.colors = [blue.cgColor, lightBlue.cgColor]
-        self.foregroundGradientLayer.startPoint = CGPoint(x: 0.0, y: 0.5)
-        self.foregroundGradientLayer.endPoint = CGPoint(x: 2.0, y: 0.5)
-        
-        self.foregroundView.mask = self.maskCurveView
-        
         self.isOpaque = false
-        
-        self.updateAnimations()
         
         updateInHierarchy = { [weak self] value in
             if let strongSelf = self {
-                strongSelf.isCurrentlyInHierarchy = value
-                strongSelf.updateAnimations()
+                strongSelf.wavesLayer.isInWindow = value
             }
         }
     }
@@ -120,78 +124,59 @@ private class CallStatusBarBackgroundNode: ASDisplayNode {
     override func didLoad() {
         super.didLoad()
         
-        self.view.addSubview(self.foregroundView)
-        self.foregroundView.layer.addSublayer(self.foregroundGradientLayer)
+        self.layer.addSublayer(self.wavesLayer)
     }
     
     override func layout() {
         super.layout()
         
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        if self.maskCurveView.frame != self.bounds {
-            self.foregroundView.frame = self.bounds
-            self.foregroundGradientLayer.frame = self.bounds
-            self.maskCurveView.frame = self.bounds
-        }
-        CATransaction.commit()
-    }
-    
-    private func setupGradientAnimations() {
-        /*if let _ = self.foregroundGradientLayer.animation(forKey: "movement") {
-        } else {
-            let previousValue = self.foregroundGradientLayer.startPoint
-            let newValue: CGPoint
-            if self.maskCurveView.presentationAudioLevel > 0.1 {
-                newValue = CGPoint(x: CGFloat.random(in: 1.0 ..< 1.3), y: 0.5)
-            } else {
-                newValue = CGPoint(x: CGFloat.random(in: 0.85 ..< 1.2), y: 0.5)
-            }
-            self.foregroundGradientLayer.startPoint = newValue
-            
-            CATransaction.begin()
-            
-            let animation = CABasicAnimation(keyPath: "endPoint")
-            animation.duration = Double.random(in: 0.8 ..< 1.4)
-            animation.fromValue = previousValue
-            animation.toValue = newValue
-            
-            CATransaction.setCompletionBlock { [weak self] in
-                self?.setupGradientAnimations()
-            }
-            
-            self.foregroundGradientLayer.add(animation, forKey: "movement")
-            CATransaction.commit()
-        }*/
-    }
-    
-    func updateAnimations() {
-        if !isCurrentlyInHierarchy {
-            self.foregroundGradientLayer.removeAllAnimations()
-            self.maskCurveView.stopAnimating()
-            return
-        }
-        self.setupGradientAnimations()
-        if isCurrentlyInHierarchy {
-            self.maskCurveView.startAnimating()
+        let wavesFrame = CGRect(origin: CGPoint(), size: CGSize(width: self.bounds.width, height: self.bounds.height + CallStatusBarWavesLayer.bottomOverflow))
+        if self.wavesLayer.frame != wavesFrame {
+            self.wavesLayer.frame = wavesFrame
+            self.wavesLayer.update(barHeight: self.bounds.height)
         }
     }
 }
 
 public class CallStatusBarNodeImpl: CallStatusBarNode {
-    public enum Content {
+    public enum Content: Equatable {
         case call(SharedAccountContext, Account, PresentationCall)
         case groupCall(SharedAccountContext, Account, PresentationGroupCall)
+        
+        var sharedContext: SharedAccountContext {
+            switch self {
+            case let .call(sharedContext, _, _), let .groupCall(sharedContext, _, _):
+                return sharedContext
+            }
+        }
+        
+        public static func ==(lhs: Content, rhs: Content) -> Bool {
+            switch lhs {
+            case let .call(sharedContext, account, call):
+                if case let .call(rhsSharedContext, rhsAccount, rhsCall) = rhs, sharedContext === rhsSharedContext, account === rhsAccount, call === rhsCall {
+                    return true
+                } else {
+                    return false
+                }
+            case let .groupCall(sharedContext, account, groupCall):
+                if case let .groupCall(rhsSharedContext, rhsAccount, rhsGroupCall) = rhs, sharedContext === rhsSharedContext, account === rhsAccount, groupCall === rhsGroupCall {
+                    return true
+                } else {
+                    return false
+                }
+            }
+        }
     }
     
     private let backgroundNode: CallStatusBarBackgroundNode
     private let titleNode: ImmediateTextNode
     private let subtitleNode: ImmediateAnimatedCountLabelNode
     private let speakerNode: ImmediateTextNode
+    private var messageView: ComponentView<Empty>?
     
     private let audioLevelDisposable = MetaDisposable()
     private let stateDisposable = MetaDisposable()
-    private var didSetupData = false
+    private weak var didSetupDataForCall: AnyObject?
     
     private var currentSize: CGSize?
     private var currentContent: Content?
@@ -199,7 +184,7 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
     private var presentationData: PresentationData?
     private let presentationDataDisposable = MetaDisposable()
     
-    private var currentPeer: Peer?
+    private var currentPeer: EnginePeer?
     private var currentCallTimer: SwiftSignalKit.Timer?
     private var currentCallState: PresentationCallState?
     private var currentGroupCallState: PresentationGroupCallSummaryState?
@@ -209,6 +194,11 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
     private var currentMembers: PresentationGroupCallMembers?
     private var currentIsConnected = true
 
+    private var reactionItems: [ReactionItem]?
+    private var messagesState: GroupCallMessagesContext.State?
+    private let messagesStateDisposable = MetaDisposable()
+    private var currentMessageId: GroupCallMessagesContext.Message.Id?
+    
     private let hierarchyTrackingNode: HierarchyTrackingNode
     private var isCurrentlyInHierarchy = true
     
@@ -247,14 +237,22 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
         self.presentationDataDisposable.dispose()
         self.audioLevelDisposable.dispose()
         self.stateDisposable.dispose()
+        self.messagesStateDisposable.dispose()
         self.currentCallTimer?.invalidate()
     }
     
     public func update(content: Content) {
-        self.currentContent = content
-        if self.isCurrentlyInHierarchy {
-            self.update()
+        if self.currentContent != content {
+            self.currentContent = content
+            self.backgroundNode.animationsEnabled = content.sharedContext.energyUsageSettings.fullTranslucency
+            if self.isCurrentlyInHierarchy {
+                self.update()
+            }
         }
+    }
+    
+    public override var bottomOverhang: CGFloat {
+        return CallStatusBarWavesLayer.bottomOverflow
     }
     
     public override func update(size: CGSize) {
@@ -262,7 +260,8 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
         self.update()
     }
 
-    private let textFont = Font.with(size: 13.0, design: .regular, weight: .regular, traits: [.monospacedNumbers])
+    private let callTextFont = Font.with(size: 13.0, design: .regular, weight: .regular, traits: [.monospacedNumbers])
+    private let groupCallTextFont = Font.with(size: 13.0, design: .regular, weight: .regular, traits: [])
     
     private func update() {
         guard let size = self.currentSize, let content = self.currentContent else {
@@ -271,14 +270,54 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
         
         let wasEmpty = (self.titleNode.attributedText?.string ?? "").isEmpty
         
-        if !self.didSetupData {
-            self.didSetupData = true
+        let textFont: UIFont
+        let setupDataForCall: AnyObject?
+        switch content {
+        case let .call(_, _, call):
+            setupDataForCall = call
+            textFont = callTextFont
+        case let .groupCall(_, _, call):
+            setupDataForCall = call
+            textFont = groupCallTextFont
+        }
+        
+        if self.didSetupDataForCall !== setupDataForCall {
+            self.didSetupDataForCall = setupDataForCall
             switch content {
                 case let .call(sharedContext, account, call):
+                    // The node is reused when a group call is followed by a 1:1 call; nothing of the group call may
+                    // show while the new call's state is on its way (its peer may never arrive if it is not stored).
+                    self.currentPeer = nil
+                    self.currentCallState = nil
+                    self.currentIsMuted = true
+                    self.currentIsConnected = false
+                    self.currentGroupCallState = nil
+                    self.currentMembers = nil
+                    self.currentCantSpeak = false
+                    self.currentScheduleTimestamp = nil
+                    self.messagesStateDisposable.set(nil)
+                    self.messagesState = nil
+                    self.backgroundNode.audioLevel = 0.0
+                    
                     self.presentationData = sharedContext.currentPresentationData.with { $0 }
+                    self.presentationDataDisposable.set((sharedContext.presentationData
+                    |> deliverOnMainQueue).start(next: { [weak self] presentationData in
+                        if let strongSelf = self, strongSelf.presentationData !== presentationData {
+                            strongSelf.presentationData = presentationData
+                            strongSelf.update()
+                        }
+                    }))
+                    let callPeer = TelegramEngine(account: account).data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: call.peerId))
+                    |> mapToSignal { peer -> Signal<EnginePeer, NoError> in
+                        if let peer {
+                            return .single(peer)
+                        } else {
+                            return .never()
+                        }
+                    }
                     self.stateDisposable.set(
                         (combineLatest(
-                            account.postbox.loadedPeerWithId(call.peerId),
+                            callPeer,
                             call.state,
                             call.isMuted
                         )
@@ -312,21 +351,31 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
                     self.presentationData = sharedContext.currentPresentationData.with { $0 }
                     self.presentationDataDisposable.set((sharedContext.presentationData
                     |> deliverOnMainQueue).start(next: { [weak self] presentationData in
-                        if let strongSelf = self {
+                        if let strongSelf = self, strongSelf.presentationData !== presentationData {
                             strongSelf.presentationData = presentationData
                             strongSelf.update()
                         }
                     }))
+                    let callPeerView: Signal<EnginePeer?, NoError>
+                    if let peerId = call.peerId {
+                        callPeerView = TelegramEngine(account: account).data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+                    } else {
+                        callPeerView = .single(nil)
+                    }
                     self.stateDisposable.set(
                         (combineLatest(
-                            account.postbox.peerView(id: call.peerId),
+                            callPeerView,
                             call.summaryState,
                             call.isMuted,
                             call.members
                         )
                     |> deliverOnMainQueue).start(next: { [weak self] view, state, isMuted, members in
                         if let strongSelf = self {
-                            strongSelf.currentPeer = view.peers[view.peerId]
+                            if let view {
+                                strongSelf.currentPeer = view
+                            } else {
+                                strongSelf.currentPeer = nil
+                            }
                             strongSelf.currentGroupCallState = state
                             strongSelf.currentMembers = members
                                 
@@ -368,11 +417,32 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
                         var effectiveLevel: Float = 0.0
                         var audioLevels = audioLevels
                         if !strongSelf.currentIsMuted {
-                            audioLevels.append((PeerId(0), 0, myAudioLevel, true))
+                            audioLevels.append((EnginePeer.Id(0), 0, myAudioLevel, true))
                         }
                         effectiveLevel = audioLevels.map { $0.2 }.max() ?? 0.0
                         strongSelf.backgroundNode.audioLevel = effectiveLevel
                     }))
+                
+                    if let groupCall = call as? PresentationGroupCallImpl {
+                        let _ = (allowedStoryReactions(engine: TelegramEngine(account: account))
+                        |> deliverOnMainQueue).start(next: { [weak self] reactionItems in
+                            self?.reactionItems = reactionItems
+                        })
+                        
+                        self.messagesStateDisposable.set((groupCall.messagesState
+                        |> deliverOnMainQueue).start(next: { [weak self] messagesState in
+                            guard let self else {
+                                return
+                            }
+                            if self.messagesState != messagesState {
+                                self.messagesState = messagesState
+                                
+                                if self.isCurrentlyInHierarchy {
+                                    self.update()
+                                }
+                            }
+                        }))
+                    }
             }
         }
         
@@ -388,7 +458,7 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
             if let voiceChatTitle = self.currentGroupCallState?.info?.title, !voiceChatTitle.isEmpty {
                 title = voiceChatTitle
             } else if let currentPeer = self.currentPeer {
-                title = EnginePeer(currentPeer).displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                title = currentPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
             }
             var membersCount: Int32?
             if let groupCallState = self.currentGroupCallState {
@@ -397,19 +467,19 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
                 membersCount = 1
             }
             
-            var speakingPeer: Peer?
+            var speakingPeer: EnginePeer?
             if let members = currentMembers {
-                var speakingPeers: [Peer] = []
+                var speakingPeers: [EnginePeer] = []
                 for member in members.participants {
-                    if members.speakingParticipants.contains(member.peer.id) {
-                        speakingPeers.append(member.peer)
+                    if let memberPeer = member.peer, members.speakingParticipants.contains(memberPeer.id) {
+                        speakingPeers.append(memberPeer)
                     }
                 }
                 speakingPeer = speakingPeers.first
             }
-            
+
             if let speakingPeer = speakingPeer {
-                speakerSubtitle = EnginePeer(speakingPeer).displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                speakerSubtitle = speakingPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
             }
             displaySpeakerSubtitle = speakerSubtitle != title && !speakerSubtitle.isEmpty
             
@@ -482,6 +552,7 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
             }
             
             self.backgroundNode.connectingColor = color
+            self.backgroundNode.isDarkAppearance = presentationData.theme.overallDarkAppearance
             
             if requiresTimer {
                 if self.currentCallTimer == nil {
@@ -501,9 +572,66 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
             self.subtitleNode.segments = segments
         }
         
+        let contentHeight: CGFloat = 24.0
+        let verticalOrigin: CGFloat = size.height - contentHeight
+        
+        var isDisplayingMessage = false
+        let componentTransition: ComponentTransition = .easeInOut(duration: 0.25)
+        if case let .groupCall(_, account, call) = self.currentContent, let message = self.messagesState?.messages.last(where: { $0.author?.id != account.peerId }), let author = message.author, let groupCall = call as? PresentationGroupCallImpl {
+            if self.currentMessageId != message.id {
+                self.currentMessageId = message.id
+                
+                if let messageView = self.messageView?.view {
+                    self.messageView = nil
+                    componentTransition.setAlpha(view: messageView, alpha: 0.0, completion: { _ in
+                        messageView.removeFromSuperview()
+                    })
+                }
+            }
+            let messageView: ComponentView<Empty>
+            if let current = self.messageView {
+                messageView = current
+            } else {
+                messageView = ComponentView<Empty>()
+                self.messageView = messageView
+            }
+            
+            let messageSize = messageView.update(
+                transition: .immediate,
+                component: AnyComponent(
+                    MessageItemComponent(
+                        context: groupCall.accountContext,
+                        icon: .peer(author),
+                        style: .status,
+                        text: message.text,
+                        entities: message.entities,
+                        availableReactions: self.reactionItems,
+                        openPeer: nil
+                    )
+                ),
+                environment: {},
+                containerSize: CGSize(width: size.width - 140.0, height: contentHeight)
+            )
+            if let view = messageView.view {
+                if view.superview == nil {
+                    view.transform = CGAffineTransformMakeScale(1.0, -1.0)
+                    self.view.addSubview(view)
+                    componentTransition.animateAlpha(view: view, from: 0.0, to: 1.0)
+                }
+                view.frame = CGRect(origin: CGPoint(x: floorToScreenPixels((size.width - messageSize.width) / 2.0), y: verticalOrigin + floor((contentHeight - messageSize.height) / 2.0) + 1.0), size: messageSize)
+            }
+            isDisplayingMessage = true
+        } else if let messageView = self.messageView?.view {
+            self.messageView = nil
+            componentTransition.setAlpha(view: messageView, alpha: 0.0, completion: { _ in
+                messageView.removeFromSuperview()
+            })
+        }
+        
         let alphaTransition: ContainedViewLayoutTransition = .animated(duration: 0.2, curve: .easeInOut)
-        alphaTransition.updateAlpha(node: self.subtitleNode, alpha: displaySpeakerSubtitle ? 0.0 : 1.0)
-        alphaTransition.updateAlpha(node: self.speakerNode, alpha: displaySpeakerSubtitle ? 1.0 : 0.0)
+        alphaTransition.updateAlpha(node: self.titleNode, alpha: isDisplayingMessage ? 0.0 : 1.0)
+        alphaTransition.updateAlpha(node: self.subtitleNode, alpha: displaySpeakerSubtitle || isDisplayingMessage ? 0.0 : 1.0)
+        alphaTransition.updateAlpha(node: self.speakerNode, alpha: displaySpeakerSubtitle && !isDisplayingMessage ? 1.0 : 0.0)
         
         self.titleNode.attributedText = NSAttributedString(string: title, font: Font.semibold(13.0), textColor: .white)
         
@@ -516,11 +644,12 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
         let subtitleSize = self.subtitleNode.updateLayout(size: CGSize(width: 150.0, height: size.height), animated: true)
         let speakerSize = self.speakerNode.updateLayout(CGSize(width: 150.0, height: size.height))
         
-        let totalWidth = titleSize.width + spacing + subtitleSize.width
+        var totalWidth = titleSize.width
+        if totalWidth > 0.0 {
+            totalWidth += spacing
+        }
+        totalWidth += subtitleSize.width
         let horizontalOrigin: CGFloat = floor((size.width - totalWidth) / 2.0)
-        
-        let contentHeight: CGFloat = 24.0
-        let verticalOrigin: CGFloat = size.height - contentHeight
         
         let sizeChanged = self.titleNode.frame.size.width != titleSize.width
         
@@ -529,7 +658,8 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
         transition.updateFrame(node: self.subtitleNode, frame: CGRect(origin: CGPoint(x: horizontalOrigin + titleSize.width + spacing, y: verticalOrigin + floor((contentHeight - subtitleSize.height) / 2.0)), size: subtitleSize))
         
         if displaySpeakerSubtitle {
-            self.speakerNode.frame = CGRect(origin: CGPoint(x: horizontalOrigin + titleSize.width + spacing, y: verticalOrigin + floor((contentHeight - speakerSize.height) / 2.0)), size: speakerSize)
+            let speakerOriginX: CGFloat = title.isEmpty ? floor((size.width - speakerSize.width) / 2.0) : horizontalOrigin + titleSize.width + spacing
+            self.speakerNode.frame = CGRect(origin: CGPoint(x: speakerOriginX, y: verticalOrigin + floor((contentHeight - speakerSize.height) / 2.0)), size: speakerSize)
         }
         
         let state: CallStatusBarBackgroundNode.State
@@ -545,320 +675,6 @@ public class CallStatusBarNodeImpl: CallStatusBarNode {
             state = .connecting
         }
         self.backgroundNode.state = state
-        self.backgroundNode.frame = CGRect(origin: CGPoint(), size: CGSize(width: size.width, height: size.height + 18.0))
-    }
-}
-
-private final class VoiceCurveView: UIView {
-    private let smallCurve: CurveView
-    private let mediumCurve: CurveView
-    private let bigCurve: CurveView
-    
-    private let maxLevel: CGFloat
-    
-    private var displayLinkAnimator: ConstantDisplayLinkAnimator?
-    
-    private var audioLevel: CGFloat = 0.0
-    var presentationAudioLevel: CGFloat = 0.0
-    
-    private(set) var isAnimating = false
-    
-    public typealias CurveRange = (min: CGFloat, max: CGFloat)
-    
-    public init(
-        frame: CGRect,
-        maxLevel: CGFloat,
-        smallCurveRange: CurveRange,
-        mediumCurveRange: CurveRange,
-        bigCurveRange: CurveRange
-    ) {
-        self.maxLevel = maxLevel
-        
-        self.smallCurve = CurveView(
-            pointsCount: 8,
-            minRandomness: 1,
-            maxRandomness: 1.3,
-            minSpeed: 0.9,
-            maxSpeed: 3.2,
-            minOffset: smallCurveRange.min,
-            maxOffset: smallCurveRange.max
-        )
-        self.mediumCurve = CurveView(
-            pointsCount: 8,
-            minRandomness: 1.2,
-            maxRandomness: 1.5,
-            minSpeed: 1.0,
-            maxSpeed: 4.4,
-            minOffset: mediumCurveRange.min,
-            maxOffset: mediumCurveRange.max
-        )
-        self.bigCurve = CurveView(
-            pointsCount: 8,
-            minRandomness: 1.2,
-            maxRandomness: 1.7,
-            minSpeed: 1.0,
-            maxSpeed: 5.8,
-            minOffset: bigCurveRange.min,
-            maxOffset: bigCurveRange.max
-        )
-        
-        super.init(frame: frame)
-        
-        addSubview(bigCurve)
-        addSubview(mediumCurve)
-        addSubview(smallCurve)
-        
-        displayLinkAnimator = ConstantDisplayLinkAnimator() { [weak self] in
-            guard let strongSelf = self else { return }
-            
-            strongSelf.presentationAudioLevel = strongSelf.presentationAudioLevel * 0.9 + strongSelf.audioLevel * 0.1
-            
-            strongSelf.smallCurve.level = strongSelf.presentationAudioLevel
-            strongSelf.mediumCurve.level = strongSelf.presentationAudioLevel
-            strongSelf.bigCurve.level = strongSelf.presentationAudioLevel
-        }
-    }
-    
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-    
-    public func setColor(_ color: UIColor) {
-        smallCurve.setColor(color.withAlphaComponent(1.0))
-        mediumCurve.setColor(color.withAlphaComponent(0.55))
-        bigCurve.setColor(color.withAlphaComponent(0.35))
-    }
-    
-    public func updateLevel(_ level: CGFloat) {
-        let normalizedLevel = min(1, max(level / maxLevel, 0))
-        
-        smallCurve.updateSpeedLevel(to: normalizedLevel)
-        mediumCurve.updateSpeedLevel(to: normalizedLevel)
-        bigCurve.updateSpeedLevel(to: normalizedLevel)
-        
-        audioLevel = normalizedLevel
-    }
-    
-    public func startAnimating() {
-        guard !isAnimating else { return }
-        isAnimating = true
-        
-        updateCurvesState()
-        
-        displayLinkAnimator?.isPaused = false
-    }
-    
-    public func stopAnimating() {
-        self.stopAnimating(duration: 0.15)
-    }
-    
-    public func stopAnimating(duration: Double) {
-        guard isAnimating else { return }
-        isAnimating = false
-        
-        updateCurvesState()
-        
-        displayLinkAnimator?.isPaused = true
-    }
-    
-    private func updateCurvesState() {
-        if isAnimating {
-            if smallCurve.frame.size != .zero {
-                smallCurve.startAnimating()
-                mediumCurve.startAnimating()
-                bigCurve.startAnimating()
-            }
-        } else {
-            smallCurve.stopAnimating()
-            mediumCurve.stopAnimating()
-            bigCurve.stopAnimating()
-        }
-    }
-    
-    override public func layoutSubviews() {
-        super.layoutSubviews()
-        
-        smallCurve.frame = bounds
-        mediumCurve.frame = bounds
-        bigCurve.frame = bounds
-        
-        updateCurvesState()
-    }
-}
-
-final class CurveView: UIView {
-    let pointsCount: Int
-    let smoothness: CGFloat
-    
-    let minRandomness: CGFloat
-    let maxRandomness: CGFloat
-    
-    let minSpeed: CGFloat
-    let maxSpeed: CGFloat
-    
-    let minOffset: CGFloat
-    let maxOffset: CGFloat
-        
-    var level: CGFloat = 0 {
-        didSet {
-            guard self.minOffset > 0.0 else {
-                return
-            }
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            let lv = self.minOffset + (self.maxOffset - self.minOffset) * self.level
-            self.shapeLayer.transform = CATransform3DMakeTranslation(0.0, lv * 16.0, 0.0)
-            CATransaction.commit()
-        }
-    }
-    
-    private var speedLevel: CGFloat = 0
-    private var lastSpeedLevel: CGFloat = 0
-    
-    private let shapeLayer: CAShapeLayer = {
-        let layer = CAShapeLayer()
-        layer.strokeColor = nil
-        return layer
-    }()
-    
-    
-    override var frame: CGRect {
-        didSet {
-            if self.frame.size != oldValue.size {
-                self.shapeLayer.path = nil
-                self.animateToNewShape()
-            }
-        }
-    }
-    
-    init(
-        pointsCount: Int,
-        minRandomness: CGFloat,
-        maxRandomness: CGFloat,
-        minSpeed: CGFloat,
-        maxSpeed: CGFloat,
-        minOffset: CGFloat,
-        maxOffset: CGFloat
-    ) {
-        self.pointsCount = pointsCount
-        self.minRandomness = minRandomness
-        self.maxRandomness = maxRandomness
-        self.minSpeed = minSpeed
-        self.maxSpeed = maxSpeed
-        self.minOffset = minOffset
-        self.maxOffset = maxOffset
-        
-        self.smoothness = 0.35
-        
-        super.init(frame: .zero)
-        
-        self.layer.addSublayer(self.shapeLayer)
-    }
-    
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-    
-    func setColor(_ color: UIColor) {
-        self.shapeLayer.fillColor = color.cgColor
-    }
-    
-    func updateSpeedLevel(to newSpeedLevel: CGFloat) {
-        speedLevel = max(speedLevel, newSpeedLevel)
-        
-//        if abs(lastSpeedLevel - newSpeedLevel) > 0.45 {
-//            animateToNewShape()
-//        }
-    }
-    
-    func startAnimating() {
-        self.animateToNewShape()
-    }
-    
-    func stopAnimating() {
-        self.shapeLayer.removeAnimation(forKey: "path")
-    }
-    
-    private func animateToNewShape() {
-        if self.shapeLayer.path == nil {
-            let points = self.generateNextCurve(for: self.bounds.size)
-            self.shapeLayer.path = UIBezierPath.smoothCurve(through: points, length: bounds.width, smoothness: self.smoothness, curve: true).cgPath
-        }
-        
-        let nextPoints = self.generateNextCurve(for: self.bounds.size)
-        let nextPath = UIBezierPath.smoothCurve(through: nextPoints, length: bounds.width, smoothness: self.smoothness, curve: true).cgPath
-        
-        let animation = CABasicAnimation(keyPath: "path")
-        let previousPath = self.shapeLayer.path
-        self.shapeLayer.path = nextPath
-        animation.duration = CFTimeInterval(1 / (self.minSpeed + (self.maxSpeed - self.minSpeed) * self.speedLevel))
-        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        animation.fromValue = previousPath
-        animation.toValue = nextPath
-        animation.isRemovedOnCompletion = false
-        animation.fillMode = .forwards
-        animation.completion = { [weak self] finished in
-            if finished {
-                self?.animateToNewShape()
-            }
-        }
-        self.shapeLayer.add(animation, forKey: "path")
-        
-        self.lastSpeedLevel = self.speedLevel
-        self.speedLevel = 0
-    }
-    
-    private func generateNextCurve(for size: CGSize) -> [CGPoint] {
-        let randomness = minRandomness + (maxRandomness - minRandomness) * speedLevel
-        return curve(pointsCount: pointsCount, randomness: randomness).map {
-            return CGPoint(x: $0.x * CGFloat(size.width), y: size.height - 18.0 + $0.y * 12.0)
-        }
-    }
-
-    private func curve(pointsCount: Int, randomness: CGFloat) -> [CGPoint] {
-        let segment = 1.0 / CGFloat(pointsCount - 1)
-
-        let rgen = { () -> CGFloat in
-            let accuracy: UInt32 = 1000
-            let random = arc4random_uniform(accuracy)
-            return CGFloat(random) / CGFloat(accuracy)
-        }
-        let rangeStart: CGFloat = 1.0 / (1.0 + randomness / 10.0)
-
-        let points = (0 ..< pointsCount).map { i -> CGPoint in
-            let randPointOffset = (rangeStart + CGFloat(rgen()) * (1 - rangeStart)) / 2
-            let segmentRandomness: CGFloat = randomness
-            
-            let pointX: CGFloat
-            let pointY: CGFloat
-            let randomXDelta: CGFloat
-            if i == 0 {
-                pointX = 0.0
-                pointY = 0.0
-                randomXDelta = 0.0
-            } else if i == pointsCount - 1 {
-                pointX = 1.0
-                pointY = 0.0
-                randomXDelta = 0.0
-            } else {
-                pointX = segment * CGFloat(i)
-                pointY = ((segmentRandomness * CGFloat(arc4random_uniform(100)) / CGFloat(100)) - segmentRandomness * 0.5) * randPointOffset
-                randomXDelta = segment - segment * randPointOffset
-            }
-
-            return CGPoint(x: pointX + randomXDelta, y: pointY)
-        }
-
-        return points
-    }
-    
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        self.shapeLayer.position = CGPoint(x: self.bounds.width / 2.0, y: self.bounds.height / 2.0)
-        self.shapeLayer.bounds = self.bounds
-        CATransaction.commit()
+        self.backgroundNode.frame = CGRect(origin: CGPoint(), size: size)
     }
 }

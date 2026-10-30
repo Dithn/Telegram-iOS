@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
@@ -62,26 +61,49 @@ private enum TranslationSettingsControllerEntry: ItemListNodeEntry {
         let arguments = arguments as! TranslationSettingsControllerArguments
         switch self {
             case let .language(_, _, title, subtitle, value, code):
-                return LocalizationListItem(presentationData: presentationData, id: code, title: title, subtitle: subtitle, checked: value, activity: false, loading: false, editing: LocalizationListItemEditing(editable: false, editing: false, revealed: false, reorderable: false), sectionId: self.section, alwaysPlain: false, action: {
+                return LocalizationListItem(presentationData: presentationData, systemStyle: .glass, id: code, title: title, subtitle: subtitle, checked: value, activity: false, loading: false, editing: LocalizationListItemEditing(editable: false, editing: false, revealed: false, reorderable: false), sectionId: self.section, alwaysPlain: false, action: {
                     arguments.updateLanguageSelected(code, !value)
                 }, setItemWithRevealedOptions: { _, _ in }, removeItem: { _ in })
         }
     }
 }
 
-private func translationSettingsControllerEntries(theme: PresentationTheme, strings: PresentationStrings, settings: TranslationSettings, languages: [(String, String, String)]) -> [TranslationSettingsControllerEntry] {
+private func translationSettingsControllerEntries(theme: PresentationTheme, strings: PresentationStrings, initiallySelectedLanguages: Set<String>, settings: TranslationSettings, languages: [(String, String, String)]) -> [TranslationSettingsControllerEntry] {
     var entries: [TranslationSettingsControllerEntry] = []
-  
+    
     var index: Int32 = 0
     var selectedLanguages: Set<String>
     if let ignoredLanguages = settings.ignoredLanguages {
         selectedLanguages = Set(ignoredLanguages)
     } else {
-        selectedLanguages = Set([strings.baseLanguageCode])
+        var activeLanguage = strings.baseLanguageCode
+        let rawSuffix = "-raw"
+        if activeLanguage.hasSuffix(rawSuffix) {
+            activeLanguage = String(activeLanguage.dropLast(rawSuffix.count))
+        }
+        activeLanguage = normalizeTranslationLanguage(activeLanguage)
+        selectedLanguages = Set([activeLanguage])
+        for language in systemLanguageCodes() {
+            selectedLanguages.insert(language)
+        }
     }
+    
+    var addedLanguages = Set<String>()
+    
     for (code, title, subtitle) in languages {
-        entries.append(.language(index, theme, title, subtitle, selectedLanguages.contains(code), code))
-        index += 1
+        if !addedLanguages.contains(code), initiallySelectedLanguages.contains(code) {
+            addedLanguages.insert(code)
+            entries.append(.language(index, theme, title, subtitle, selectedLanguages.contains(code), code))
+            index += 1
+        }
+    }
+    
+    for (code, title, subtitle) in languages {
+        if !addedLanguages.contains(code) {
+            addedLanguages.insert(code)
+            entries.append(.language(index, theme, title, subtitle, selectedLanguages.contains(code), code))
+            index += 1
+        }
     }
   
     return entries
@@ -91,16 +113,25 @@ public func translationSettingsController(context: AccountContext) -> ViewContro
     let actionsDisposable = DisposableSet()
     
     let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-    let interfaceLanguageCode = presentationData.strings.baseLanguageCode
+    var interfaceLanguageCode = presentationData.strings.baseLanguageCode
+    let rawSuffix = "-raw"
+    if interfaceLanguageCode.hasSuffix(rawSuffix) {
+        interfaceLanguageCode = String(interfaceLanguageCode.dropLast(rawSuffix.count))
+    }
     
     let arguments = TranslationSettingsControllerArguments(context: context, updateLanguageSelected: { code, value in
         let _ = updateTranslationSettingsInteractively(accountManager: context.sharedContext.accountManager, { current in
             var updated = current
             var updatedIgnoredLanguages = updated.ignoredLanguages ?? []
-            if value {
-                if current.ignoredLanguages == nil {
-                    updatedIgnoredLanguages.append(interfaceLanguageCode)
+            if current.ignoredLanguages == nil {
+                updatedIgnoredLanguages.append(interfaceLanguageCode)
+                for language in systemLanguageCodes() {
+                    if !updatedIgnoredLanguages.contains(language) {
+                        updatedIgnoredLanguages.append(language)
+                    }
                 }
+            }
+            if value {
                 if !updatedIgnoredLanguages.contains(code) {
                     updatedIgnoredLanguages.append(code)
                 }
@@ -141,13 +172,38 @@ public func translationSettingsController(context: AccountContext) -> ViewContro
             }
         }
     }
+    
+    let initiallySelectedLanguages = Atomic<Set<String>?>(value: nil)
 
     let sharedData = context.sharedContext.accountManager.sharedData(keys: [ApplicationSpecificSharedDataKeys.translationSettings])
     let signal = combineLatest(queue: Queue.mainQueue(), context.sharedContext.presentationData, sharedData)
     |> map { presentationData, sharedData -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let settings = sharedData.entries[ApplicationSpecificSharedDataKeys.translationSettings]?.get(TranslationSettings.self) ?? TranslationSettings.defaultSettings
+
+        let initiallySelectedLanguages = initiallySelectedLanguages.modify({ current in
+            if let current {
+                return current
+            } else {
+                var selectedLanguages: Set<String>
+                if let ignoredLanguages = settings.ignoredLanguages {
+                    selectedLanguages = Set(ignoredLanguages)
+                } else {
+                    var activeLanguage = presentationData.strings.baseLanguageCode
+                    let rawSuffix = "-raw"
+                    if activeLanguage.hasSuffix(rawSuffix) {
+                        activeLanguage = String(activeLanguage.dropLast(rawSuffix.count))
+                    }
+                    selectedLanguages = Set([activeLanguage])
+                    for language in systemLanguageCodes() {
+                        selectedLanguages.insert(language)
+                    }
+                }
+                return selectedLanguages
+            }
+        })
+    
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.DoNotTranslate_Title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: translationSettingsControllerEntries(theme: presentationData.theme, strings: presentationData.strings, settings: settings, languages: languages), style: .blocks, animateChanges: false)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: translationSettingsControllerEntries(theme: presentationData.theme, strings: presentationData.strings, initiallySelectedLanguages: initiallySelectedLanguages ?? Set(), settings: settings, languages: languages), style: .blocks, animateChanges: false)
         
         return (controllerState, (listState, arguments))
     }

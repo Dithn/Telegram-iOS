@@ -3,7 +3,6 @@ import UIKit
 import Display
 import AsyncDisplayKit
 import SwiftSignalKit
-import Postbox
 import AccountContext
 
 private final class OverlayMediaControllerNodeView: UITracingLayerView {
@@ -30,7 +29,7 @@ private final class OverlayMediaVideoNodeData {
 
 
 
-final class OverlayMediaControllerNode: ASDisplayNode, UIGestureRecognizerDelegate {
+final class OverlayMediaControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
     private let updatePossibleEmbeddingItem: (OverlayMediaControllerEmbeddingItem?) -> Void
     private let embedPossibleEmbeddingItem: (OverlayMediaControllerEmbeddingItem) -> Bool
     
@@ -61,12 +60,12 @@ final class OverlayMediaControllerNode: ASDisplayNode, UIGestureRecognizerDelega
         
         let panRecognizer = UIPanGestureRecognizer(target: self, action: #selector(self.panGesture(_:)))
         panRecognizer.cancelsTouchesInView = false
-        panRecognizer.delegate = self
+        panRecognizer.delegate = self.wrappedGestureRecognizerDelegate
         self.view.addGestureRecognizer(panRecognizer)
         
         let pinchRecognizer = UIPinchGestureRecognizer(target: self, action: #selector(self.pinchGesture(_:)))
         pinchRecognizer.cancelsTouchesInView = false
-        pinchRecognizer.delegate = self
+        pinchRecognizer.delegate = self.wrappedGestureRecognizerDelegate
         self.view.addGestureRecognizer(pinchRecognizer)
     }
     
@@ -110,6 +109,8 @@ final class OverlayMediaControllerNode: ASDisplayNode, UIGestureRecognizerDelega
             layoutInsets.top += 38.0
         }
         let inset: CGFloat = 4.0 + layout.safeInsets.left
+        // The right edge keeps the right safe inset: beside iPhone Duo's side strip the two differ.
+        let rightInset: CGFloat = 4.0 + layout.safeInsets.right
         var result = CGPoint()
         if location.x.isZero {
             if isMinimized {
@@ -121,15 +122,19 @@ final class OverlayMediaControllerNode: ASDisplayNode, UIGestureRecognizerDelega
             }
         } else {
             if isMinimized {
-                result.x = layout.size.width - inset - 40.0
+                result.x = layout.size.width - rightInset - 40.0
             } else if hidden {
-                result.x = layout.size.width + inset
+                result.x = layout.size.width + rightInset
             } else {
-                result.x = layout.size.width - inset - size.width
+                result.x = layout.size.width - rightInset - size.width
             }
         }
         if location.y.isZero {
             result.y = layoutInsets.top + inset
+            if !location.x.isZero, let island = layout.topBarStatusIsland {
+                // Top right: below a status island in that corner (iPhone Duo, unfolded portrait).
+                result.y = max(result.y, island.height + 4.0)
+            }
         } else {
             result.y = layout.size.height - layoutInsets.bottom - inset - size.height
         }
@@ -293,10 +298,12 @@ final class OverlayMediaControllerNode: ASDisplayNode, UIGestureRecognizerDelega
                 if customTransition {
                     node.removeFromSupernode()
                 } else {
-                    let nodeSize = self.videoNodes[index].currentSize
-                    node.layer.animateFrame(from: node.layer.frame, to: CGRect(origin: self.nodePosition(layout: validLayout, size: nodeSize, location: self.videoNodes[index].location, hidden: true, isMinimized: self.videoNodes[index].isMinimized, tempExtendedTopInset: node.tempExtendedTopInset), size: nodeSize), duration: 0.3, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { [weak node] _ in
-                        node?.removeFromSupernode()
-                    })
+                    if !node.isRemoved {
+                        let nodeSize = self.videoNodes[index].currentSize
+                        node.layer.animateFrame(from: node.layer.frame, to: CGRect(origin: self.nodePosition(layout: validLayout, size: nodeSize, location: self.videoNodes[index].location, hidden: true, isMinimized: self.videoNodes[index].isMinimized, tempExtendedTopInset: node.tempExtendedTopInset), size: nodeSize), duration: 0.3, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { [weak node] _ in
+                            node?.removeFromSupernode()
+                        })
+                    }
                 }
             } else {
                 node.removeFromSupernode()
@@ -368,11 +375,16 @@ final class OverlayMediaControllerNode: ASDisplayNode, UIGestureRecognizerDelega
                         }
                         self.videoNodes[index].location = updatedLocation
                         
-                        draggingNode.frame = CGRect(origin: self.nodePosition(layout: validLayout, size: nodeSize, location: updatedLocation, hidden: !draggingNode.hasAttachedContext, isMinimized: self.videoNodes[index].isMinimized, tempExtendedTopInset: draggingNode.tempExtendedTopInset), size: nodeSize)
-                        draggingNode.layer.animateFrame(from: previousFrame, to: draggingNode.frame, duration: 0.3, timingFunction: kCAMediaTimingFunctionSpring)
+                        draggingNode.frame = CGRect(origin: self.nodePosition(layout: validLayout, size: nodeSize, location: updatedLocation, hidden: !draggingNode.hasAttachedContext || shouldDismiss, isMinimized: self.videoNodes[index].isMinimized, tempExtendedTopInset: draggingNode.tempExtendedTopInset), size: nodeSize)
+                        draggingNode.layer.animateFrame(from: previousFrame, to: draggingNode.frame, duration: 0.3, timingFunction: kCAMediaTimingFunctionSpring, completion: { [weak draggingNode] _ in
+                            if draggingNode?.isRemoved == true {
+                                draggingNode?.removeFromSupernode()
+                            }
+                        })
                         self.draggingNode = nil
                         
                         if shouldDismiss && !draggingNode.isMinimizeable {
+                            draggingNode.isRemoved = true
                             draggingNode.dismiss()
                         }
                     }

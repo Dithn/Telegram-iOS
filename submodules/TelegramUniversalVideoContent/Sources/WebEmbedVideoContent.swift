@@ -10,31 +10,34 @@ import UniversalMediaPlayer
 import LegacyComponents
 import AccountContext
 import PhotoResources
+import RangeSet
 
 public final class WebEmbedVideoContent: UniversalVideoContent {
     public let id: AnyHashable
+    let userLocation: MediaResourceUserLocation
     let webPage: TelegramMediaWebpage
     public let webpageContent: TelegramMediaWebpageLoadedContent
     public let dimensions: CGSize
-    public let duration: Int32
+    public let duration: Double
     let forcedTimestamp: Int?
     let openUrl: (URL) -> Void
     
-    public init?(webPage: TelegramMediaWebpage, webpageContent: TelegramMediaWebpageLoadedContent, forcedTimestamp: Int? = nil, openUrl: @escaping (URL) -> Void) {
+    public init?(userLocation: MediaResourceUserLocation, webPage: TelegramMediaWebpage, webpageContent: TelegramMediaWebpageLoadedContent, forcedTimestamp: Int? = nil, openUrl: @escaping (URL) -> Void) {
         guard let embedUrl = webpageContent.embedUrl else {
             return nil
         }
         self.id = AnyHashable(embedUrl)
+        self.userLocation = userLocation
         self.webPage = webPage
         self.webpageContent = webpageContent
         self.dimensions = webpageContent.embedSize?.cgSize ?? CGSize(width: 128.0, height: 128.0)
-        self.duration = Int32(webpageContent.duration ?? (0 as Int))
+        self.duration = webpageContent.duration.flatMap(Double.init) ?? 0.0
         self.forcedTimestamp = forcedTimestamp
         self.openUrl = openUrl
     }
     
-    public func makeContentNode(postbox: Postbox, audioSession: ManagedAudioSession) -> UniversalVideoContentNode & ASDisplayNode {
-        return WebEmbedVideoContentNode(postbox: postbox, audioSessionManager: audioSession, webPage: self.webPage, webpageContent: self.webpageContent, forcedTimestamp: self.forcedTimestamp, openUrl: self.openUrl)
+    public func makeContentNode(context: AccountContext, postbox: Postbox, audioSession: ManagedAudioSession) -> UniversalVideoContentNode & ASDisplayNode {
+        return WebEmbedVideoContentNode(postbox: postbox, audioSessionManager: audioSession, userLocation: self.userLocation, webPage: self.webPage, webpageContent: self.webpageContent, forcedTimestamp: self.forcedTimestamp, openUrl: self.openUrl)
     }
 }
  
@@ -50,9 +53,13 @@ final class WebEmbedVideoContentNode: ASDisplayNode, UniversalVideoContentNode {
         return self._status.get()
     }
     
-    private let _bufferingStatus = Promise<(IndexSet, Int)?>()
-    var bufferingStatus: Signal<(IndexSet, Int)?, NoError> {
+    private let _bufferingStatus = Promise<(RangeSet<Int64>, Int64)?>()
+    var bufferingStatus: Signal<(RangeSet<Int64>, Int64)?, NoError> {
         return self._bufferingStatus.get()
+    }
+    
+    var isNativePictureInPictureActive: Signal<Bool, NoError> {
+        return .single(false)
     }
     
     private var seekId: Int = 0
@@ -71,7 +78,7 @@ final class WebEmbedVideoContentNode: ASDisplayNode, UniversalVideoContentNode {
         
     private var readyDisposable = MetaDisposable()
     
-    init(postbox: Postbox, audioSessionManager: ManagedAudioSession, webPage: TelegramMediaWebpage, webpageContent: TelegramMediaWebpageLoadedContent, forcedTimestamp: Int? = nil, openUrl: @escaping (URL) -> Void) {
+    init(postbox: Postbox, audioSessionManager: ManagedAudioSession, userLocation: MediaResourceUserLocation, webPage: TelegramMediaWebpage, webpageContent: TelegramMediaWebpageLoadedContent, forcedTimestamp: Int? = nil, openUrl: @escaping (URL) -> Void) {
         self.webpageContent = webpageContent
         
         if let embedSize = webpageContent.embedSize {
@@ -92,7 +99,7 @@ final class WebEmbedVideoContentNode: ASDisplayNode, UniversalVideoContentNode {
         self.addSubnode(self.imageNode)
         
         if let image = webpageContent.image {
-            self.imageNode.setSignal(chatMessagePhoto(postbox: postbox, photoReference: .webPage(webPage: WebpageReference(webPage), media: image)))
+            self.imageNode.setSignal(chatMessagePhoto(postbox: postbox, userLocation: userLocation, photoReference: .webPage(webPage: WebpageReference(webPage), media: image)))
             self.imageNode.imageUpdated = { [weak self] _ in
                 self?._ready.set(.single(Void()))
             }
@@ -113,7 +120,7 @@ final class WebEmbedVideoContentNode: ASDisplayNode, UniversalVideoContentNode {
         self.readyDisposable.dispose()
     }
     
-    func updateLayout(size: CGSize, transition: ContainedViewLayoutTransition) {
+    func updateLayout(size: CGSize, actualSize: CGSize, transition: ContainedViewLayoutTransition) {
         transition.updatePosition(node: self.playerNode, position: CGPoint(x: size.width / 2.0, y: size.height / 2.0))
         transition.updateTransformScale(node: self.playerNode, scale: size.width / self.intrinsicDimensions.width)
 
@@ -161,6 +168,12 @@ final class WebEmbedVideoContentNode: ASDisplayNode, UniversalVideoContentNode {
         }
     }
     
+    func setSoundMuted(soundMuted: Bool) {
+    }
+    
+    func continueWithOverridingAmbientMode(isAmbient: Bool) {
+    }
+    
     func setForceAudioToSpeaker(_ forceAudioToSpeaker: Bool) {
     }
     
@@ -172,6 +185,17 @@ final class WebEmbedVideoContentNode: ASDisplayNode, UniversalVideoContentNode {
     
     func setBaseRate(_ baseRate: Double) {
         self.playerNode.setBaseRate(baseRate)
+    }
+    
+    func setVideoQuality(_ videoQuality: UniversalVideoContentVideoQuality) {
+    }
+    
+    func videoQualityState() -> (current: Int, preferred: UniversalVideoContentVideoQuality, available: [Int])? {
+        return nil
+    }
+    
+    func videoQualityStateSignal() -> Signal<(current: Int, preferred: UniversalVideoContentVideoQuality, available: [Int])?, NoError> {
+        return .single(nil)
     }
     
     func addPlaybackCompleted(_ f: @escaping () -> Void) -> Int {
@@ -190,5 +214,15 @@ final class WebEmbedVideoContentNode: ASDisplayNode, UniversalVideoContentNode {
     }
 
     func setCanPlaybackWithoutHierarchy(_ canPlaybackWithoutHierarchy: Bool) {
+    }
+    
+    func enterNativePictureInPicture() -> Bool {
+        return false
+    }
+    
+    func exitNativePictureInPicture() {
+    }
+    
+    func setNativePictureInPictureIsActive(_ value: Bool) {
     }
 }

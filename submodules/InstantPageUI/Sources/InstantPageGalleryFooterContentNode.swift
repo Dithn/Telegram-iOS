@@ -2,14 +2,12 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import Display
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import Photos
 import TelegramPresentationData
 import TextFormat
 import AccountContext
-import ShareController
 import GalleryUI
 import AppBundle
 
@@ -106,18 +104,21 @@ final class InstantPageGalleryFooterContentNode: GalleryFooterContentNode {
         self.actionButton.isHidden = shareMedia == nil
     }
     
-    override func updateLayout(size: CGSize, metrics: LayoutMetrics, leftInset: CGFloat, rightInset: CGFloat, bottomInset: CGFloat, contentInset: CGFloat, transition: ContainedViewLayoutTransition) -> CGFloat {
+    override func updateLayout(size: CGSize, metrics: LayoutMetrics, leftInset: CGFloat, rightInset: CGFloat, bottomInset: CGFloat, contentInset: CGFloat, transition: ContainedViewLayoutTransition) -> LayoutInfo {
         let width = size.width
         var panelHeight: CGFloat = 44.0 + bottomInset + contentInset
         if !self.textNode.isHidden {
-            let sideInset: CGFloat = leftInset + 8.0
+            // Each side keeps its own inset (they differ beside iPhone Duo's side strip). A long caption can rise to the
+            // strip's corner block, so it keeps the screen's insets, which the buttons at the bottom leave out.
+            let captionInsets = self.screenSideInsets ?? (leftInset, rightInset)
+            let sideInset: CGFloat = captionInsets.left + 8.0
             let topInset: CGFloat = 0.0
             let bottomInset: CGFloat = 0.0
-            let textSize = self.textNode.updateLayout(CGSize(width: width - sideInset * 2.0, height: CGFloat.greatestFiniteMagnitude))
+            let textSize = self.textNode.updateLayout(CGSize(width: width - sideInset - captionInsets.right - 8.0, height: CGFloat.greatestFiniteMagnitude))
             
             var x = sideInset
             if let hasRTL = self.textNode.cachedLayout?.hasRTL, hasRTL {
-                x = width - rightInset - 8.0 - textSize.width
+                x = width - captionInsets.right - 8.0 - textSize.width
             }
             
             panelHeight += textSize.height + topInset + bottomInset
@@ -126,7 +127,7 @@ final class InstantPageGalleryFooterContentNode: GalleryFooterContentNode {
         
         self.actionButton.frame = CGRect(origin: CGPoint(x: leftInset, y: panelHeight - bottomInset - 44.0), size: CGSize(width: 44.0, height: 44.0))
         
-        return panelHeight
+        return LayoutInfo(height: panelHeight, needsShadow: false)
     }
     
     override func animateIn(fromHeight: CGFloat, previousContentNode: GalleryFooterContentNode, transition: ContainedViewLayoutTransition) {
@@ -147,7 +148,7 @@ final class InstantPageGalleryFooterContentNode: GalleryFooterContentNode {
     
     @objc func actionButtonPressed() {
         if let shareMedia = self.shareMedia {
-            self.controllerInteraction?.presentController(ShareController(context: self.context, subject: .media(shareMedia), preferredAction: .saveToCameraRoll, showInChat: nil, externalShare: true, immediateExternalShare: false), nil)
+            self.controllerInteraction?.presentController(self.context.sharedContext.makeShareScreen(context: self.context, params: ShareControllerParams(subject: .media(shareMedia, nil), preferredAction: .saveToCameraRoll, showInChat: nil, externalShare: true, immediateExternalShare: false)), nil)
         }
     }
 }

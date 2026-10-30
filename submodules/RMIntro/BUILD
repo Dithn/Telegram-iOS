@@ -1,3 +1,5 @@
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
 load("//build-system/bazel-utils:unique_directories.bzl", "unique_directories")
 
 private_headers = glob([
@@ -21,6 +23,7 @@ objc_library(
     copts = [
         "-I{}/{}".format(package_name(), directory) for directory in unique_directories(private_headers)
     ] + [
+        "-Werror",
         "-I{}/PublicHeaders/RMIntro".format(package_name()),
     ],
     deps = [

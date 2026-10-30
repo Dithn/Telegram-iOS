@@ -1,7 +1,6 @@
 import Foundation
 import UIKit
 import AsyncDisplayKit
-import Postbox
 import TelegramCore
 import Display
 import TelegramPresentationData
@@ -10,9 +9,22 @@ import MergeLists
 import AccountContext
 import Emoji
 import ChatPresentationInterfaceState
+import AnimationCache
+import MultiAnimationRenderer
+import TextFormat
+import ChatControllerInteraction
+import ContextUI
+import SwiftSignalKit
+import PremiumUI
+import StickerPeekUI
+import UndoUI
+import Pasteboard
+import ChatContextQuery
+import ChatInputContextPanelNode
 
-private struct EmojisChatInputContextPanelEntryStableId: Hashable, Equatable {
-    let symbol: String
+private enum EmojisChatInputContextPanelEntryStableId: Hashable, Equatable {
+    case symbol(String)
+    case media(EngineMedia.Id)
 }
 
 private func backgroundCenterImage(_ theme: PresentationTheme) -> UIImage? {
@@ -55,25 +67,30 @@ private struct EmojisChatInputContextPanelEntry: Comparable, Identifiable {
     let theme: PresentationTheme
     let symbol: String
     let text: String
+    let file: TelegramMediaFile?
     
     var stableId: EmojisChatInputContextPanelEntryStableId {
-        return EmojisChatInputContextPanelEntryStableId(symbol: self.symbol)
+        if let file = self.file {
+            return .media(file.fileId)
+        } else {
+            return .symbol(self.symbol)
+        }
     }
     
     func withUpdatedTheme(_ theme: PresentationTheme) -> EmojisChatInputContextPanelEntry {
-        return EmojisChatInputContextPanelEntry(index: self.index, theme: theme, symbol: self.symbol, text: self.text)
+        return EmojisChatInputContextPanelEntry(index: self.index, theme: theme, symbol: self.symbol, text: self.text, file: self.file)
     }
     
     static func ==(lhs: EmojisChatInputContextPanelEntry, rhs: EmojisChatInputContextPanelEntry) -> Bool {
-        return lhs.index == rhs.index && lhs.symbol == rhs.symbol && lhs.text == rhs.text && lhs.theme === rhs.theme
+        return lhs.index == rhs.index && lhs.symbol == rhs.symbol && lhs.text == rhs.text && lhs.theme === rhs.theme && lhs.file?.fileId == rhs.file?.fileId
     }
     
     static func <(lhs: EmojisChatInputContextPanelEntry, rhs: EmojisChatInputContextPanelEntry) -> Bool {
         return lhs.index < rhs.index
     }
     
-    func item(account: Account, emojiSelected: @escaping (String) -> Void) -> ListViewItem {
-        return EmojisChatInputPanelItem(theme: self.theme, symbol: self.symbol, text: self.text, emojiSelected: emojiSelected)
+    func item(context: AccountContext, animationCache: AnimationCache, animationRenderer: MultiAnimationRenderer, emojiSelected: @escaping (String, TelegramMediaFile?) -> Void) -> ListViewItem {
+        return EmojisChatInputPanelItem(context: context, theme: self.theme, symbol: self.symbol, text: self.text, file: self.file, animationCache: animationCache, animationRenderer: animationRenderer, emojiSelected: emojiSelected)
     }
 }
 
@@ -83,12 +100,12 @@ private struct EmojisChatInputContextPanelTransition {
     let updates: [ListViewUpdateItem]
 }
 
-private func preparedTransition(from fromEntries: [EmojisChatInputContextPanelEntry], to toEntries: [EmojisChatInputContextPanelEntry], account: Account, emojiSelected: @escaping (String) -> Void) -> EmojisChatInputContextPanelTransition {
+private func preparedTransition(from fromEntries: [EmojisChatInputContextPanelEntry], to toEntries: [EmojisChatInputContextPanelEntry], context: AccountContext, animationCache: AnimationCache, animationRenderer: MultiAnimationRenderer, emojiSelected: @escaping (String, TelegramMediaFile?) -> Void) -> EmojisChatInputContextPanelTransition {
     let (deleteIndices, indicesAndItems, updateIndices) = mergeListsStableWithUpdates(leftList: fromEntries, rightList: toEntries)
     
     let deletions = deleteIndices.map { ListViewDeleteItem(index: $0, directionHint: nil) }
-    let insertions = indicesAndItems.map { ListViewInsertItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(account: account, emojiSelected: emojiSelected), directionHint: nil) }
-    let updates = updateIndices.map { ListViewUpdateItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(account: account, emojiSelected: emojiSelected), directionHint: nil) }
+    let insertions = indicesAndItems.map { ListViewInsertItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(context: context, animationCache: animationCache, animationRenderer: animationRenderer, emojiSelected: emojiSelected), directionHint: nil) }
+    let updates = updateIndices.map { ListViewUpdateItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(context: context, animationCache: animationCache, animationRenderer: animationRenderer, emojiSelected: emojiSelected), directionHint: nil) }
     
     return EmojisChatInputContextPanelTransition(deletions: deletions, insertions: insertions, updates: updates)
 }
@@ -105,8 +122,21 @@ final class EmojisChatInputContextPanelNode: ChatInputContextPanelNode {
     private var enqueuedTransitions: [(EmojisChatInputContextPanelTransition, Bool)] = []
     private var validLayout: (CGSize, CGFloat, CGFloat, CGFloat)?
     private var presentationInterfaceState: ChatPresentationInterfaceState?
+
+    /// Horizontal position of the caret (in this node's coordinate space) that the bubble's
+    /// arrow should point at. Set by the controller before `updateLayout`. When nil, the
+    /// bubble falls back to its legacy left-anchored position.
+    var cursorAnchorX: CGFloat?
     
-    override init(context: AccountContext, theme: PresentationTheme, strings: PresentationStrings, fontSize: PresentationFontSize) {
+    private let animationCache: AnimationCache
+    private let animationRenderer: MultiAnimationRenderer
+    
+    private weak var peekController: PeekController?
+    
+    override init(context: AccountContext, theme: PresentationTheme, strings: PresentationStrings, fontSize: PresentationFontSize, chatPresentationContext: ChatPresentationContext) {
+        self.animationCache = chatPresentationContext.animationCache
+        self.animationRenderer = chatPresentationContext.animationRenderer
+        
         self.backgroundNode = ASImageNode()
         self.backgroundNode.displayWithoutProcessing = true
         self.backgroundNode.displaysAsynchronously = false
@@ -126,7 +156,7 @@ final class EmojisChatInputContextPanelNode: ChatInputContextPanelNode {
         self.clippingNode = ASDisplayNode()
         self.clippingNode.clipsToBounds = true
         
-        self.listView = ListView()
+        self.listView = ListViewImpl()
         self.listView.isOpaque = false
         self.listView.view.disablesInteractiveTransitionGestureRecognizer = true
         self.listView.transform = CATransform3DMakeRotation(-CGFloat.pi / 2.0, 0.0, 0.0, 1.0)
@@ -134,7 +164,7 @@ final class EmojisChatInputContextPanelNode: ChatInputContextPanelNode {
             return strings.VoiceOver_ScrollStatus(row, count).string
         }
         
-        super.init(context: context, theme: theme, strings: strings, fontSize: fontSize)
+        super.init(context: context, theme: theme, strings: strings, fontSize: fontSize, chatPresentationContext: chatPresentationContext)
         
         self.placement = .overTextInput
         self.isOpaque = false
@@ -145,14 +175,285 @@ final class EmojisChatInputContextPanelNode: ChatInputContextPanelNode {
         
         self.addSubnode(self.clippingNode)
         self.clippingNode.addSubnode(self.listView)
+        
+        let peekRecognizer = PeekControllerGestureRecognizer(contentAtPoint: { [weak self] point in
+            guard let self else {
+                return nil
+            }
+            return self.peekContentAtPoint(point: point)
+        }, present: { [weak self] content, sourceView, sourceRect in
+            guard let strongSelf = self else {
+                return nil
+            }
+            
+            let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
+            let controller = makePeekController(presentationData: presentationData, content: content, sourceView: {
+                return (sourceView, sourceRect)
+            })
+            /*controller.visibilityUpdated = { [weak self] visible in
+                self?.previewingStickersPromise.set(visible)
+                self?.requestDisableStickerAnimations?(visible)
+                self?.simulateUpdateLayout(isVisible: !visible)
+            }*/
+            strongSelf.peekController = controller
+            strongSelf.interfaceInteraction?.presentController(controller, nil)
+            return controller
+        }, updateContent: { [weak self] content in
+            guard let strongSelf = self else {
+                return
+            }
+            
+            let _ = strongSelf
+        })
+        self.view.addGestureRecognizer(peekRecognizer)
     }
     
-    func updateResults(_ results: [(String, String)]) {
+    private func peekContentAtPoint(point: CGPoint) -> Signal<(UIView, CGRect, PeekControllerContent)?, NoError>? {
+        guard let presentationInterfaceState = self.presentationInterfaceState else {
+            return nil
+        }
+        guard let chatPeerId = presentationInterfaceState.renderedPeer?.peer?.id else {
+            return nil
+        }
+        
+        var maybeFile: TelegramMediaFile?
+        var maybeItemLayer: CALayer?
+        
+        self.listView.forEachItemNode { itemNode in
+            if let itemNode = itemNode as? EmojisChatInputPanelItemNode, let item = itemNode.item {
+                let localPoint = self.view.convert(point, to: itemNode.view)
+                if itemNode.view.bounds.contains(localPoint) {
+                    maybeFile = item.file
+                    maybeItemLayer = itemNode.layer
+                }
+            }
+        }
+        
+        guard let file = maybeFile else {
+            return nil
+        }
+        guard let itemLayer = maybeItemLayer else {
+            return nil
+        }
+        
+        let _ = chatPeerId
+        let _ = file
+        let _ = itemLayer
+        
+        var collectionId: EngineItemCollectionId?
+        for attribute in file.attributes {
+            if case let .CustomEmoji(_, _, _, packReference) = attribute {
+                switch packReference {
+                case let .id(id, _):
+                    collectionId = EngineItemCollectionId(namespace: Namespaces.ItemCollection.CloudEmojiPacks, id: id)
+                default:
+                    break
+                }
+            }
+        }
+        
+        var bubbleUpEmojiOrStickersets: [EngineItemCollectionId] = []
+        if let collectionId {
+            bubbleUpEmojiOrStickersets.append(collectionId)
+        }
+        
+        let context = self.context
+        let accountPeerId = context.account.peerId
+        
+        let _ = bubbleUpEmojiOrStickersets
+        let _ = context
+        let _ = accountPeerId
+        
+        return context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: accountPeerId))
+        |> map { peer -> Bool in
+            var hasPremium = false
+            if case let .user(user) = peer, user.isPremium {
+                hasPremium = true
+            }
+            return hasPremium
+        }
+        |> deliverOnMainQueue
+        |> map { [weak self, weak itemLayer] hasPremium -> (UIView, CGRect, PeekControllerContent)? in
+            guard let strongSelf = self, let itemLayer = itemLayer else {
+                return nil
+            }
+            
+            let _ = strongSelf
+            let _ = itemLayer
+            
+            var menuItems: [ContextMenuItem] = []
+            menuItems.removeAll()
+            
+            let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+            let _ = presentationData
+            
+            var isLocked = false
+            if !hasPremium {
+                isLocked = file.isPremiumEmoji
+                if isLocked && chatPeerId == context.account.peerId {
+                    isLocked = false
+                }
+            }
+            
+            if let interaction = strongSelf.interfaceInteraction {
+                let _ = interaction
+                
+                let sendEmoji: (TelegramMediaFile) -> Void = { file in
+                    guard let self else {
+                        return
+                    }
+                    guard let controller = (self.interfaceInteraction?.chatController() as? ChatControllerImpl) else {
+                        return
+                    }
+                    
+                    var text = "."
+                    var emojiAttribute: ChatTextInputTextCustomEmojiAttribute?
+                    loop: for attribute in file.attributes {
+                        switch attribute {
+                        case let .CustomEmoji(_, _, displayText, stickerPackReference):
+                            text = displayText
+                            
+                            var packId: EngineItemCollectionId?
+                            if case let .id(id, _) = stickerPackReference {
+                                packId = EngineItemCollectionId(namespace: Namespaces.ItemCollection.CloudEmojiPacks, id: id)
+                            }
+                            emojiAttribute = ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: packId, fileId: file.fileId.id, file: file)
+                            break loop
+                        default:
+                            break
+                        }
+                    }
+                    
+                    if let emojiAttribute {
+                        controller.controllerInteraction?.sendEmoji(text, emojiAttribute, true)
+                    }
+                }
+                let setStatus: (TelegramMediaFile) -> Void = { file in
+                    guard let self else {
+                        return
+                    }
+                    guard let controller = (self.interfaceInteraction?.chatController() as? ChatControllerImpl) else {
+                        return
+                    }
+                    
+                    let _ = self.context.engine.accountData.setEmojiStatus(file: file, expirationDate: nil).startStandalone()
+                    
+                    var animateInAsReplacement = false
+                    animateInAsReplacement = false
+                    /*if let currentUndoOverlayController = strongSelf.currentUndoOverlayController {
+                        currentUndoOverlayController.dismissWithCommitActionAndReplacementAnimation()
+                        strongSelf.currentUndoOverlayController = nil
+                        animateInAsReplacement = true
+                    }*/
+                                                
+                    let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
+                    
+                    let undoController = UndoOverlayController(presentationData: presentationData, content: .sticker(context: self.context, file: file, loop: true, title: nil, text: presentationData.strings.EmojiStatus_AppliedText, undoText: nil, customAction: nil), elevatedLayout: false, animateInAsReplacement: animateInAsReplacement, action: { _ in return false })
+                    //strongSelf.currentUndoOverlayController = controller
+                    controller.controllerInteraction?.presentController(undoController, nil)
+                }
+                let copyEmoji: (TelegramMediaFile) -> Void = { file in
+                    var text = "."
+                    var emojiAttribute: ChatTextInputTextCustomEmojiAttribute?
+                    loop: for attribute in file.attributes {
+                        switch attribute {
+                        case let .CustomEmoji(_, _, displayText, _):
+                            text = displayText
+                            
+                            emojiAttribute = ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: file.fileId.id, file: file)
+                            break loop
+                        default:
+                            break
+                        }
+                    }
+                    
+                    if let _ = emojiAttribute {
+                        storeMessageTextInPasteboard(text, entities: [MessageTextEntity(range: 0 ..< (text as NSString).length, type: .CustomEmoji(stickerPack: nil, fileId: file.fileId.id))])
+                    }
+                }
+                
+                menuItems.append(.action(ContextMenuActionItem(text: presentationData.strings.EmojiPreview_SendEmoji, icon: { theme in
+                    if let image = generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Download"), color: theme.actionSheet.primaryTextColor) {
+                        return generateImage(image.size, rotatedContext: { size, context in
+                            context.clear(CGRect(origin: CGPoint(), size: size))
+                            
+                            if let cgImage = image.cgImage {
+                                context.draw(cgImage, in: CGRect(origin: CGPoint(), size: size))
+                            }
+                        })
+                    } else {
+                        return nil
+                    }
+                }, action: { _, f in
+                    sendEmoji(file)
+                    f(.default)
+                })))
+                
+                menuItems.append(.action(ContextMenuActionItem(text: presentationData.strings.EmojiPreview_SetAsStatus, icon: { theme in
+                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Smile"), color: theme.actionSheet.primaryTextColor)
+                }, action: { _, f in
+                    f(.default)
+                    
+                    guard let strongSelf = self else {
+                        return
+                    }
+                    
+                    if hasPremium {
+                        setStatus(file)
+                    } else {
+                        var replaceImpl: ((ViewController) -> Void)?
+                        let controller = PremiumDemoScreen(context: context, subject: .animatedEmoji, action: {
+                            let controller = PremiumIntroScreen(context: context, source: .animatedEmoji)
+                            replaceImpl?(controller)
+                        })
+                        replaceImpl = { [weak controller] c in
+                            controller?.replace(with: c)
+                        }
+                        strongSelf.interfaceInteraction?.getNavigationController()?.pushViewController(controller)
+                    }
+                })))
+                
+                menuItems.append(.action(ContextMenuActionItem(text: presentationData.strings.EmojiPreview_CopyEmoji, icon: { theme in
+                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.actionSheet.primaryTextColor)
+                }, action: { _, f in
+                    copyEmoji(file)
+                    f(.default)
+                })))
+            }
+            
+            if menuItems.isEmpty {
+                return nil
+            }
+            
+            let content = StickerPreviewPeekContent(context: context, theme: presentationData.theme, strings: presentationData.strings, item: .pack(file), isLocked: isLocked, menu: menuItems, openPremiumIntro: { [weak self] in
+                guard let self else {
+                    return
+                }
+                guard let interfaceInteraction = self.interfaceInteraction else {
+                    return
+                }
+                
+                let _ = self
+                let _ = interfaceInteraction
+                
+                let controller = PremiumIntroScreen(context: context, source: .stickers)
+                //let _ = controller
+                
+                interfaceInteraction.getNavigationController()?.pushViewController(controller)
+            })
+            let _ = content
+            //return nil
+            
+            return (strongSelf.view, itemLayer.convert(itemLayer.bounds, to: strongSelf.view.layer), content)
+        }
+    }
+    
+    func updateResults(_ results: [(String, TelegramMediaFile?, String)]) {
         var entries: [EmojisChatInputContextPanelEntry] = []
         var index = 0
         var stableIds = Set<EmojisChatInputContextPanelEntryStableId>()
-        for (symbol, text) in results {
-            let entry = EmojisChatInputContextPanelEntry(index: index, theme: self.theme, symbol: symbol.normalizedEmoji, text: text)
+        for (symbol, file, text) in results {
+            let entry = EmojisChatInputContextPanelEntry(index: index, theme: self.theme, symbol: symbol.normalizedEmoji, text: text, file: file)
             if stableIds.contains(entry.stableId) {
                 continue
             }
@@ -165,33 +466,48 @@ final class EmojisChatInputContextPanelNode: ChatInputContextPanelNode {
     
     private func prepareTransition(from: [EmojisChatInputContextPanelEntry]? , to: [EmojisChatInputContextPanelEntry]) {
         let firstTime = self.currentEntries == nil
-        let transition = preparedTransition(from: from ?? [], to: to, account: self.context.account, emojiSelected: { [weak self] text in
-            if let strongSelf = self, let interfaceInteraction = strongSelf.interfaceInteraction {
-                interfaceInteraction.updateTextInputStateAndMode { textInputState, inputMode in
-                    var hashtagQueryRange: NSRange?
-                    inner: for (range, type, _) in textInputStateContextQueryRangeAndType(textInputState) {
-                        if type == [.emojiSearch] {
-                            var range = range
-                            range.location -= 1
-                            range.length += 1
-                            hashtagQueryRange = range
-                            break inner
+        let transition = preparedTransition(from: from ?? [], to: to, context: self.context, animationCache: self.animationCache, animationRenderer: self.animationRenderer, emojiSelected: { [weak self] text, file in
+            guard let strongSelf = self, let interfaceInteraction = strongSelf.interfaceInteraction else {
+                return
+            }
+            
+            var text = text
+            
+            interfaceInteraction.updateTextInputStateAndMode { textInputState, inputMode in
+                var hashtagQueryRange: NSRange?
+                inner: for (range, type, _) in textInputStateContextQueryRangeAndType(textInputState) {
+                    if type == [.emojiSearch] {
+                        var range = range
+                        range.location -= 1
+                        range.length += 1
+                        hashtagQueryRange = range
+                        break inner
+                    }
+                }
+                
+                if let range = hashtagQueryRange {
+                    var emojiAttribute: ChatTextInputTextCustomEmojiAttribute?
+                    if let file = file {
+                        loop: for attribute in file.attributes {
+                            switch attribute {
+                            case let .CustomEmoji(_, _, displayText, _):
+                                text = displayText
+                                emojiAttribute = ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: file.fileId.id, file: file)
+                                break loop
+                            default:
+                                break
+                            }
                         }
                     }
                     
-                    if let range = hashtagQueryRange {
-                        let inputText = NSMutableAttributedString(attributedString: textInputState.inputText)
-                        
-                        let replacementText = text
-                        
-                        inputText.replaceCharacters(in: range, with: replacementText)
-                        
-                        let selectionPosition = range.lowerBound + (replacementText as NSString).length
-                        
-                        return (ChatTextInputState(inputText: inputText, selectionRange: selectionPosition ..< selectionPosition), inputMode)
+                    var replacementText = NSAttributedString(string: text)
+                    if let emojiAttribute = emojiAttribute {
+                        replacementText = NSAttributedString(string: text, attributes: [ChatTextInputAttributes.customEmoji: emojiAttribute])
                     }
-                    return (textInputState, inputMode)
+                    
+                    return (textInputState.replacingFlatRange(range, with: replacementText), inputMode)
                 }
+                return (textInputState, inputMode)
             }
         })
         self.currentEntries = to
@@ -233,10 +549,28 @@ final class EmojisChatInputContextPanelNode: ChatInputContextPanelNode {
         let sideInsets: CGFloat = 10.0 + leftInset
         let contentWidth = min(size.width - sideInsets - sideInsets, max(24.0, CGFloat(self.currentEntries?.count ?? 0) * 45.0))
         
+        // The bubble's arrow sits at `contentLeftInset + arrowTipOffset` from the bubble's
+        // left edge; `leftOffset` shifts the whole bubble right of `sideInsets`.
+        let arrowTipOffset: CGFloat = 15.0
         var contentLeftInset: CGFloat = 40.0
         var leftOffset: CGFloat = 0.0
-        if sideInsets + floor(contentWidth / 2.0) < sideInsets + contentLeftInset + 15.0 {
-            let updatedLeftInset = sideInsets + floor(contentWidth / 2.0) - 15.0 - sideInsets
+        if let cursorAnchorX = self.cursorAnchorX {
+            // Anchor the bubble so its arrow points at the caret, clamped to the screen
+            // (mirrors the typed-emoji suggestion popup's positioning).
+            let minBubbleX = sideInsets
+            let maxBubbleX = max(sideInsets, size.width - sideInsets - contentWidth)
+            let bubbleX = max(minBubbleX, min(maxBubbleX, cursorAnchorX - (contentLeftInset + arrowTipOffset)))
+            leftOffset = bubbleX - sideInsets
+
+            // Re-point the arrow within the (possibly clamped) bubble so it still lands on the
+            // caret, keeping it inside the rounded caps.
+            let arrowSegmentWidth: CGFloat = 30.0
+            let capMin: CGFloat = 8.0
+            let maxInset = max(capMin, contentWidth - arrowSegmentWidth - capMin)
+            let minInset = min(capMin, maxInset)
+            contentLeftInset = max(minInset, min(maxInset, cursorAnchorX - bubbleX - arrowTipOffset))
+        } else if sideInsets + floor(contentWidth / 2.0) < sideInsets + contentLeftInset + arrowTipOffset {
+            let updatedLeftInset = sideInsets + floor(contentWidth / 2.0) - arrowTipOffset - sideInsets
             leftOffset = contentLeftInset - updatedLeftInset
             contentLeftInset = updatedLeftInset
         }

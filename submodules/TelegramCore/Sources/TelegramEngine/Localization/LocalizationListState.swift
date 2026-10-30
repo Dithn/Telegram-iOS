@@ -1,10 +1,9 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 
-
-public func removeSavedLocalization(transaction: Transaction, languageCode: String) {
+func _internal_removeSavedLocalization(transaction: Transaction, languageCode: String) {
     updateLocalizationListStateInteractively(transaction: transaction, { state in
         var state = state
         state.availableSavedLocalizations = state.availableSavedLocalizations.filter({ $0.languageCode != languageCode })

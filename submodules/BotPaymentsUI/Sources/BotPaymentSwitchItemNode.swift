@@ -60,7 +60,7 @@ final class BotPaymentSwitchItemNode: BotPaymentItemNode {
         }
     }
     
-    override func layoutContents(theme: PresentationTheme, width: CGFloat, sideInset: CGFloat, measuredInset: CGFloat, transition: ContainedViewLayoutTransition) -> CGFloat {
+    override func layoutContents(theme: PresentationTheme, width: CGFloat, sideInset: CGFloat, rightSideInset: CGFloat, measuredInset: CGFloat, transition: ContainedViewLayoutTransition) -> CGFloat {
         if self.theme !== theme {
             self.theme = theme
             self.titleNode.attributedText = NSAttributedString(string: self.title, font: titleFont, textColor: theme.list.itemPrimaryTextColor)
@@ -72,16 +72,16 @@ final class BotPaymentSwitchItemNode: BotPaymentItemNode {
         
         let leftInset: CGFloat = 16.0
         
-        let titleSize = self.titleNode.measure(CGSize(width: width - leftInset - 70.0 - sideInset * 2.0, height: CGFloat.greatestFiniteMagnitude))
+        let titleSize = self.titleNode.measure(CGSize(width: width - leftInset - 70.0 - sideInset - rightSideInset, height: CGFloat.greatestFiniteMagnitude))
         
-        transition.updateFrame(node: self.titleNode, frame: CGRect(origin: CGPoint(x: leftInset + sideInset, y: 11.0), size: titleSize))
+        transition.updateFrame(node: self.titleNode, frame: CGRect(origin: CGPoint(x: leftInset + sideInset, y: 16.0), size: titleSize))
         
         let switchSize = self.switchNode.measure(CGSize(width: 100.0, height: 100.0))
-        let switchFrame = CGRect(origin: CGPoint(x: width - switchSize.width - 15.0 - sideInset, y: 6.0), size: switchSize)
+        let switchFrame = CGRect(origin: CGPoint(x: width - switchSize.width - 15.0 - rightSideInset, y: 12.0), size: switchSize)
         transition.updateFrame(node: self.switchNode, frame: switchFrame)
         transition.updateFrame(node: self.buttonNode, frame: switchFrame)
         
-        return 44.0
+        return 52.0
     }
     
     @objc private func buttonPressed() {

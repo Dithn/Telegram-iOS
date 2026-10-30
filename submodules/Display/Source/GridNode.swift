@@ -68,15 +68,15 @@ public struct GridNodeLayout: Equatable {
     public let scrollIndicatorInsets: UIEdgeInsets?
     public let preloadSize: CGFloat
     public let type: GridNodeLayoutType
-    public let cutout: CGRect?
+    public let cutouts: [CGRect]
     
-    public init(size: CGSize, insets: UIEdgeInsets, scrollIndicatorInsets: UIEdgeInsets? = nil, preloadSize: CGFloat, type: GridNodeLayoutType, cutout: CGRect? = nil) {
+    public init(size: CGSize, insets: UIEdgeInsets, scrollIndicatorInsets: UIEdgeInsets? = nil, preloadSize: CGFloat, type: GridNodeLayoutType, cutouts: [CGRect] = []) {
         self.size = size
         self.insets = insets
         self.scrollIndicatorInsets = scrollIndicatorInsets
         self.preloadSize = preloadSize
         self.type = type
-        self.cutout = cutout
+        self.cutouts = cutouts
     }
 }
 
@@ -207,7 +207,7 @@ private struct WrappedGridItemNode: Hashable {
     }
 }
 
-open class GridNode: GridNodeScroller, UIScrollViewDelegate {
+open class GridNode: GridNodeScroller, ASScrollViewDelegate {
     public private(set) var gridLayout = GridNodeLayout(size: CGSize(), insets: UIEdgeInsets(), preloadSize: 0.0, type: .fixed(itemSize: CGSize(), fillWidth: nil, lineSpacing: 0.0, itemSpacing: nil))
     private var firstIndexInSectionOffset: Int = 0
     public private(set) var items: [GridItem] = []
@@ -257,7 +257,7 @@ open class GridNode: GridNodeScroller, UIScrollViewDelegate {
         self.scrollView.showsVerticalScrollIndicator = false
         self.scrollView.showsHorizontalScrollIndicator = false
         self.scrollView.scrollsToTop = false
-        self.scrollView.delegate = self
+        self.scrollView.delegate = self.wrappedScrollViewDelegate
     }
     
     required public init?(coder aDecoder: NSCoder) {
@@ -492,7 +492,7 @@ open class GridNode: GridNodeScroller, UIScrollViewDelegate {
                     
                     let effectiveWidth = gridLayout.size.width - itemInsets.left - itemInsets.right
                     
-                    let itemsInRow = Int(effectiveWidth / defaultItemSize.width)
+                    let itemsInRow = max(1, Int(effectiveWidth / defaultItemSize.width))
                     let itemsInRowWidth = CGFloat(itemsInRow) * defaultItemSize.width
                     let remainingWidth = max(0.0, effectiveWidth - itemsInRowWidth)
                     
@@ -508,6 +508,10 @@ open class GridNode: GridNodeScroller, UIScrollViewDelegate {
                     
                     for item in self.items {
                         var itemSize = defaultItemSize
+                        if let _ = item.customItemSize {
+                            let side = (contentSize.width / 3.0) - 1.0
+                            itemSize = CGSize(width: side, height: side)
+                        }
                         
                         let section = item.section
                         var keepSection = true
@@ -539,14 +543,18 @@ open class GridNode: GridNodeScroller, UIScrollViewDelegate {
                         
                         if let (height, fillWidth) = item.fillsRowWithHeight {
                             if fillWidth {
-                                nextItemOrigin.x = 0.0
+                                if nextItemOrigin.x > initialSpacing + itemInsets.left {
+                                    nextItemOrigin.x = initialSpacing + itemInsets.left
+                                    nextItemOrigin.y += itemSize.height + lineSpacing
+                                    contentSize.height += itemSize.height + lineSpacing
+                                }
                                 itemSize.width = gridLayout.size.width
                             }
                             itemSize.height = height
                         } else if let fillsRowWithDynamicHeight = item.fillsRowWithDynamicHeight {
-                            let height = fillsRowWithDynamicHeight(gridLayout.size.width)
-                            nextItemOrigin.x = 0.0
-                            itemSize.width = gridLayout.size.width
+                            let height = fillsRowWithDynamicHeight(gridLayout.size.width - itemInsets.left - itemInsets.right)
+                            nextItemOrigin.x = initialSpacing + itemInsets.left
+                            itemSize.width = gridLayout.size.width - itemInsets.left - itemInsets.right
                             itemSize.height = height
                         } else if index == 0 {
                             let itemsInRow = max(1, Int(effectiveWidth) / Int(itemSize.width))
@@ -560,8 +568,12 @@ open class GridNode: GridNodeScroller, UIScrollViewDelegate {
                             }
                         }
                         
-                        if let cutout = self.gridLayout.cutout, cutout.intersects(CGRect(origin: nextItemOrigin, size: itemSize)) {
-                            nextItemOrigin.x += cutout.width + itemSpacing
+                        if !self.gridLayout.cutouts.isEmpty, nextItemOrigin.y < itemSize.height * 3.0 {
+                            for cutout in self.gridLayout.cutouts {
+                                if cutout.intersects(CGRect(origin: nextItemOrigin, size: itemSize)) {
+                                    nextItemOrigin.x += cutout.width + itemSpacing
+                                }
+                            }
                         }
                         
                         if !incrementedCurrentRow {
@@ -894,9 +906,9 @@ open class GridNode: GridNodeScroller, UIScrollViewDelegate {
         let layoutInsets = presentationLayoutTransition.layout.layout.insets
         self.scrollView.contentInset = UIEdgeInsets(top: layoutInsets.top, left: 0.0, bottom: layoutInsets.bottom, right: 0.0)
         if let scrollIndicatorInsets = presentationLayoutTransition.layout.layout.scrollIndicatorInsets {
-            self.scrollView.scrollIndicatorInsets = scrollIndicatorInsets
+            self.scrollView.verticalScrollIndicatorInsets = scrollIndicatorInsets
         } else {
-            self.scrollView.scrollIndicatorInsets = presentationLayoutTransition.layout.layout.insets
+            self.scrollView.verticalScrollIndicatorInsets = presentationLayoutTransition.layout.layout.insets
         }
         var boundsOffset: CGFloat = 0.0
         var shouldAnimateBounds = false

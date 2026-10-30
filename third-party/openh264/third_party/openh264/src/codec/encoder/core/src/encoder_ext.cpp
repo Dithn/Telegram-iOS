@@ -1526,6 +1526,13 @@ void GetMvMvdRange (SWelsSvcCodingParam* pParam, int32_t& iMvRange, int32_t& iMv
 
   iMvRange = WELS_MIN (iMvRange, iFixMvRange);
 
+  // [subcodec] Limit MV range to 16 pixels for sprite compositing.
+  // Sprites use a 16px padded canvas; tighter MV range prevents referencing
+  // pixels outside the padding that will differ in the composite frame.
+  if (pParam->bSubcodecMode) {
+    iMvRange = WELS_MIN (iMvRange, 16);
+  }
+
   iMvdRange = (iMvRange + 1) << 1;
 
   iMvdRange = WELS_MIN (iMvdRange, iFixMvdRange);
@@ -3616,6 +3623,8 @@ int32_t WelsEncoderEncodeExt (sWelsEncCtx* pCtx, SFrameBSInfo* pFbi, const SSour
       eNalRefIdc = NRI_PRI_LOWEST;
     else if (1 + iCurTid == iDecompositionStages)
       eNalRefIdc = NRI_PRI_LOW;
+    else if (2 + iCurTid == iDecompositionStages)
+      eNalRefIdc = NRI_PRI_HIGH;
     else // more details for other temporal layers?
       eNalRefIdc = NRI_PRI_HIGHEST;
     pCtx->eNalType = eNalType;

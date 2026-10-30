@@ -11,6 +11,12 @@ import AccountContext
 import LocalizedPeerData
 import ItemListUI
 import ChatPresentationInterfaceState
+import ChatControllerInteraction
+import ChatContextQuery
+import ChatInputContextPanelNode
+import ComponentFlow
+import ComponentDisplayAdapters
+import GlassBackgroundComponent
 
 private struct MentionChatInputContextPanelEntry: Comparable, Identifiable {
     let index: Int
@@ -30,7 +36,7 @@ private struct MentionChatInputContextPanelEntry: Comparable, Identifiable {
     }
     
     func item(context: AccountContext, presentationData: PresentationData, inverted: Bool, setPeerIdRevealed: @escaping (EnginePeer.Id?) -> Void, peerSelected: @escaping (EnginePeer) -> Void, removeRequested: @escaping (EnginePeer.Id) -> Void) -> ListViewItem {
-        return MentionChatInputPanelItem(context: context, presentationData: ItemListPresentationData(presentationData), inverted: inverted, peer: self.peer._asPeer(), revealed: self.revealed, setPeerIdRevealed: setPeerIdRevealed, peerSelected: peerSelected, removeRequested: removeRequested)
+        return MentionChatInputPanelItem(context: context, presentationData: ItemListPresentationData(presentationData), inverted: inverted, peer: self.peer, revealed: self.revealed, setPeerIdRevealed: setPeerIdRevealed, peerSelected: peerSelected, removeRequested: removeRequested)
     }
 }
 
@@ -58,6 +64,7 @@ enum MentionChatInputContextPanelMode {
 final class MentionChatInputContextPanelNode: ChatInputContextPanelNode {
     let mode: MentionChatInputContextPanelMode
     
+    private let backgroundView: GlassBackgroundView
     private let listView: ListView
     private var currentEntries: [MentionChatInputContextPanelEntry]?
     
@@ -67,28 +74,49 @@ final class MentionChatInputContextPanelNode: ChatInputContextPanelNode {
     private var enqueuedTransitions: [(CommandChatInputContextPanelTransition, Bool)] = []
     private var validLayout: (CGSize, CGFloat, CGFloat, CGFloat)?
     
-    init(context: AccountContext, theme: PresentationTheme, strings: PresentationStrings, fontSize: PresentationFontSize, mode: MentionChatInputContextPanelMode) {
+    init(context: AccountContext, theme: PresentationTheme, strings: PresentationStrings, fontSize: PresentationFontSize, mode: MentionChatInputContextPanelMode, chatPresentationContext: ChatPresentationContext) {
         self.mode = mode
         
-        self.listView = ListView()
+        self.backgroundView = GlassBackgroundView()
+        self.backgroundView.layer.anchorPoint = CGPoint()
+        
+        self.listView = ListViewImpl()
         self.listView.isOpaque = false
         self.listView.stackFromBottom = true
-        self.listView.keepBottomItemOverscrollBackground = theme.list.plainBackgroundColor
         self.listView.limitHitTestToNodes = true
         self.listView.view.disablesInteractiveTransitionGestureRecognizer = true
         self.listView.accessibilityPageScrolledString = { row, count in
             return strings.VoiceOver_ScrollStatus(row, count).string
         }
         
-        super.init(context: context, theme: theme, strings: strings, fontSize: fontSize)
+        super.init(context: context, theme: theme, strings: strings, fontSize: fontSize, chatPresentationContext: chatPresentationContext)
         
         self.isOpaque = false
-        self.clipsToBounds = true
         
+        self.view.addSubview(self.backgroundView)
         self.addSubnode(self.listView)
         
         if mode == .search {
             self.transform = CATransform3DMakeRotation(CGFloat(Double.pi), 0.0, 0.0, 1.0)
+        }
+        
+        self.backgroundView.isHidden = true
+        self.listView.visibleContentOffsetChanged = { [weak self] offset, _ in
+            guard let self else {
+                return
+            }
+            var topOffset: CGFloat = 0.0
+            switch offset {
+            case let .known(offset):
+                topOffset = max(0.0, -offset + self.listView.insets.top)
+            case .unknown:
+                break
+            case .none:
+                break
+            }
+            
+            self.backgroundView.isHidden = false
+            self.backgroundView.layer.position = CGPoint(x: 0.0, y: topOffset)
         }
     }
     
@@ -132,28 +160,17 @@ final class MentionChatInputContextPanelNode: ChatInputContextPanelNode {
                             }
                             
                             if let range = mentionQueryRange {
-                                let inputText = NSMutableAttributedString(attributedString: textInputState.inputText)
-                                
                                 if let addressName = peer.addressName, !addressName.isEmpty {
-                                    let replacementText = addressName + " "
-                                    
-                                    inputText.replaceCharacters(in: range, with: replacementText)
-                                    
-                                    let selectionPosition = range.lowerBound + (replacementText as NSString).length
-                                    
-                                    return (ChatTextInputState(inputText: inputText, selectionRange: selectionPosition ..< selectionPosition), inputMode)
+                                    return (textInputState.replacingFlatRange(range, with: addressName + " "), inputMode)
                                 } else if !peer.compactDisplayTitle.isEmpty {
                                     let replacementText = NSMutableAttributedString()
                                     replacementText.append(NSAttributedString(string: peer.compactDisplayTitle, attributes: [ChatTextInputAttributes.textMention: ChatTextInputTextMentionAttribute(peerId: peer.id)]))
                                     replacementText.append(NSAttributedString(string: " "))
-                                    
+
+                                    // The widened range eats the leading "@" as well as the query.
                                     let updatedRange = NSRange(location: range.location - 1, length: range.length + 1)
-                                    
-                                    inputText.replaceCharacters(in: updatedRange, with: replacementText)
-                                    
-                                    let selectionPosition = updatedRange.lowerBound + replacementText.length
-                                    
-                                    return (ChatTextInputState(inputText: inputText, selectionRange: selectionPosition ..< selectionPosition), inputMode)
+
+                                    return (textInputState.replacingFlatRange(updatedRange, with: replacementText), inputMode)
                                 }
                             }
                             return (textInputState, inputMode)
@@ -164,7 +181,7 @@ final class MentionChatInputContextPanelNode: ChatInputContextPanelNode {
             }
         }, removeRequested: { [weak self] peerId in
             if let strongSelf = self {
-                let _ = strongSelf.context.engine.peers.removeRecentlyUsedInlineBot(peerId: peerId).start()
+                let _ = strongSelf.context.engine.peers.removeRecentlyUsedInlineBot(peerId: peerId).startStandalone()
                 
                 strongSelf.revealedPeerId = nil
                 strongSelf.currentResults = strongSelf.currentResults.filter { $0.id != peerId }
@@ -199,9 +216,10 @@ final class MentionChatInputContextPanelNode: ChatInputContextPanelNode {
             }
             
             var insets = UIEdgeInsets()
-            insets.top = topInsetForLayout(size: validLayout.0)
+            insets.top = topInsetForLayout(size: validLayout.0, bottomInset: validLayout.3)
             insets.left = validLayout.1
             insets.right = validLayout.2
+            insets.bottom = validLayout.3
             
             let updateSizeAndInsets = ListViewUpdateSizeAndInsets(size: validLayout.0, insets: insets, duration: 0.0, curve: .Default(duration: nil))
             
@@ -214,22 +232,21 @@ final class MentionChatInputContextPanelNode: ChatInputContextPanelNode {
                         }
                     }
                     
-                    if let topItemOffset = topItemOffset {
-                        let position = strongSelf.listView.layer.position
-                        strongSelf.listView.position = CGPoint(x: position.x, y: position.y + (strongSelf.listView.bounds.size.height - topItemOffset))
-                        ContainedViewLayoutTransition.animated(duration: 0.3, curve: .spring).animateView {
-                            strongSelf.listView.position = position
-                        }
+                    if let topItemOffset {
+                        let offset = strongSelf.listView.bounds.size.height - topItemOffset
+                        let transition = ContainedViewLayoutTransition.animated(duration: 0.3, curve: .spring)
+                        transition.animatePositionAdditive(layer: strongSelf.listView.layer, offset: CGPoint(x: 0.0, y: offset))
+                        transition.animatePositionAdditive(layer: strongSelf.backgroundView.layer, offset: CGPoint(x: 0.0, y: offset))
                     }
                 }
             })
         }
     }
     
-    private func topInsetForLayout(size: CGSize) -> CGFloat {
+    private func topInsetForLayout(size: CGSize, bottomInset: CGFloat) -> CGFloat {
         let minimumItemHeights: CGFloat = floor(MentionChatInputPanelItemNode.itemHeight * 3.5)
         
-        return max(size.height - minimumItemHeights, 0.0)
+        return max(size.height - bottomInset - minimumItemHeights, 0.0)
     }
     
     override func updateLayout(size: CGSize, leftInset: CGFloat, rightInset: CGFloat, bottomInset: CGFloat, transition: ContainedViewLayoutTransition, interfaceState: ChatPresentationInterfaceState) {
@@ -238,22 +255,31 @@ final class MentionChatInputContextPanelNode: ChatInputContextPanelNode {
         
         if self.theme !== interfaceState.theme {
             self.theme = interfaceState.theme
-            self.listView.keepBottomItemOverscrollBackground = self.theme.list.plainBackgroundColor
             
             if let currentEntries = self.currentEntries {
                 self.updateToEntries(entries: currentEntries, forceUpdate: true)
             }
         }
         
+        transition.updateBounds(layer: self.backgroundView.layer, bounds: CGRect(origin: CGPoint(), size: CGSize(width: size.width, height: size.height + 32.0)))
+        self.backgroundView.update(
+            size: self.backgroundView.bounds.size,
+            cornerRadius: 20.0,
+            isDark: interfaceState.theme.overallDarkAppearance,
+            tintColor: .init(kind: .panel),
+            transition: ComponentTransition(transition)
+        )
+        
         var insets = UIEdgeInsets()
-        insets.top = topInsetForLayout(size: size)
+        insets.top = topInsetForLayout(size: size, bottomInset: bottomInset)
         insets.left = leftInset
         insets.right = rightInset
+        insets.bottom = bottomInset
         
         transition.updateFrame(node: self.listView, frame: CGRect(x: 0.0, y: 0.0, width: size.width, height: size.height))
         
         let (duration, curve) = listViewAnimationDurationAndCurve(transition: transition)
-        let updateSizeAndInsets = ListViewUpdateSizeAndInsets(size: size, insets: insets, duration: duration, curve: curve)
+        let updateSizeAndInsets = ListViewUpdateSizeAndInsets(size: size, insets: insets, duration: duration, curve: curve, customAnimationTransition: nil)
         
         self.listView.transaction(deleteIndices: [], insertIndicesAndItems: [], updateIndicesAndItems: [], options: [.Synchronous, .LowLatency], scrollToItem: nil, updateSizeAndInsets: updateSizeAndInsets, stationaryItemRange: nil, updateOpaqueState: nil, completion: { _ in })
         
@@ -272,11 +298,13 @@ final class MentionChatInputContextPanelNode: ChatInputContextPanelNode {
             }
         }
         
-        if let topItemOffset = topItemOffset {
-            let position = self.listView.layer.position
-            self.listView.layer.animatePosition(from: position, to: CGPoint(x: position.x, y: position.y + (self.listView.bounds.size.height - topItemOffset)), duration: 0.3, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { _ in
+        if let topItemOffset {
+            let offset = (self.listView.bounds.size.height - topItemOffset)
+            
+            self.listView.layer.animatePosition(from: CGPoint(), to: CGPoint(x: 0.0, y: offset), duration: 0.3, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, additive: true, completion: { _ in
                 completion()
             })
+            self.backgroundView.layer.animatePosition(from: CGPoint(), to: CGPoint(x: 0.0, y: offset), duration: 0.3, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, additive: true)
         } else {
             completion()
         }

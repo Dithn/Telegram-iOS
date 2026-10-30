@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import TelegramCore
+import SSignalKit
 import SwiftSignalKit
 import MtProtoKit
 import Display
@@ -92,7 +93,7 @@ private final class LegacyComponentsGlobalsProviderImpl: NSObject, LegacyCompone
     }
     
     public func applicationWindows() -> [UIWindow]! {
-        return legacyComponentsApplication?.windows ?? []
+        return legacyComponentsApplication?.allWindowSceneWindows ?? []
     }
     
     public func applicationStatusBarWindow() -> UIWindow! {
@@ -100,7 +101,7 @@ private final class LegacyComponentsGlobalsProviderImpl: NSObject, LegacyCompone
     }
     
     public func applicationKeyboardWindow() -> UIWindow! {
-        for window in legacyComponentsApplication?.windows ?? [] {
+        for window in legacyComponentsApplication?.allWindowSceneWindows ?? [] {
             if isKeyboardWindow(window: window) {
                 return window
             }
@@ -113,11 +114,11 @@ private final class LegacyComponentsGlobalsProviderImpl: NSObject, LegacyCompone
     }
     
     public func applicationStatusBarOrientation() -> UIInterfaceOrientation {
-        return legacyComponentsApplication?.statusBarOrientation ?? UIInterfaceOrientation.portrait
+        return legacyComponentsApplication?.delegate?.window??.windowScene?.interfaceOrientation ?? .portrait
     }
     
     public func statusBarFrame() -> CGRect {
-        return legacyComponentsApplication?.statusBarFrame ?? CGRect(origin: CGPoint(), size: CGSize(width: 320.0, height: 20.0))
+        return legacyComponentsApplication?.delegate?.window??.windowScene?.statusBarManager?.statusBarFrame ?? CGRect(origin: CGPoint(), size: CGSize(width: 320.0, height: 20.0))
     }
     
     public func isStatusBarHidden() -> Bool {
@@ -177,16 +178,21 @@ private final class LegacyComponentsGlobalsProviderImpl: NSObject, LegacyCompone
         return LegacyComponentsAccessCheckerImpl(context: legacyContext)
     }
     
-    public func request(_ type: TGAudioSessionType, interrupted: (() -> Void)!) -> SDisposable! {
+    public func request(_ type: TGAudioSessionType, activated: (() -> Void)!, interrupted: (() -> Void)!) -> SDisposable! {
         if let legacyContext = legacyContext {
             let convertedType: ManagedAudioSessionType
             switch type {
                 case TGAudioSessionTypePlayAndRecord, TGAudioSessionTypePlayAndRecordHeadphones:
-                    convertedType = .record(speaker: false)
+                    if legacyContext.sharedContext.currentMediaInputSettings.with({ $0 }).pauseMusicOnRecording {
+                        convertedType = .record(speaker: false, video: true, withOthers: false)
+                    } else {
+                        convertedType = .record(speaker: false, video: true, withOthers: true)
+                    }
                 default:
-                    convertedType = .play
+                    convertedType = .play(mixWithOthers: false)
             }
             let disposable = legacyContext.sharedContext.mediaManager.audioSession.push(audioSessionType: convertedType, once: true, activate: { _ in
+                activated?()
             }, deactivate: { _ in
                 interrupted?()
                 return .complete()
@@ -285,7 +291,7 @@ private final class LegacyComponentsGlobalsProviderImpl: NSObject, LegacyCompone
         let navigationBar = presentationTheme.rootController.navigationBar
         let tabBar = presentationTheme.rootController.tabBar
         
-        return TGMediaAssetsPallete(dark: presentationTheme.overallDarkAppearance, backgroundColor: theme.plainBackgroundColor, selectionColor: theme.itemHighlightedBackgroundColor, separatorColor: theme.itemPlainSeparatorColor, textColor: theme.itemPrimaryTextColor, secondaryTextColor: theme.controlSecondaryColor, accentColor: theme.itemAccentColor, destructiveColor: theme.itemDestructiveColor, barBackgroundColor: navigationBar.opaqueBackgroundColor, barSeparatorColor: tabBar.separatorColor, navigationTitleColor: navigationBar.primaryTextColor, badge: generateStretchableFilledCircleImage(diameter: 22.0, color: navigationBar.accentTextColor), badgeTextColor: navigationBar.opaqueBackgroundColor, sendIconImage: PresentationResourcesChat.chatInputPanelSendButtonImage(presentationTheme), doneIconImage: PresentationResourcesChat.chatInputPanelApplyButtonImage(presentationTheme), maybeAccentColor: navigationBar.accentTextColor)
+        return TGMediaAssetsPallete(dark: presentationTheme.overallDarkAppearance, backgroundColor: theme.plainBackgroundColor, selectionColor: theme.itemHighlightedBackgroundColor, separatorColor: theme.itemPlainSeparatorColor, textColor: theme.itemPrimaryTextColor, secondaryTextColor: theme.controlSecondaryColor, accentColor: theme.itemAccentColor, destructiveColor: theme.itemDestructiveColor, barBackgroundColor: navigationBar.opaqueBackgroundColor, barSeparatorColor: tabBar.separatorColor, navigationTitleColor: navigationBar.primaryTextColor, badge: generateStretchableFilledCircleImage(diameter: 22.0, color: navigationBar.accentTextColor), badgeTextColor: navigationBar.opaqueBackgroundColor, sendIconImage: PresentationResourcesChat.chatInputPanelSendButtonImage(presentationTheme), doneIconImage: PresentationResourcesChat.chatInputPanelApplyButtonImage(presentationTheme), scheduleIconImage: PresentationResourcesChat.chatInputPanelScheduleButtonImage(presentationTheme), maybeAccentColor: navigationBar.accentTextColor)
     }
     
     func checkButtonPallete() -> TGCheckButtonPallete! {

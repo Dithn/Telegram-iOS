@@ -1,7 +1,7 @@
 import UIKit
 import AsyncDisplayKit
 
-final class ActionSheetItemGroupNode: ASDisplayNode, UIScrollViewDelegate {
+final class ActionSheetItemGroupNode: ASDisplayNode, ASScrollViewDelegate {
     private let theme: ActionSheetControllerTheme
     
     private let centerDimView: UIImageView
@@ -13,7 +13,7 @@ final class ActionSheetItemGroupNode: ASDisplayNode, UIScrollViewDelegate {
     private let backgroundEffectView: UIVisualEffectView
     private let scrollNode: ASScrollNode
     
-    private var itemNodes: [ActionSheetItemNode] = []
+    var itemNodes: [ActionSheetItemNode] = []
     private var leadingVisibleNodeCount: CGFloat = 100.0
     
     private var validLayout: CGSize?
@@ -52,6 +52,7 @@ final class ActionSheetItemGroupNode: ASDisplayNode, UIScrollViewDelegate {
         self.scrollNode.view.canCancelContentTouches = true
         self.scrollNode.view.showsVerticalScrollIndicator = false
         self.scrollNode.view.showsHorizontalScrollIndicator = false
+        self.scrollNode.view.scrollsToTop = false
         
         super.init()
         
@@ -60,7 +61,7 @@ final class ActionSheetItemGroupNode: ASDisplayNode, UIScrollViewDelegate {
         self.view.addSubview(self.bottomDimView)
         self.view.addSubview(self.trailingDimView)
         
-        self.scrollNode.view.delegate = self
+        self.scrollNode.view.delegate = self.wrappedScrollViewDelegate
         
         self.clippingNode.view.addSubview(self.backgroundEffectView)
         self.clippingNode.addSubnode(self.scrollNode)

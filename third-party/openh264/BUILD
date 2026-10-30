@@ -1,4 +1,6 @@
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 arm64_specific_sources = [
     "third_party/openh264/src/codec/encoder/core/arm64/intra_pred_aarch64_neon.S",
     "third_party/openh264/src/codec/encoder/core/arm64/intra_pred_sad_3_opt_aarch64_neon.S",
@@ -54,24 +56,24 @@ arm_specific_copts = [
 ]
 
 arch_specific_sources = select({
-    "@build_bazel_rules_apple//apple:ios_armv7": arm_specific_sources,
     "@build_bazel_rules_apple//apple:ios_arm64": arm64_specific_sources,
     "//build-system:ios_sim_arm64": arm64_specific_sources,
     "@build_bazel_rules_apple//apple:ios_x86_64": [],
+    "//conditions:default": arm64_specific_sources,
 })
 
 arch_specific_copts = select({
-    "@build_bazel_rules_apple//apple:ios_armv7": arm_specific_copts,
     "@build_bazel_rules_apple//apple:ios_arm64": arm64_specific_copts,
     "//build-system:ios_sim_arm64": arm64_specific_copts,
     "@build_bazel_rules_apple//apple:ios_x86_64": [],
+    "//conditions:default": arm64_specific_copts,
 })
 
 arch_specific_textual_hdrs = select({
-    "@build_bazel_rules_apple//apple:ios_armv7": arm_specific_textual_hdrs,
     "@build_bazel_rules_apple//apple:ios_arm64": arm64_specific_textual_hdrs,
     "//build-system:ios_sim_arm64": arm64_specific_textual_hdrs,
     "@build_bazel_rules_apple//apple:ios_x86_64": [],
+    "//conditions:default": arm64_specific_textual_hdrs,
 })
 
 all_sources = arch_specific_sources + [
@@ -126,9 +128,9 @@ all_sources = arch_specific_sources + [
     "third_party/openh264/src/codec/common/inc/crt_util_safe_x.h",
     "third_party/openh264/src/codec/common/inc/typedefs.h",
     "third_party/openh264/src/codec/common/inc/utils.h",
-    "third_party/openh264/src/codec/api/svc/codec_app_def.h",
-    "third_party/openh264/src/codec/api/svc/codec_def.h",
-    "third_party/openh264/src/codec/api/svc/codec_api.h",
+    "third_party/openh264/src/codec/api/wels/codec_app_def.h",
+    "third_party/openh264/src/codec/api/wels/codec_def.h",
+    "third_party/openh264/src/codec/api/wels/codec_api.h",
     "third_party/openh264/src/codec/common/inc/WelsTask.h",
     "third_party/openh264/src/codec/common/inc/macros.h",
     "third_party/openh264/src/codec/common/inc/wels_const_common.h",
@@ -149,7 +151,7 @@ all_sources = arch_specific_sources + [
     "third_party/openh264/src/codec/common/inc/measure_time.h",
     "third_party/openh264/src/codec/common/inc/deblocking_common.h",
     "third_party/openh264/src/codec/common/inc/cpu.h",
-    "third_party/openh264/src/codec/api/svc/codec_ver.h",
+    "third_party/openh264/src/codec/api/wels/codec_ver.h",
     "third_party/openh264/src/codec/common/inc/intra_pred_common.h",
     "third_party/openh264/src/codec/common/inc/sad_common.h",
 ] + [
@@ -247,24 +249,97 @@ all_sources = arch_specific_sources + [
 cc_library(
     name = "openh264",
     srcs = all_sources,
-    hdrs = glob([
-    ]),
+    hdrs = [
+    ],
     textual_hdrs = arch_specific_textual_hdrs,
     includes = [
+        "."
     ],
     copts = arch_specific_copts + [
         "-Ithird-party/openh264/third_party/openh264/src/codec/encoder/core/inc",
         "-Ithird-party/openh264/third_party/openh264/src/codec/encoder/plus/inc",
         "-Ithird-party/openh264/third_party/openh264/src/codec/decoder/plus/inc",
         "-Ithird-party/openh264/third_party/openh264/src/codec/common/inc",
-        "-Ithird-party/openh264/third_party/openh264/src/codec/api/svc",
+        "-Ithird-party/openh264/third_party/openh264/src/codec/api/wels",
         "-Ithird-party/openh264/third_party/openh264/src/codec/processing/interface",
         "-Ithird-party/openh264/third_party/openh264/src/codec/processing/src/common",
         "-Os",
+        "-Wno-all",
     ],
     deps = [
     ],
     visibility = [
         "//visibility:public",
     ],
+)
+
+cc_library(
+    name = "openh264_decoder",
+    srcs = [
+        "third_party/openh264/src/codec/decoder/core/src/au_parser.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/bit_stream.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/cabac_decoder.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/deblocking.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/decode_mb_aux.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/decode_slice.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/decoder.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/decoder_core.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/decoder_data_tables.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/error_concealment.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/fmo.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/get_intra_predictor.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/manage_dec_ref.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/memmgr_nal_unit.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/mv_pred.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/parse_mb_syn_cabac.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/parse_mb_syn_cavlc.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/pic_queue.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/rec_mb.cpp",
+        "third_party/openh264/src/codec/decoder/core/src/wels_decoder_thread.cpp",
+        "third_party/openh264/src/codec/decoder/plus/src/welsDecoderExt.cpp",
+        "third_party/openh264/src/codec/decoder/core/inc/au_parser.h",
+        "third_party/openh264/src/codec/decoder/core/inc/bit_stream.h",
+        "third_party/openh264/src/codec/decoder/core/inc/cabac_decoder.h",
+        "third_party/openh264/src/codec/decoder/core/inc/deblocking.h",
+        "third_party/openh264/src/codec/decoder/core/inc/dec_frame.h",
+        "third_party/openh264/src/codec/decoder/core/inc/dec_golomb.h",
+        "third_party/openh264/src/codec/decoder/core/inc/decode_mb_aux.h",
+        "third_party/openh264/src/codec/decoder/core/inc/decode_slice.h",
+        "third_party/openh264/src/codec/decoder/core/inc/decoder.h",
+        "third_party/openh264/src/codec/decoder/core/inc/decoder_context.h",
+        "third_party/openh264/src/codec/decoder/core/inc/decoder_core.h",
+        "third_party/openh264/src/codec/decoder/core/inc/error_code.h",
+        "third_party/openh264/src/codec/decoder/core/inc/error_concealment.h",
+        "third_party/openh264/src/codec/decoder/core/inc/fmo.h",
+        "third_party/openh264/src/codec/decoder/core/inc/get_intra_predictor.h",
+        "third_party/openh264/src/codec/decoder/core/inc/manage_dec_ref.h",
+        "third_party/openh264/src/codec/decoder/core/inc/mb_cache.h",
+        "third_party/openh264/src/codec/decoder/core/inc/memmgr_nal_unit.h",
+        "third_party/openh264/src/codec/decoder/core/inc/mv_pred.h",
+        "third_party/openh264/src/codec/decoder/core/inc/nal_prefix.h",
+        "third_party/openh264/src/codec/decoder/core/inc/nalu.h",
+        "third_party/openh264/src/codec/decoder/core/inc/parameter_sets.h",
+        "third_party/openh264/src/codec/decoder/core/inc/parse_mb_syn_cabac.h",
+        "third_party/openh264/src/codec/decoder/core/inc/parse_mb_syn_cavlc.h",
+        "third_party/openh264/src/codec/decoder/core/inc/pic_queue.h",
+        "third_party/openh264/src/codec/decoder/core/inc/picture.h",
+        "third_party/openh264/src/codec/decoder/core/inc/rec_mb.h",
+        "third_party/openh264/src/codec/decoder/core/inc/slice.h",
+        "third_party/openh264/src/codec/decoder/core/inc/vlc_decoder.h",
+        "third_party/openh264/src/codec/decoder/core/inc/wels_common_basis.h",
+        "third_party/openh264/src/codec/decoder/core/inc/wels_const.h",
+        "third_party/openh264/src/codec/decoder/core/inc/wels_decoder_thread.h",
+        "third_party/openh264/src/codec/decoder/plus/inc/welsDecoderExt.h",
+    ],
+    includes = ["."],
+    copts = [
+        "-Ithird-party/openh264/third_party/openh264/src/codec/decoder/core/inc",
+        "-Ithird-party/openh264/third_party/openh264/src/codec/decoder/plus/inc",
+        "-Ithird-party/openh264/third_party/openh264/src/codec/common/inc",
+        "-Ithird-party/openh264/third_party/openh264/src/codec/api/wels",
+        "-Os",
+        "-Wno-all",
+    ],
+    deps = [":openh264"],
+    visibility = ["//visibility:public"],
 )

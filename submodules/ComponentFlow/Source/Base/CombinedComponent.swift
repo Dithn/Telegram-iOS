@@ -6,7 +6,7 @@ private func updateChildAnyComponent<EnvironmentType>(
     component: AnyComponent<EnvironmentType>,
     view: UIView,
     availableSize: CGSize,
-    transition: Transition
+    transition: ComponentTransition
 ) -> _UpdatedChildComponent {
     let parentContext = _AnyCombinedComponentContext.current
 
@@ -85,7 +85,7 @@ public final class _ConcreteChildComponent<ComponentType: Component>: _AnyChildC
         return .direct(self.directId)
     }
 
-    public func update(component: ComponentType, @EnvironmentBuilder environment: () -> Environment<ComponentType.EnvironmentType>, availableSize: CGSize, transition: Transition) -> _UpdatedChildComponent {
+    public func update(component: ComponentType, @EnvironmentBuilder environment: () -> Environment<ComponentType.EnvironmentType>, availableSize: CGSize, transition: ComponentTransition) -> _UpdatedChildComponent {
         let parentContext = _AnyCombinedComponentContext.current
         if !parentContext.updateContext.configuredViews.insert(self.id).inserted {
             preconditionFailure("Child component can only be configured once")
@@ -99,13 +99,14 @@ public final class _ConcreteChildComponent<ComponentType: Component>: _AnyChildC
             view = current.view as! ComponentType.View
         } else {
             view = component.makeView()
-            transition = .immediate
+            transition = transition.withAnimation(.none)
         }
 
         let context = view.context(component: component)
         EnvironmentBuilder._environment = context.erasedEnvironment
-        let _ = environment()
+        let environmentResult = environment()
         EnvironmentBuilder._environment = nil
+        context.erasedEnvironment = environmentResult
 
         return updateChildAnyComponent(
             id: self.id,
@@ -118,7 +119,7 @@ public final class _ConcreteChildComponent<ComponentType: Component>: _AnyChildC
 }
 
 public extension _ConcreteChildComponent where ComponentType.EnvironmentType == Empty {
-    func update(component: ComponentType, availableSize: CGSize, transition: Transition) -> _UpdatedChildComponent {
+    func update(component: ComponentType, availableSize: CGSize, transition: ComponentTransition) -> _UpdatedChildComponent {
         return self.update(component: component, environment: {}, availableSize: availableSize, transition: transition)
     }
 }
@@ -140,7 +141,7 @@ public final class _ChildComponentGuide {
         return .direct(self.directId)
     }
 
-    public func update(position: CGPoint, transition: Transition) -> _UpdatedChildComponentGuide {
+    public func update(position: CGPoint, transition: ComponentTransition) -> _UpdatedChildComponentGuide {
         let parentContext = _AnyCombinedComponentContext.current
 
         let previousPosition = parentContext.guides[self.id]
@@ -174,17 +175,20 @@ public final class _UpdatedChildComponent {
     public let size: CGSize
 
     var _removed: Bool = false
+    var _anchorPoint: CGPoint?
     var _position: CGPoint?
     var _scale: CGFloat?
     var _opacity: CGFloat?
     var _cornerRadius: CGFloat?
     var _clipsToBounds: Bool?
-
-    fileprivate var transitionAppear: Transition.Appear?
-    fileprivate var transitionAppearWithGuide: (Transition.AppearWithGuide, _AnyChildComponent.Id)?
-    fileprivate var transitionDisappear: Transition.Disappear?
-    fileprivate var transitionDisappearWithGuide: (Transition.DisappearWithGuide, _AnyChildComponent.Id)?
-    fileprivate var transitionUpdate: Transition.Update?
+    var _allowsGroupOpacity: Bool?
+    var _shadow: Shadow?
+    
+    fileprivate var transitionAppear: ComponentTransition.Appear?
+    fileprivate var transitionAppearWithGuide: (ComponentTransition.AppearWithGuide, _AnyChildComponent.Id)?
+    fileprivate var transitionDisappear: ComponentTransition.Disappear?
+    fileprivate var transitionDisappearWithGuide: (ComponentTransition.DisappearWithGuide, _AnyChildComponent.Id)?
+    fileprivate var transitionUpdate: ComponentTransition.Update?
     fileprivate var gestures: [Gesture] = []
 
     fileprivate init(
@@ -201,31 +205,31 @@ public final class _UpdatedChildComponent {
         self.size = size
     }
 
-    @discardableResult public func appear(_ transition: Transition.Appear) -> _UpdatedChildComponent {
+    @discardableResult public func appear(_ transition: ComponentTransition.Appear) -> _UpdatedChildComponent {
         self.transitionAppear = transition
         self.transitionAppearWithGuide = nil
         return self
     }
 
-    @discardableResult public func appear(_ transition: Transition.AppearWithGuide, guide: _UpdatedChildComponentGuide) -> _UpdatedChildComponent {
+    @discardableResult public func appear(_ transition: ComponentTransition.AppearWithGuide, guide: _UpdatedChildComponentGuide) -> _UpdatedChildComponent {
         self.transitionAppear = nil
         self.transitionAppearWithGuide = (transition, guide.instance.id)
         return self
     }
 
-    @discardableResult public func disappear(_ transition: Transition.Disappear) -> _UpdatedChildComponent {
+    @discardableResult public func disappear(_ transition: ComponentTransition.Disappear) -> _UpdatedChildComponent {
         self.transitionDisappear = transition
         self.transitionDisappearWithGuide = nil
         return self
     }
 
-    @discardableResult public func disappear(_ transition: Transition.DisappearWithGuide, guide: _UpdatedChildComponentGuide) -> _UpdatedChildComponent {
+    @discardableResult public func disappear(_ transition: ComponentTransition.DisappearWithGuide, guide: _UpdatedChildComponentGuide) -> _UpdatedChildComponent {
         self.transitionDisappear = nil
         self.transitionDisappearWithGuide = (transition, guide.instance.id)
         return self
     }
 
-    @discardableResult public func update(_ transition: Transition.Update) -> _UpdatedChildComponent {
+    @discardableResult public func update(_ transition: ComponentTransition.Update) -> _UpdatedChildComponent {
         self.transitionUpdate = transition
         return self
     }
@@ -234,12 +238,17 @@ public final class _UpdatedChildComponent {
         self._removed = removed
         return self
     }
+    
+    @discardableResult public func anchorPoint(_ anchorPoint: CGPoint) -> _UpdatedChildComponent {
+        self._anchorPoint = anchorPoint
+        return self
+    }
 
     @discardableResult public func position(_ position: CGPoint) -> _UpdatedChildComponent {
         self._position = position
         return self
     }
-
+    
     @discardableResult public func scale(_ scale: CGFloat) -> _UpdatedChildComponent {
         self._scale = scale
         return self
@@ -259,6 +268,16 @@ public final class _UpdatedChildComponent {
         self._clipsToBounds = clipsToBounds
         return self
     }
+    
+    @discardableResult public func allowsGroupOpacity(_ allowsGroupOpacity: Bool) -> _UpdatedChildComponent {
+        self._allowsGroupOpacity = allowsGroupOpacity
+        return self
+    }
+    
+    @discardableResult public func shadow(_ shadow: Shadow?) -> _UpdatedChildComponent {
+        self._shadow = shadow
+        return self
+    }
 
     @discardableResult public func gesture(_ gesture: Gesture) -> _UpdatedChildComponent {
         self.gestures.append(gesture)
@@ -271,7 +290,7 @@ public final class _EnvironmentChildComponent<EnvironmentType>: _AnyChildCompone
         return .direct(self.directId)
     }
 
-    func update(component: AnyComponent<EnvironmentType>, @EnvironmentBuilder environment: () -> Environment<EnvironmentType>, availableSize: CGSize, transition: Transition) -> _UpdatedChildComponent {
+    func update(component: AnyComponent<EnvironmentType>, @EnvironmentBuilder environment: () -> Environment<EnvironmentType>, availableSize: CGSize, transition: ComponentTransition) -> _UpdatedChildComponent {
         let parentContext = _AnyCombinedComponentContext.current
         if !parentContext.updateContext.configuredViews.insert(self.id).inserted {
             preconditionFailure("Child component can only be configured once")
@@ -288,9 +307,11 @@ public final class _EnvironmentChildComponent<EnvironmentType>: _AnyChildCompone
             transition = .immediate
         }
 
-        EnvironmentBuilder._environment = view.context(component: component).erasedEnvironment
-        let _ = environment()
+        let viewContext = view.context(component: component)
+        EnvironmentBuilder._environment = viewContext.erasedEnvironment
+        let environmentResult = environment()
         EnvironmentBuilder._environment = nil
+        viewContext.erasedEnvironment = environmentResult
 
         return updateChildAnyComponent(
             id: self.id,
@@ -303,17 +324,21 @@ public final class _EnvironmentChildComponent<EnvironmentType>: _AnyChildCompone
 }
 
 public extension _EnvironmentChildComponent where EnvironmentType == Empty {
-    func update(component: AnyComponent<EnvironmentType>, availableSize: CGSize, transition: Transition) -> _UpdatedChildComponent {
+    func update(component: AnyComponent<EnvironmentType>, availableSize: CGSize, transition: ComponentTransition) -> _UpdatedChildComponent {
         return self.update(component: component, environment: {}, availableSize: availableSize, transition: transition)
     }
 }
 
 public extension _EnvironmentChildComponent {
-    func update<ComponentType: Component>(_ component: ComponentType, @EnvironmentBuilder environment: () -> Environment<EnvironmentType>, availableSize: CGSize, transition: Transition) -> _UpdatedChildComponent where ComponentType.EnvironmentType == EnvironmentType {
+    func update<ComponentType: Component>(_ component: ComponentType, @EnvironmentBuilder environment: () -> Environment<EnvironmentType>, availableSize: CGSize, transition: ComponentTransition) -> _UpdatedChildComponent where ComponentType.EnvironmentType == EnvironmentType {
         return self.update(component: AnyComponent(component), environment: environment, availableSize: availableSize, transition: transition)
     }
+    
+    func update(_ component: AnyComponent<EnvironmentType>, @EnvironmentBuilder environment: () -> Environment<EnvironmentType>, availableSize: CGSize, transition: ComponentTransition) -> _UpdatedChildComponent {
+        return self.update(component: component, environment: environment, availableSize: availableSize, transition: transition)
+    }
 
-    func update<ComponentType: Component>(_ component: ComponentType, @EnvironmentBuilder environment: () -> Environment<EnvironmentType>, availableSize: CGSize, transition: Transition) -> _UpdatedChildComponent where ComponentType.EnvironmentType == EnvironmentType, EnvironmentType == Empty {
+    func update<ComponentType: Component>(_ component: ComponentType, @EnvironmentBuilder environment: () -> Environment<EnvironmentType>, availableSize: CGSize, transition: ComponentTransition) -> _UpdatedChildComponent where ComponentType.EnvironmentType == EnvironmentType, EnvironmentType == Empty {
         return self.update(component: AnyComponent(component), environment: {}, availableSize: availableSize, transition: transition)
     }
 }
@@ -325,7 +350,7 @@ public final class _EnvironmentChildComponentFromMap<EnvironmentType>: _AnyChild
         self.id = id
     }
 
-    public func update(component: AnyComponent<EnvironmentType>, @EnvironmentBuilder environment: () -> Environment<EnvironmentType>, availableSize: CGSize, transition: Transition) -> _UpdatedChildComponent {
+    public func update(component: AnyComponent<EnvironmentType>, @EnvironmentBuilder environment: () -> Environment<EnvironmentType>, availableSize: CGSize, transition: ComponentTransition) -> _UpdatedChildComponent {
         let parentContext = _AnyCombinedComponentContext.current
         if !parentContext.updateContext.configuredViews.insert(self.id).inserted {
             preconditionFailure("Child component can only be configured once")
@@ -339,12 +364,14 @@ public final class _EnvironmentChildComponentFromMap<EnvironmentType>: _AnyChild
             view = current.view
         } else {
             view = component._makeView()
-            transition = .immediate
+            transition = transition.withAnimation(.none)
         }
 
-        EnvironmentBuilder._environment = view.context(component: component).erasedEnvironment
-        let _ = environment()
+        let viewContext = view.context(component: component)
+        EnvironmentBuilder._environment = viewContext.erasedEnvironment
+        let environmentResult = environment()
         EnvironmentBuilder._environment = nil
+        viewContext.erasedEnvironment = environmentResult
 
         return updateChildAnyComponent(
             id: self.id,
@@ -357,7 +384,7 @@ public final class _EnvironmentChildComponentFromMap<EnvironmentType>: _AnyChild
 }
 
 public extension _EnvironmentChildComponentFromMap where EnvironmentType == Empty {
-    func update(component: AnyComponent<EnvironmentType>, availableSize: CGSize, transition: Transition) -> _UpdatedChildComponent {
+    func update(component: AnyComponent<EnvironmentType>, availableSize: CGSize, transition: ComponentTransition) -> _UpdatedChildComponent {
         return self.update(component: component, environment: {}, availableSize: availableSize, transition: transition)
     }
 }
@@ -382,8 +409,8 @@ public final class CombinedComponentContext<ComponentType: Component> {
 
     public let component: ComponentType
     public let availableSize: CGSize
-    public let transition: Transition
-    private let addImpl: (_ updatedComponent: _UpdatedChildComponent) -> Void
+    public let transition: ComponentTransition
+    private let addImpl: (_ updatedComponent: _UpdatedChildComponent, _ container: UIView?) -> Void
 
     public var environment: Environment<ComponentType.EnvironmentType> {
         return self.context.environment
@@ -397,8 +424,8 @@ public final class CombinedComponentContext<ComponentType: Component> {
         view: UIView,
         component: ComponentType,
         availableSize: CGSize,
-        transition: Transition,
-        add: @escaping (_ updatedComponent: _UpdatedChildComponent) -> Void
+        transition: ComponentTransition,
+        add: @escaping (_ updatedComponent: _UpdatedChildComponent, _ container: UIView?) -> Void
     ) {
         self.context = context
         self.view = view
@@ -409,7 +436,11 @@ public final class CombinedComponentContext<ComponentType: Component> {
     }
 
     public func add(_ updatedComponent: _UpdatedChildComponent) {
-        self.addImpl(updatedComponent)
+        self.addImpl(updatedComponent, nil)
+    }
+    
+    public func addWithExternalContainer(_ updatedComponent: _UpdatedChildComponent, container: UIView) {
+        self.addImpl(updatedComponent, container)
     }
 }
 
@@ -456,8 +487,8 @@ private class _AnyCombinedComponentContext {
     class ChildView {
         let view: UIView
         var index: Int
-        var transition: Transition.Disappear?
-        var transitionWithGuide: (Transition.DisappearWithGuide, _AnyChildComponent.Id)?
+        var transition: ComponentTransition.Disappear?
+        var transitionWithGuide: (ComponentTransition.DisappearWithGuide, _AnyChildComponent.Id)?
 
         var gestures: [UInt: UIGestureRecognizer] = [:]
 
@@ -496,15 +527,15 @@ private class _AnyCombinedComponentContext {
     class DisappearingChildView {
         let view: UIView
         let guideId: _AnyChildComponent.Id?
-        let transition: Transition.Disappear?
-        let transitionWithGuide: Transition.DisappearWithGuide?
+        let transition: ComponentTransition.Disappear?
+        let transitionWithGuide: ComponentTransition.DisappearWithGuide?
         let completion: () -> Void
 
         init(
             view: UIView,
             guideId: _AnyChildComponent.Id?,
-            transition: Transition.Disappear?,
-            transitionWithGuide: Transition.DisappearWithGuide?,
+            transition: ComponentTransition.Disappear?,
+            transitionWithGuide: ComponentTransition.DisappearWithGuide?,
             completion: @escaping () -> Void
         ) {
             self.view = view
@@ -544,39 +575,39 @@ private extension UIView {
     }
 }
 
-public extension Transition {
+public extension ComponentTransition {
     final class Appear {
-        private let f: (_UpdatedChildComponent, UIView, Transition) -> Void
+        private let f: (_UpdatedChildComponent, UIView, ComponentTransition) -> Void
 
-        public init(_ f: @escaping (_UpdatedChildComponent, UIView, Transition) -> Void) {
+        public init(_ f: @escaping (_UpdatedChildComponent, UIView, ComponentTransition) -> Void) {
             self.f = f
         }
 
-        public func callAsFunction(component: _UpdatedChildComponent, view: UIView, transition: Transition) {
+        public func callAsFunction(component: _UpdatedChildComponent, view: UIView, transition: ComponentTransition) {
             self.f(component, view, transition)
         }
     }
 
     final class AppearWithGuide {
-        private let f: (_UpdatedChildComponent, UIView, CGPoint, Transition) -> Void
+        private let f: (_UpdatedChildComponent, UIView, CGPoint, ComponentTransition) -> Void
 
-        public init(_ f: @escaping (_UpdatedChildComponent, UIView, CGPoint, Transition) -> Void) {
+        public init(_ f: @escaping (_UpdatedChildComponent, UIView, CGPoint, ComponentTransition) -> Void) {
             self.f = f
         }
 
-        public func callAsFunction(component: _UpdatedChildComponent, view: UIView, guide: CGPoint, transition: Transition) {
+        public func callAsFunction(component: _UpdatedChildComponent, view: UIView, guide: CGPoint, transition: ComponentTransition) {
             self.f(component, view, guide, transition)
         }
     }
 
     final class Disappear {
-        private let f: (UIView, Transition, @escaping () -> Void) -> Void
+        private let f: (UIView, ComponentTransition, @escaping () -> Void) -> Void
 
-        public init(_ f: @escaping (UIView, Transition, @escaping () -> Void) -> Void) {
+        public init(_ f: @escaping (UIView, ComponentTransition, @escaping () -> Void) -> Void) {
             self.f = f
         }
 
-        public func callAsFunction(view: UIView, transition: Transition, completion: @escaping () -> Void) {
+        public func callAsFunction(view: UIView, transition: ComponentTransition, completion: @escaping () -> Void) {
             self.f(view, transition, completion)
         }
     }
@@ -587,26 +618,26 @@ public extension Transition {
             case update
         }
 
-        private let f: (Stage, UIView, CGPoint, Transition, @escaping () -> Void) -> Void
+        private let f: (Stage, UIView, CGPoint, ComponentTransition, @escaping () -> Void) -> Void
 
-        public init(_ f: @escaping (Stage, UIView, CGPoint, Transition, @escaping () -> Void) -> Void
+        public init(_ f: @escaping (Stage, UIView, CGPoint, ComponentTransition, @escaping () -> Void) -> Void
         ) {
             self.f = f
         }
 
-        public func callAsFunction(stage: Stage, view: UIView, guide: CGPoint, transition: Transition, completion: @escaping () -> Void) {
+        public func callAsFunction(stage: Stage, view: UIView, guide: CGPoint, transition: ComponentTransition, completion: @escaping () -> Void) {
             self.f(stage, view, guide, transition, completion)
         }
     }
 
     final class Update {
-        private let f: (_UpdatedChildComponent, UIView, Transition) -> Void
+        private let f: (_UpdatedChildComponent, UIView, ComponentTransition) -> Void
 
-        public init(_ f: @escaping (_UpdatedChildComponent, UIView, Transition) -> Void) {
+        public init(_ f: @escaping (_UpdatedChildComponent, UIView, ComponentTransition) -> Void) {
             self.f = f
         }
 
-        public func callAsFunction(component: _UpdatedChildComponent, view: UIView, transition: Transition) {
+        public func callAsFunction(component: _UpdatedChildComponent, view: UIView, transition: ComponentTransition) {
             self.f(component, view, transition)
         }
     }
@@ -617,7 +648,7 @@ public extension CombinedComponent {
         return UIView()
     }
 
-    func update(view: View, availableSize: CGSize, state: State, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+    func update(view: View, availableSize: CGSize, state: State, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
         let context = view.getCombinedComponentContext(Self.self)
         
         let storedBody: Body
@@ -644,7 +675,7 @@ public extension CombinedComponent {
                 component: self,
                 availableSize: availableSize,
                 transition: transition,
-                add: { updatedChild in
+                add: { [viewContext] updatedChild, optionalContainer in
                     if !addedChildIds.insert(updatedChild.id).inserted {
                         preconditionFailure("Child component can only be added once")
                     }
@@ -665,14 +696,18 @@ public extension CombinedComponent {
                             context.childViewIndices.remove(at: previousView.index)
                             context.childViewIndices.insert(updatedChild.id, at: index)
                             previousView.index = index
-                            view.insertSubview(previousView.view, at: index)
+                            if let optionalContainer {
+                                optionalContainer.addSubview(previousView.view)
+                            } else {
+                                view.insertSubview(previousView.view, at: index)
+                            }
                         }
 
                         previousView.updateGestures(updatedChild.gestures)
                         previousView.transition = updatedChild.transitionDisappear
                         previousView.transitionWithGuide = updatedChild.transitionDisappearWithGuide
 
-                        (updatedChild.transitionUpdate ?? Transition.Update.default)(component: updatedChild, view: updatedChild.view, transition: transition)
+                        (updatedChild.transitionUpdate ?? ComponentTransition.Update.default)(component: updatedChild, view: updatedChild.view, transition: transition)
                     } else {
                         for i in index ..< context.childViewIndices.count {
                             if let moveView = context.childViews[context.childViewIndices[i]] {
@@ -688,23 +723,52 @@ public extension CombinedComponent {
                         childView.transition = updatedChild.transitionDisappear
                         childView.transitionWithGuide = updatedChild.transitionDisappearWithGuide
 
-                        view.insertSubview(updatedChild.view, at: index)
+                        if let optionalContainer {
+                            optionalContainer.addSubview(updatedChild.view)
+                        } else {
+                            view.insertSubview(updatedChild.view, at: index)
+                        }
 
+                        updatedChild.view.layer.anchorPoint = updatedChild._anchorPoint ?? CGPoint(x: 0.5, y: 0.5)
+                        
                         if let scale = updatedChild._scale {
                             updatedChild.view.bounds = CGRect(origin: CGPoint(), size: updatedChild.size)
                             updatedChild.view.center = updatedChild._position ?? CGPoint()
                             updatedChild.view.transform = CGAffineTransform(scaleX: scale, y: scale)
                         } else {
-                            updatedChild.view.frame = updatedChild.size.centered(around: updatedChild._position ?? CGPoint())
+                            if updatedChild.view is UIScrollView {
+                                updatedChild.view.frame = updatedChild.size.centered(around: updatedChild._position ?? CGPoint())
+                            } else {
+                                updatedChild.view.bounds = CGRect(origin: CGPoint(), size: updatedChild.size)
+                                if updatedChild.view.layer.anchorPoint != CGPoint(x: 0.5, y: 0.5) {
+                                    updatedChild.view.layer.position = updatedChild._position ?? CGPoint()
+                                } else {
+                                    updatedChild.view.center = updatedChild._position ?? CGPoint()
+                                }
+                            }
                         }
+                        
                         updatedChild.view.alpha = updatedChild._opacity ?? 1.0
                         updatedChild.view.clipsToBounds = updatedChild._clipsToBounds ?? false
                         updatedChild.view.layer.cornerRadius = updatedChild._cornerRadius ?? 0.0
-                        updatedChild.view.context(typeErasedComponent: updatedChild.component).erasedState._updated = { [weak viewContext] transition in
+                        if let allowsGroupOpacity = updatedChild._allowsGroupOpacity {
+                            updatedChild.view.layer.allowsGroupOpacity = allowsGroupOpacity
+                        }
+                        if let shadow = updatedChild._shadow {
+                            updatedChild.view.layer.shadowColor = shadow.color.withAlphaComponent(1.0).cgColor
+                            updatedChild.view.layer.shadowRadius = shadow.radius
+                            updatedChild.view.layer.shadowOpacity = Float(shadow.color.alpha)
+                            updatedChild.view.layer.shadowOffset = shadow.offset
+                        } else {
+                            updatedChild.view.layer.shadowColor = nil
+                            updatedChild.view.layer.shadowRadius = 0.0
+                            updatedChild.view.layer.shadowOpacity = 0.0
+                        }
+                        updatedChild.view.context(typeErasedComponent: updatedChild.component).erasedState._updated = { [weak viewContext] transition, isLocal in
                             guard let viewContext = viewContext else {
                                 return
                             }
-                            viewContext.state.updated(transition: transition)
+                            viewContext.state.updated(transition: transition, isLocal: isLocal)
                         }
 
                         if let transitionAppearWithGuide = updatedChild.transitionAppearWithGuide {
@@ -826,5 +890,21 @@ public extension CombinedComponent {
     
     static func StoredActionSlot<Arguments>(_ argumentsType: Arguments.Type) -> ActionSlot<Arguments> {
         return ActionSlot<Arguments>()
+    }
+}
+
+public struct Shadow {
+    public let color: UIColor
+    public let radius: CGFloat
+    public let offset: CGSize
+    
+    public init(
+        color: UIColor,
+        radius: CGFloat,
+        offset: CGSize
+    ) {
+        self.color = color
+        self.radius = radius
+        self.offset = offset
     }
 }

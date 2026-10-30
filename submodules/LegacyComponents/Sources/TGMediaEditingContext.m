@@ -1,18 +1,18 @@
-#import "TGMediaEditingContext.h"
+#import <LegacyComponents/TGMediaEditingContext.h>
 
 #import "LegacyComponentsInternal.h"
-#import "TGStringUtils.h"
+#import <LegacyComponents/TGStringUtils.h>
 
 #import <LegacyComponents/UIImage+TG.h>
-#import "TGPhotoEditorUtils.h"
-#import "PGPhotoEditorValues.h"
-#import "TGVideoEditAdjustments.h"
+#import <LegacyComponents/TGPhotoEditorUtils.h>
+#import <LegacyComponents/PGPhotoEditorValues.h>
+#import <LegacyComponents/TGVideoEditAdjustments.h>
 
-#import "TGModernCache.h"
-#import "TGMemoryImageCache.h"
-#import "TGMediaAsset.h"
+#import <LegacyComponents/TGModernCache.h>
+#import <LegacyComponents/TGMemoryImageCache.h>
+#import <LegacyComponents/TGMediaAsset.h>
 
-#import "TGPaintingData.h"
+#import <LegacyComponents/TGPaintingData.h>
 
 @interface TGMediaImageUpdate : NSObject
 
@@ -54,6 +54,36 @@
 
 @end
 
+@interface TGMediaSpoilerUpdate : NSObject
+
+@property (nonatomic, readonly, strong) id<TGMediaEditableItem> item;
+@property (nonatomic, readonly) bool spoiler;
+
++ (instancetype)spoilerUpdateWithItem:(id<TGMediaEditableItem>)item spoiler:(bool)spoiler;
++ (instancetype)spoilerUpdate:(bool)spoiler;
+
+@end
+
+@interface TGMediaPriceUpdate : NSObject
+
+@property (nonatomic, readonly, strong) id<TGMediaEditableItem> item;
+@property (nonatomic, readonly, strong) NSNumber *price;
+
++ (instancetype)priceUpdateWithItem:(id<TGMediaEditableItem>)item price:(NSNumber *)price;
++ (instancetype)priceUpdate:(NSNumber *)timer;
+
+@end
+
+@interface TGMediaLivePhotoModeUpdate : NSObject
+
+@property (nonatomic, readonly, strong) id<TGMediaEditableItem> item;
+@property (nonatomic, readonly) TGMediaLivePhotoMode mode;
+
++ (instancetype)livePhotoModeUpdateWithItem:(id<TGMediaEditableItem>)item mode:(TGMediaLivePhotoMode)mode;
++ (instancetype)livePhotoModeUpdate:(TGMediaLivePhotoMode)mode;
+
+@end
+
 
 @interface TGModernCache (Private)
 
@@ -69,7 +99,11 @@
     NSMutableDictionary *_adjustments;
     NSMutableDictionary *_timers;
     NSNumber *_timer;
- 
+    
+    NSMutableDictionary *_spoilers;
+    NSMutableDictionary *_prices;
+    NSMutableDictionary *_livePhotoModes;
+    
     SQueue *_queue;
     
     NSMutableDictionary *_temporaryRepCache;
@@ -82,6 +116,9 @@
     
     TGMemoryImageCache *_originalImageCache;
     TGMemoryImageCache *_originalThumbnailImageCache;
+    
+    TGMemoryImageCache *_coverImageCache;
+    NSMutableDictionary *_coverPositions;
     
     TGModernCache *_diskCache;
     NSURL *_fullSizeResultsUrl;
@@ -96,13 +133,26 @@
     
     SPipe *_representationPipe;
     SPipe *_thumbnailImagePipe;
+    SPipe *_coverImagePipe;
     SPipe *_adjustmentsPipe;
     SPipe *_captionPipe;
     SPipe *_timerPipe;
+    SPipe *_spoilerPipe;
+    SPipe *_pricePipe;
     SPipe *_fullSizePipe;
     SPipe *_cropPipe;
+    SPipe *_captionAbovePipe;
+    SPipe *_highQualityPhotoPipe;
+    SPipe *_livePhotoModePipe;
+    SPipe *_forceLivePhotoPipe;
     
     NSAttributedString *_forcedCaption;
+    
+    bool _captionAbove;
+    
+    bool _highQualityPhoto;
+    
+    bool _forceLivePhotoEnabled;
 }
 @end
 
@@ -119,6 +169,9 @@
         _captions = [[NSMutableDictionary alloc] init];
         _adjustments = [[NSMutableDictionary alloc] init];
         _timers = [[NSMutableDictionary alloc] init];
+        _spoilers = [[NSMutableDictionary alloc] init];
+        _prices = [[NSMutableDictionary alloc] init];
+        _livePhotoModes = [[NSMutableDictionary alloc] init];
         
         _imageCache = [[TGMemoryImageCache alloc] initWithSoftMemoryLimit:[[self class] imageSoftMemoryLimit]
                                                           hardMemoryLimit:[[self class] imageHardMemoryLimit]];
@@ -135,6 +188,10 @@
                                                                   hardMemoryLimit:[[self class] originalImageHardMemoryLimit]];
         _originalThumbnailImageCache = [[TGMemoryImageCache alloc] initWithSoftMemoryLimit:[[self class] thumbnailImageSoftMemoryLimit]
                                                                            hardMemoryLimit:[[self class] thumbnailImageHardMemoryLimit]];
+        
+        _coverImageCache = [[TGMemoryImageCache alloc] initWithSoftMemoryLimit:[[self class] thumbnailImageSoftMemoryLimit] * 10
+                                                              hardMemoryLimit:[[self class] thumbnailImageHardMemoryLimit] * 10];
+        _coverPositions = [[NSMutableDictionary alloc] init];
         
         NSString *diskCachePath = [[[LegacyComponentsGlobals provider] dataStoragePath] stringByAppendingPathComponent:[[self class] diskCachePath]];
         _diskCache = [[TGModernCache alloc] initWithPath:diskCachePath size:[[self class] diskMemoryLimit]];
@@ -164,9 +221,16 @@
         _thumbnailImagePipe = [[SPipe alloc] init];
         _adjustmentsPipe = [[SPipe alloc] init];
         _captionPipe = [[SPipe alloc] init];
+        _coverImagePipe = [[SPipe alloc] init];
         _timerPipe = [[SPipe alloc] init];
+        _spoilerPipe = [[SPipe alloc] init];
+        _pricePipe = [[SPipe alloc] init];
         _fullSizePipe = [[SPipe alloc] init];
         _cropPipe = [[SPipe alloc] init];
+        _captionAbovePipe = [[SPipe alloc] init];
+        _highQualityPhotoPipe = [[SPipe alloc] init];
+        _livePhotoModePipe = [[SPipe alloc] init];
+        _forceLivePhotoPipe = [[SPipe alloc] init];
     }
     return self;
 }
@@ -596,6 +660,199 @@
 
 #pragma mark -
 
+- (bool)spoilerForItem:(NSObject<TGMediaEditableItem> *)item
+{
+    NSString *itemId = [self _contextualIdForItemId:item.uniqueIdentifier];
+    if (itemId == nil)
+        return nil;
+    
+    return [self _spoilerForItemId:itemId];
+}
+
+- (bool)_spoilerForItemId:(NSString *)itemId
+{
+    if (itemId == nil)
+        return nil;
+    
+    return _spoilers[itemId];
+}
+
+- (void)setSpoiler:(bool)spoiler forItem:(NSObject<TGMediaEditableItem> *)item
+{
+    NSString *itemId = [self _contextualIdForItemId:item.uniqueIdentifier];
+    if (itemId == nil)
+        return;
+    
+    if (spoiler)
+        _spoilers[itemId] = @true;
+    else
+        [_spoilers removeObjectForKey:itemId];
+
+    _spoilerPipe.sink([TGMediaSpoilerUpdate spoilerUpdateWithItem:item spoiler:spoiler]);
+}
+
+- (SSignal *)spoilerSignalForItem:(NSObject<TGMediaEditableItem> *)item
+{
+    SSignal *updateSignal = [[_spoilerPipe.signalProducer() filter:^bool(TGMediaSpoilerUpdate *update)
+    {
+        return [update.item.uniqueIdentifier isEqualToString:item.uniqueIdentifier];
+    }] map:^NSNumber *(TGMediaSpoilerUpdate *update)
+    {
+        return @(update.spoiler);
+    }];
+    
+    return [[SSignal single:@([self spoilerForItem:item])] then:updateSignal];
+}
+
+- (SSignal *)spoilerSignalForIdentifier:(NSString *)identifier
+{
+    SSignal *updateSignal = [[_spoilerPipe.signalProducer() filter:^bool(TGMediaSpoilerUpdate *update)
+    {
+        return [update.item.uniqueIdentifier isEqualToString:identifier];
+    }] map:^NSNumber *(TGMediaSpoilerUpdate *update)
+    {
+        return @(update.spoiler);
+    }];
+    
+    return [[SSignal single:@([self _spoilerForItemId:identifier])] then:updateSignal];
+}
+
+- (SSignal *)spoilersUpdatedSignal
+{
+    return [_spoilerPipe.signalProducer() map:^id(__unused id value)
+    {
+        return @true;
+    }];
+}
+
+#pragma mark -
+
+- (NSNumber *)priceForItem:(NSObject<TGMediaEditableItem> *)item
+{
+    NSString *itemId = [self _contextualIdForItemId:item.uniqueIdentifier];
+    if (itemId == nil)
+        return nil;
+    
+    return [self _priceForItemId:itemId];
+}
+
+- (NSNumber *)_priceForItemId:(NSString *)itemId
+{
+    if (itemId == nil)
+        return nil;
+    
+    return _prices[itemId];
+}
+
+- (void)setPrice:(NSNumber *)price forItem:(NSObject<TGMediaEditableItem> *)item
+{
+    NSString *itemId = [self _contextualIdForItemId:item.uniqueIdentifier];
+    if (itemId == nil)
+        return;
+    
+    if (price.integerValue != 0)
+        _prices[itemId] = price;
+    else
+        [_prices removeObjectForKey:itemId];
+
+    _pricePipe.sink([TGMediaPriceUpdate priceUpdateWithItem:item price:price]);
+}
+
+- (SSignal *)priceSignalForItem:(NSObject<TGMediaEditableItem> *)item
+{
+    SSignal *updateSignal = [[_pricePipe.signalProducer() filter:^bool(TGMediaPriceUpdate *update)
+    {
+        return [update.item.uniqueIdentifier isEqualToString:item.uniqueIdentifier];
+    }] map:^NSNumber *(TGMediaPriceUpdate *update)
+    {
+        return update.price;
+    }];
+    
+    return [[SSignal single:[self priceForItem:item]] then:updateSignal];
+}
+
+- (SSignal *)priceSignalForIdentifier:(NSString *)identifier
+{
+    SSignal *updateSignal = [[_pricePipe.signalProducer() filter:^bool(TGMediaPriceUpdate *update)
+    {
+        return [update.item.uniqueIdentifier isEqualToString:identifier];
+    }] map:^NSNumber *(TGMediaPriceUpdate *update)
+    {
+        return update.price;
+    }];
+    
+    return [[SSignal single:[self _priceForItemId:identifier]] then:updateSignal];
+}
+
+- (SSignal *)pricesUpdatedSignal
+{
+    return [_pricePipe.signalProducer() map:^id(__unused id value)
+    {
+        return @true;
+    }];
+}
+
+#pragma mark -
+
+- (NSNumber *)livePhotoModeForItem:(NSObject<TGMediaEditableItem> *)item {
+    NSString *itemId = [self _contextualIdForItemId:item.uniqueIdentifier];
+    if (itemId == nil)
+        return nil;
+    
+    return [self _livePhotoModeForItemId:itemId];
+}
+
+- (NSNumber *)_livePhotoModeForItemId:(NSString *)itemId
+{
+    if (itemId == nil)
+        return nil;
+    
+    return _livePhotoModes[itemId];
+}
+
+- (SSignal *)livePhotoModeSignalForItem:(NSObject<TGMediaEditableItem> *)item {
+    SSignal *updateSignal = [[_livePhotoModePipe.signalProducer() filter:^bool(TGMediaLivePhotoModeUpdate *update)
+    {
+        return [update.item.uniqueIdentifier isEqualToString:item.uniqueIdentifier];
+    }] map:^NSNumber *(TGMediaLivePhotoModeUpdate *update)
+    {
+        return @(update.mode);
+    }];
+    
+    return [[SSignal single:[self livePhotoModeForItem:item]] then:updateSignal];
+}
+
+- (SSignal *)livePhotoModeForIdentifier:(NSString *)identifier {
+    SSignal *updateSignal = [[_livePhotoModePipe.signalProducer() filter:^bool(TGMediaLivePhotoModeUpdate *update)
+    {
+        return [update.item.uniqueIdentifier isEqualToString:identifier];
+    }] map:^NSNumber *(TGMediaLivePhotoModeUpdate *update)
+    {
+        return @(update.mode);
+    }];
+    
+    return [[SSignal single:[self _livePhotoModeForItemId:identifier]] then:updateSignal];
+}
+
+- (void)setLivePhotoMode:(TGMediaLivePhotoMode)mode forItem:(NSObject<TGMediaEditableItem> *)item {
+    NSString *itemId = [self _contextualIdForItemId:item.uniqueIdentifier];
+    if (itemId == nil)
+        return;
+    
+    _livePhotoModes[itemId] = @(mode);
+
+    _livePhotoModePipe.sink([TGMediaLivePhotoModeUpdate livePhotoModeUpdateWithItem:item mode:mode]);
+}
+
+- (SSignal *)livePhotoModesUpdatedSignal {
+    return [_livePhotoModePipe.signalProducer() map:^id(__unused id value)
+    {
+        return @true;
+    }];
+}
+
+#pragma mark -
+
 - (void)setImage:(UIImage *)image thumbnailImage:(UIImage *)thumbnailImage forItem:(id<TGMediaEditableItem>)item synchronous:(bool)synchronous
 {
     NSString *itemId = [self _contextualIdForItemId:item.uniqueIdentifier];
@@ -633,7 +890,7 @@
         [_queue dispatch:block];
 }
 
-- (bool)setPaintingData:(NSData *)data image:(UIImage *)image stillImage:(UIImage *)stillImage forItem:(NSObject<TGMediaEditableItem> *)item dataUrl:(NSURL **)dataOutUrl imageUrl:(NSURL **)imageOutUrl forVideo:(bool)video
+- (bool)setPaintingData:(NSData *)data entitiesData:(NSData *)entitiesData image:(UIImage *)image stillImage:(UIImage *)stillImage forItem:(NSObject<TGMediaEditableItem> *)item dataUrl:(NSURL **)dataOutUrl entitiesDataUrl:(NSURL **)entitiesDataOutUrl imageUrl:(NSURL **)imageOutUrl forVideo:(bool)video
 {
     NSString *itemId = [self _contextualIdForItemId:item.uniqueIdentifier];
     
@@ -643,6 +900,7 @@
     NSURL *imagesDirectory = video ? _videoPaintingImagesUrl : _paintingImagesUrl;
     NSURL *imageUrl = [imagesDirectory URLByAppendingPathComponent:[NSString stringWithFormat:@"%@.png", [TGStringUtils md5:itemId]]];
     NSURL *dataUrl = [_paintingDatasUrl URLByAppendingPathComponent:[NSString stringWithFormat:@"%@.dat", [TGStringUtils md5:itemId]]];
+    NSURL *entitiesDataUrl = [_paintingDatasUrl URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_entities.dat", [TGStringUtils md5:itemId]]];
     
     [_paintingImageCache setImage:image forKey:itemId attributes:NULL];
     
@@ -651,12 +909,16 @@
     bool imageSuccess = [imageData writeToURL:imageUrl options:NSDataWritingAtomic error:nil];
     [[NSFileManager defaultManager] removeItemAtURL:dataUrl error:nil];
     bool dataSuccess = [data writeToURL:dataUrl options:NSDataWritingAtomic error:nil];
+    bool entitiesDataSuccess = [entitiesData writeToURL:entitiesDataUrl options:NSDataWritingAtomic error:nil];
     
     if (imageSuccess && imageOutUrl != NULL)
         *imageOutUrl = imageUrl;
     
     if (dataSuccess && dataOutUrl != NULL)
         *dataOutUrl = dataUrl;
+    
+    if (entitiesDataSuccess && entitiesDataOutUrl != NULL)
+        *entitiesDataOutUrl = entitiesDataUrl;
         
     if (video)
         [_storeVideoPaintingImages addObject:imageUrl];
@@ -682,6 +944,72 @@
     {
         [[NSFileManager defaultManager] removeItemAtURL:url error:NULL];
     }
+}
+
+- (bool)isCaptionAbove {
+    return _captionAbove;
+}
+
+- (SSignal *)captionAbove
+{
+    __weak TGMediaEditingContext *weakSelf = self;
+    SSignal *updateSignal = [_captionAbovePipe.signalProducer() map:^NSNumber *(NSNumber *update)
+    {
+        __strong TGMediaEditingContext *strongSelf = weakSelf;
+        return @(strongSelf->_captionAbove);
+    }];
+    
+    return [[SSignal single:@(_captionAbove)] then:updateSignal];
+}
+
+- (void)setCaptionAbove:(bool)captionAbove
+{
+    _captionAbove = captionAbove;
+    _captionAbovePipe.sink(@(captionAbove));
+}
+
+- (bool)isHighQualityPhoto {
+    return _highQualityPhoto;
+}
+
+- (SSignal *)highQualityPhoto
+{
+    __weak TGMediaEditingContext *weakSelf = self;
+    SSignal *updateSignal = [_highQualityPhotoPipe.signalProducer() map:^NSNumber *(NSNumber *update)
+    {
+        __strong TGMediaEditingContext *strongSelf = weakSelf;
+        return @(strongSelf->_highQualityPhoto);
+    }];
+    
+    return [[SSignal single:@(_highQualityPhoto)] then:updateSignal];
+}
+
+- (void)setHighQualityPhoto:(bool)highQualityPhoto
+{
+    _highQualityPhoto = highQualityPhoto;
+    _highQualityPhotoPipe.sink(@(highQualityPhoto));
+}
+
+- (bool)isForceLivePhotoEnabled {
+    return _forceLivePhotoEnabled;
+}
+
+- (SSignal *)forceLivePhotoEnabled
+{
+    __weak TGMediaEditingContext *weakSelf = self;
+    SSignal *updateSignal = [_forceLivePhotoPipe.signalProducer() map:^NSNumber *(NSNumber *update)
+    {
+        __strong TGMediaEditingContext *strongSelf = weakSelf;
+        return @(strongSelf->_forceLivePhotoEnabled);
+    }];
+    
+    return [[SSignal single:@(_forceLivePhotoEnabled)] then:updateSignal];
+}
+
+- (void)setForceLivePhotoEnabled:(bool)forceLivePhotoEnabled
+{
+    _forceLivePhotoEnabled = forceLivePhotoEnabled;
+    _forceLivePhotoPipe.sink(@(forceLivePhotoEnabled));
 }
 
 - (SSignal *)facesForItem:(NSObject<TGMediaEditableItem> *)item
@@ -711,6 +1039,58 @@
         _faces[itemId] = faces;
     else
         [_faces removeObjectForKey:itemId];
+}
+
+
+- (SSignal *)coverImageSignalForIdentifier:(NSString *)identifier
+{
+    NSString *itemId = [TGMediaEditingContext _coverImageUriForItemId:identifier];
+    if (itemId == nil)
+        return [SSignal fail:nil];
+    
+    SSignal *updateSignal = [[_coverImagePipe.signalProducer() filter:^bool(TGMediaImageUpdate *update)
+    {
+        return [update.item.uniqueIdentifier isEqualToString:identifier];
+    }] map:^id(TGMediaImageUpdate *update)
+    {
+        return update.representation;
+    }];
+    
+    return [[SSignal single:[_coverImageCache imageForKey:itemId attributes:NULL]]
+            then:updateSignal];
+}
+
+- (SSignal *)coverImageSignalForItem:(NSObject<TGMediaEditableItem> *)item {
+    return [self coverImageSignalForIdentifier:item.uniqueIdentifier];
+}
+
+- (UIImage *)coverImageForItem:(NSObject<TGMediaEditableItem> *)item {
+    NSString *itemId = [TGMediaEditingContext _coverImageUriForItemId:item.uniqueIdentifier];
+    if (itemId == nil)
+        return nil;
+    return [_coverImageCache imageForKey:itemId attributes:NULL];
+}
+
+- (NSNumber *)coverPositionForItem:(NSObject<TGMediaEditableItem> *)item {
+    NSString *itemId = [TGMediaEditingContext _coverImageUriForItemId:item.uniqueIdentifier];
+    if (itemId == nil)
+        return nil;
+    return _coverPositions[itemId];
+}
+
+- (void)setCoverImage:(UIImage *)image position:(NSNumber *)position forItem:(id<TGMediaEditableItem>)item
+{
+    NSString *itemId = [TGMediaEditingContext _coverImageUriForItemId:item.uniqueIdentifier];
+    if (itemId == nil)
+        return;
+    
+    [_coverImageCache setImage:image forKey:itemId attributes:NULL];
+    _coverImagePipe.sink([TGMediaImageUpdate imageUpdateWithItem:item representation:image]);
+    if (position != nil) {
+        [_coverPositions setObject:position forKey:itemId];
+    } else {
+        [_coverPositions removeObjectForKey:itemId];
+    }
 }
 
 - (void)setFullSizeImage:(UIImage *)image forItem:(id<TGMediaEditableItem>)item
@@ -972,6 +1352,11 @@
     return [NSString stringWithFormat:@"%@://%@", [self thumbnailImageUriScheme], itemId];
 }
 
++ (NSString *)_coverImageUriForItemId:(NSString *)itemId
+{
+    return [NSString stringWithFormat:@"%@://%@", @"photo-editor-cover", itemId];
+}
+
 #pragma mark - Constants
 
 + (NSString *)imageUriScheme
@@ -1078,6 +1463,65 @@
 {
     TGMediaTimerUpdate *update = [[TGMediaTimerUpdate alloc] init];
     update->_timer = timer;
+    return update;
+}
+
+@end
+
+
+@implementation TGMediaSpoilerUpdate
+
++ (instancetype)spoilerUpdateWithItem:(id<TGMediaEditableItem>)item spoiler:(bool)spoiler
+{
+    TGMediaSpoilerUpdate *update = [[TGMediaSpoilerUpdate alloc] init];
+    update->_item = item;
+    update->_spoiler = spoiler;
+    return update;
+}
+
++ (instancetype)spoilerUpdate:(bool)spoiler
+{
+    TGMediaSpoilerUpdate *update = [[TGMediaSpoilerUpdate alloc] init];
+    update->_spoiler = spoiler;
+    return update;
+}
+
+@end
+
+
+@implementation TGMediaPriceUpdate
+
++ (instancetype)priceUpdateWithItem:(id<TGMediaEditableItem>)item price:(NSNumber *)price
+{
+    TGMediaPriceUpdate *update = [[TGMediaPriceUpdate alloc] init];
+    update->_item = item;
+    update->_price = price;
+    return update;
+}
+
++ (instancetype)priceUpdate:(NSNumber *)price
+{
+    TGMediaPriceUpdate *update = [[TGMediaPriceUpdate alloc] init];
+    update->_price = price;
+    return update;
+}
+
+@end
+
+@implementation TGMediaLivePhotoModeUpdate
+
++ (instancetype)livePhotoModeUpdateWithItem:(id<TGMediaEditableItem>)item mode:(TGMediaLivePhotoMode)mode
+{
+    TGMediaLivePhotoModeUpdate *update = [[TGMediaLivePhotoModeUpdate alloc] init];
+    update->_item = item;
+    update->_mode = mode;
+    return update;
+}
+
++ (instancetype)livePhotoModeUpdate:(TGMediaLivePhotoMode)mode
+{
+    TGMediaLivePhotoModeUpdate *update = [[TGMediaLivePhotoModeUpdate alloc] init];
+    update->_mode = mode;
     return update;
 }
 

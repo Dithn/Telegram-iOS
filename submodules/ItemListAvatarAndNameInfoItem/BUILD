@@ -24,6 +24,7 @@ swift_library(
         "//submodules/PresentationDataUtils:PresentationDataUtils",
         "//submodules/PhoneNumberFormat:PhoneNumberFormat",
         "//submodules/AccountContext:AccountContext",
+        "//submodules/TelegramUI/Components/ListItemComponentAdaptor",
     ],
     visibility = [
         "//visibility:public",

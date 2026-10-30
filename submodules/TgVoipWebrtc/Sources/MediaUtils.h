@@ -18,7 +18,6 @@
 
 #else
 #import "platform/darwin/VideoMetalView.h"
-#import "platform/darwin/GLVideoView.h"
 #import "platform/darwin/VideoSampleBufferView.h"
 #import "platform/darwin/VideoCaptureView.h"
 #import "platform/darwin/CustomExternalCapturer.h"
@@ -53,6 +52,6 @@
 
 @interface CallVideoFrameData (Initialization)
 
-- (instancetype _Nonnull)initWithBuffer:(id<CallVideoFrameBuffer> _Nonnull)buffer frame:(webrtc::VideoFrame const &)frame mirrorHorizontally:(bool)mirrorHorizontally mirrorVertically:(bool)mirrorVertically;
+- (instancetype _Nonnull)initWithBuffer:(id<CallVideoFrameBuffer> _Nonnull)buffer frame:(webrtc::VideoFrame const &)frame mirrorHorizontally:(bool)mirrorHorizontally mirrorVertically:(bool)mirrorVertically hasDeviceRelativeVideoRotation:(bool)hasDeviceRelativeVideoRotation deviceRelativeVideoRotation:(OngoingCallVideoOrientationWebrtc)deviceRelativeVideoRotation;
 
 @end

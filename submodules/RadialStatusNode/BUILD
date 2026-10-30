@@ -11,9 +11,11 @@ swift_library(
     ],
     deps = [
         "//submodules/Display:Display",
+        "//submodules/LottieSettings:LottieSettings",
         "//submodules/AsyncDisplayKit:AsyncDisplayKit",
         "//submodules/LegacyComponents:LegacyComponents",
         "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
+        "//submodules/ManagedAnimationNode:ManagedAnimationNode"
     ],
     visibility = [
         "//visibility:public",

@@ -3,7 +3,6 @@ import UIKit
 import AsyncDisplayKit
 import Display
 import TelegramCore
-import CoreTelephony
 import TelegramPresentationData
 import PhoneInputNode
 import CountrySelectionUI
@@ -74,7 +73,7 @@ private func generatePhoneInputBackground(color: UIColor, strokeColor: UIColor) 
 final class ChangePhoneNumberControllerNode: ASDisplayNode {
     private let titleNode: ASTextNode
     private let noticeNode: ASTextNode
-    private let countryButton: ASButtonNode
+    private let countryButton: CountryButtonNode
     private let phoneBackground: ASImageNode
     private let phoneInputNode: PhoneInputNode
     
@@ -117,7 +116,7 @@ final class ChangePhoneNumberControllerNode: ASDisplayNode {
         self.noticeNode.displaysAsynchronously = false
         self.noticeNode.attributedText = NSAttributedString(string: self.presentationData.strings.ChangePhoneNumberNumber_Help, font: Font.regular(14.0), textColor: self.presentationData.theme.list.freeTextColor)
         
-        self.countryButton = ASButtonNode()
+        self.countryButton = CountryButtonNode()
         self.countryButton.setBackgroundImage(generateCountryButtonBackground(color: self.presentationData.theme.list.itemBlocksBackgroundColor, strokeColor: self.presentationData.theme.list.itemBlocksSeparatorColor), for: [])
         self.countryButton.setBackgroundImage(generateCountryButtonHighlightedBackground(color: self.presentationData.theme.list.itemHighlightedBackgroundColor), for: .highlighted)
         
@@ -161,17 +160,16 @@ final class ChangePhoneNumberControllerNode: ASDisplayNode {
                 return false
             }
             if let (country, _) = AuthorizationSequenceCountrySelectionController.lookupCountryIdByNumber(number, preferredCountries: strongSelf.preferredCountryIdForCode) {
-                let flagString = emojiFlagForISOCountryCode(country.id)
                 let localizedName: String = AuthorizationSequenceCountrySelectionController.lookupCountryNameById(country.id, strings: strongSelf.presentationData.strings) ?? country.name
-                strongSelf.countryButton.setTitle("\(flagString) \(localizedName)", with: Font.regular(17.0), with: strongSelf.presentationData.theme.list.itemPrimaryTextColor, for: [])
+                strongSelf.countryButton.setCountryTitle(countryId: country.id, name: localizedName, font: Font.regular(17.0), color: strongSelf.presentationData.theme.list.itemPrimaryTextColor)
                 
-                let maskFont = Font.with(size: 20.0, design: .regular, traits: [.monospacedNumbers])
+                let maskFont = Font.with(size: 17.0, design: .regular, traits: [.monospacedNumbers])
                 if let mask = AuthorizationSequenceCountrySelectionController.lookupPatternByNumber(number, preferredCountries: strongSelf.preferredCountryIdForCode).flatMap({ NSAttributedString(string: $0, font: maskFont, textColor: strongSelf.presentationData.theme.list.itemPlaceholderTextColor) }) {
                     strongSelf.phoneInputNode.numberField.textField.attributedPlaceholder = nil
                     strongSelf.phoneInputNode.mask = mask
                 } else {
                     strongSelf.phoneInputNode.mask = nil
-                    strongSelf.phoneInputNode.numberField.textField.attributedPlaceholder = NSAttributedString(string: strongSelf.presentationData.strings.Login_PhonePlaceholder, font: Font.regular(20.0), textColor: strongSelf.presentationData.theme.list.itemPlaceholderTextColor)
+                    strongSelf.phoneInputNode.numberField.textField.attributedPlaceholder = NSAttributedString(string: strongSelf.presentationData.strings.Login_PhonePlaceholder, font: Font.regular(17.0), textColor: strongSelf.presentationData.theme.list.itemPlaceholderTextColor)
                 }
                 return true
             } else {
@@ -211,18 +209,9 @@ final class ChangePhoneNumberControllerNode: ASDisplayNode {
             }
         }
         
-        var countryId: String? = nil
-        let networkInfo = CTTelephonyNetworkInfo()
-        if let carrier = networkInfo.subscriberCellularProvider {
-            countryId = carrier.isoCountryCode
-        }
-        
-        if countryId == nil {
-            countryId = (Locale.current as NSLocale).object(forKey: .countryCode) as? String
-        }
-        
+        let countryId = (Locale.current as NSLocale).object(forKey: .countryCode) as? String
+              
         var countryCodeAndId: (Int32, String) = (1, "US")
-        
         if let countryId = countryId {
             let normalizedId = countryId.uppercased()
             for (code, idAndName) in countryCodeToIdAndName {
@@ -286,5 +275,4 @@ final class ChangePhoneNumberControllerNode: ASDisplayNode {
     @objc func countryPressed() {
         self.selectCountryCode?()
     }
-    
 }

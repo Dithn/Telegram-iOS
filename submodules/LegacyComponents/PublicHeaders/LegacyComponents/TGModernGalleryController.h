@@ -1,5 +1,3 @@
-#import <LegacyComponents/LegacyComponents.h>
-
 #import <LegacyComponents/TGOverlayController.h>
 #import <LegacyComponents/LegacyComponentsContext.h>
 
@@ -47,6 +45,8 @@ typedef NS_ENUM(NSUInteger, TGModernGalleryScrollAnimationDirection) {
 
 - (void)dismissWhenReady;
 - (void)dismissWhenReadyAnimated:(bool)animated;
+
+- (void)setScrollViewHidden:(bool)hidden;
 
 - (bool)isFullyOpaque;
 

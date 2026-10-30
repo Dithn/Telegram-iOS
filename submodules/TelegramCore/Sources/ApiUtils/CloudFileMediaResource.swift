@@ -1,21 +1,19 @@
 import Foundation
 import Postbox
-import TelegramApi
+internal import TelegramApi
 
 
 protocol TelegramCloudMediaResource: TelegramMediaResource {
     func apiInputLocation(fileReference: Data?) -> Api.InputFileLocation?
 }
 
+/// Identifies a downloadable cloud resource in a log report: its id, as the FetchV2 log lines
+/// name it. (An Api value prints only its constructor name.)
 public func extractMediaResourceDebugInfo(resource: MediaResource) -> String? {
-    if let resource = resource as? TelegramCloudMediaResource {
-        guard let inputLocation = resource.apiInputLocation(fileReference: nil) else {
-            return nil
-        }
-        return String(describing: inputLocation)
-    } else {
+    guard let cloudResource = resource as? TelegramCloudMediaResource, cloudResource.apiInputLocation(fileReference: nil) != nil else {
         return nil
     }
+    return resource.id.stringRepresentation
 }
 
 public protocol TelegramMultipartFetchableResource: TelegramMediaResource {
@@ -28,19 +26,19 @@ public protocol TelegramCloudMediaResourceWithFileReference {
 
 extension CloudFileMediaResource: TelegramCloudMediaResource, TelegramMultipartFetchableResource, TelegramCloudMediaResourceWithFileReference {
     func apiInputLocation(fileReference: Data?) -> Api.InputFileLocation? {
-        return Api.InputFileLocation.inputFileLocation(volumeId: self.volumeId, localId: self.localId, secret: self.secret, fileReference: Buffer(data: fileReference ?? Data()))
+        return Api.InputFileLocation.inputFileLocation(.init(volumeId: self.volumeId, localId: self.localId, secret: self.secret, fileReference: Buffer(data: fileReference ?? Data())))
     }
 }
 
 extension CloudPhotoSizeMediaResource: TelegramCloudMediaResource, TelegramMultipartFetchableResource, TelegramCloudMediaResourceWithFileReference {
     func apiInputLocation(fileReference: Data?) -> Api.InputFileLocation? {
-        return Api.InputFileLocation.inputPhotoFileLocation(id: self.photoId, accessHash: self.accessHash, fileReference: Buffer(data: fileReference ?? Data()), thumbSize: self.sizeSpec)
+        return Api.InputFileLocation.inputPhotoFileLocation(.init(id: self.photoId, accessHash: self.accessHash, fileReference: Buffer(data: fileReference ?? Data()), thumbSize: self.sizeSpec))
     }
 }
 
 extension CloudDocumentSizeMediaResource: TelegramCloudMediaResource, TelegramMultipartFetchableResource, TelegramCloudMediaResourceWithFileReference {
     func apiInputLocation(fileReference: Data?) -> Api.InputFileLocation? {
-        return Api.InputFileLocation.inputDocumentFileLocation(id: self.documentId, accessHash: self.accessHash, fileReference: Buffer(data: fileReference ?? Data()), thumbSize: self.sizeSpec)
+        return Api.InputFileLocation.inputDocumentFileLocation(.init(id: self.documentId, accessHash: self.accessHash, fileReference: Buffer(data: fileReference ?? Data()), thumbSize: self.sizeSpec))
     }
 }
 
@@ -54,7 +52,7 @@ extension CloudPeerPhotoSizeMediaResource: TelegramMultipartFetchableResource {
                 flags = 1 << 0
         }
         if let photoId = self.photoId {
-            return Api.InputFileLocation.inputPeerPhotoFileLocation(flags: flags, peer: peerReference.inputPeer, photoId: photoId)
+            return Api.InputFileLocation.inputPeerPhotoFileLocation(.init(flags: flags, peer: peerReference.inputPeer, photoId: photoId))
         } else {
             return nil
         }
@@ -64,7 +62,7 @@ extension CloudPeerPhotoSizeMediaResource: TelegramMultipartFetchableResource {
 extension CloudStickerPackThumbnailMediaResource: TelegramMultipartFetchableResource {
     func apiInputLocation(packReference: StickerPackReference) -> Api.InputFileLocation? {
         if let thumbVersion = self.thumbVersion {
-            return Api.InputFileLocation.inputStickerSetThumb(stickerset: packReference.apiInputStickerSet, thumbVersion: thumbVersion)
+            return Api.InputFileLocation.inputStickerSetThumb(.init(stickerset: packReference.apiInputStickerSet, thumbVersion: thumbVersion))
         } else {
             return nil
         }
@@ -73,18 +71,12 @@ extension CloudStickerPackThumbnailMediaResource: TelegramMultipartFetchableReso
 
 extension CloudDocumentMediaResource: TelegramCloudMediaResource, TelegramMultipartFetchableResource, TelegramCloudMediaResourceWithFileReference {
     func apiInputLocation(fileReference: Data?) -> Api.InputFileLocation? {
-        return Api.InputFileLocation.inputDocumentFileLocation(id: self.fileId, accessHash: self.accessHash, fileReference: Buffer(data: fileReference ?? Data()), thumbSize: "")
+        return Api.InputFileLocation.inputDocumentFileLocation(.init(id: self.fileId, accessHash: self.accessHash, fileReference: Buffer(data: fileReference ?? Data()), thumbSize: ""))
     }
 }
 
 extension SecretFileMediaResource: TelegramCloudMediaResource, TelegramMultipartFetchableResource {
     func apiInputLocation(fileReference: Data?) -> Api.InputFileLocation? {
-        return .inputEncryptedFileLocation(id: self.fileId, accessHash: self.accessHash)
-    }
-}
-
-extension WebFileReferenceMediaResource {
-    var apiInputLocation: Api.InputWebFileLocation {
-        return .inputWebFileLocation(url: self.url, accessHash: self.accessHash)
+        return .inputEncryptedFileLocation(.init(id: self.fileId, accessHash: self.accessHash))
     }
 }

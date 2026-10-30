@@ -4,8 +4,8 @@ import UIKit
 import AsyncDisplayKit
 import TelegramPresentationData
 
-private let textFont = Font.regular(13.0)
-private let selectedTextFont = Font.bold(13.0)
+private let textFont = Font.regular(14.0)
+private let selectedTextFont = Font.semibold(14.0)
 
 public enum SegmentedControlLayout {
     case stretchToFill(width: CGFloat)
@@ -53,8 +53,9 @@ public extension SegmentedControlTheme {
     }
 }
 
-private func generateSelectionImage(theme: SegmentedControlTheme) -> UIImage? {
-    return generateImage(CGSize(width: 20.0, height: 20.0), rotatedContext: { size, context in
+private func generateSelectionImage(theme: SegmentedControlTheme, cornerRadius: CGFloat) -> UIImage? {
+    let cornerRadius = cornerRadius - 1.0
+    return generateImage(CGSize(width: 4.0 + cornerRadius * 2.0, height: 4.0 + cornerRadius * 2.0), rotatedContext: { size, context in
         let bounds = CGRect(origin: CGPoint(), size: size)
         context.clear(bounds)
         
@@ -62,8 +63,8 @@ private func generateSelectionImage(theme: SegmentedControlTheme) -> UIImage? {
             context.setShadow(offset: CGSize(width: 0.0, height: -3.0), blur: 6.0, color: theme.shadowColor.withAlphaComponent(0.12).cgColor)
         }
         context.setFillColor(theme.foregroundColor.cgColor)
-        context.fillEllipse(in: CGRect(x: 2.0, y: 2.0, width: 16.0, height: 16.0))
-    })?.stretchableImage(withLeftCapWidth: 10, topCapHeight: 10)
+        context.fillEllipse(in: CGRect(x: 2.0, y: 2.0, width: cornerRadius * 2.0, height: cornerRadius * 2.0))
+    })?.stretchableImage(withLeftCapWidth: Int(2 + cornerRadius), topCapHeight: Int(2 + cornerRadius))
 }
 
 public struct SegmentedControlItem: Equatable {
@@ -75,9 +76,14 @@ public struct SegmentedControlItem: Equatable {
 }
 
 private class SegmentedControlItemNode: HighlightTrackingButtonNode {
+    override func didLoad() {
+        super.didLoad()
+        
+        self.view.isExclusiveTouch = true
+    }
 }
 
-public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDelegate {
+public final class SegmentedControlNode: ASDisplayNode, ASGestureRecognizerDelegate {
     private var theme: SegmentedControlTheme
     private var _items: [SegmentedControlItem]
     private var _selectedIndex: Int = 0
@@ -119,12 +125,19 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
             let dividersCount = self._items.count > 2 ? self._items.count - 1 : 0
             if self.dividerNodes.count != dividersCount {
                 self.dividerNodes.forEach { $0.removeFromSupernode() }
-                self.dividerNodes = (0 ..< dividersCount).map { _ in ASDisplayNode() }
+                self.dividerNodes = (0 ..< dividersCount).map { _ in
+                    let node = ASDisplayNode()
+                    node.backgroundColor = self.theme.dividerColor
+                    return node
+                }
+                self.dividerNodes.forEach(self.addSubnode(_:))
             }
             
             if let layout  = self.validLayout {
                 let _ = self.updateLayout(layout, transition: .immediate)
             }
+            
+            self.updatePointerInteraction()
         }
     }
     
@@ -140,6 +153,8 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
             if let layout = self.validLayout {
                 let _ = self.updateLayout(layout, transition: .immediate)
             }
+            
+            self.updatePointerInteraction()
         }
     }
     
@@ -151,6 +166,8 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
         if let layout = self.validLayout {
             let _ = self.updateLayout(layout, transition: .animated(duration: 0.2, curve: .easeInOut))
         }
+        
+        self.updatePointerInteraction()
     }
     
     public var selectedIndexChanged: (Int) -> Void = { _ in }
@@ -158,7 +175,7 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
         f(true)
     }
     
-    public init(theme: SegmentedControlTheme, items: [SegmentedControlItem], selectedIndex: Int) {
+    public init(theme: SegmentedControlTheme, items: [SegmentedControlItem], selectedIndex: Int, cornerRadius: CGFloat = 9.0) {
         self.theme = theme
         self._items = items
         self._selectedIndex = selectedIndex
@@ -190,7 +207,7 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
         super.init()
         
         self.clipsToBounds = true
-        self.cornerRadius = 9.0
+        self.cornerRadius = cornerRadius
         
         self.addSubnode(self.selectionNode)
         self.itemNodes.forEach(self.addSubnode(_:))
@@ -198,7 +215,7 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
         self.dividerNodes.forEach(self.addSubnode(_:))
 
         self.backgroundColor = self.theme.backgroundColor
-        self.selectionNode.image = generateSelectionImage(theme: self.theme)
+        self.selectionNode.image = generateSelectionImage(theme: self.theme, cornerRadius: cornerRadius)
     }
     
     override public func didLoad() {
@@ -207,9 +224,21 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
         self.view.disablesInteractiveTransitionGestureRecognizer = true
        
         let gestureRecognizer = UIPanGestureRecognizer(target: self, action: #selector(self.panGesture(_:)))
-        gestureRecognizer.delegate = self
+        gestureRecognizer.delegate = self.wrappedGestureRecognizerDelegate
         self.view.addGestureRecognizer(gestureRecognizer)
         self.gestureRecognizer = gestureRecognizer
+    }
+    
+    private func updatePointerInteraction() {
+        for i in 0 ..< self.itemNodes.count {
+            let itemNode = self.itemNodes[i]
+         
+            if i == self.selectedIndex {
+                itemNode.pointerInteraction = PointerInteraction(view: itemNode.view, customInteractionView: self.selectionNode.view, style: .lift)
+            } else {
+                itemNode.pointerInteraction = PointerInteraction(view: itemNode.view, style: .insetRectangle(2.0, 2.0))
+            }
+        }
     }
     
     private func setupButtons() {
@@ -233,6 +262,8 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
                 }
             }
         }
+        
+        self.updatePointerInteraction()
     }
     
     private func updateButtonsHighlights(highlightedIndex: Int?, gestureSelectedIndex: Int?) {
@@ -266,6 +297,26 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
         }
     }
     
+    public func animateSelection(to point: CGPoint, transition: ContainedViewLayoutTransition) -> CGRect {
+        self.isUserInteractionEnabled = false
+        self.alpha = 0.0
+        self.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2)
+        
+        let selectionFrame = self.selectionNode.frame
+        transition.animateFrame(node: self.selectionNode, from: self.selectionNode.frame, to: CGRect(origin: CGPoint(x: point.x - self.selectionNode.frame.height / 2.0, y: self.selectionNode.frame.minY), size: CGSize(width: self.selectionNode.frame.height, height: self.selectionNode.frame.height)))
+        return selectionFrame
+    }
+    
+    public func animateSelection(from point: CGPoint, transition: ContainedViewLayoutTransition) -> CGRect {
+        self.isUserInteractionEnabled = true
+        self.alpha = 1.0
+        self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+        
+        let selectionFrame = self.selectionNode.frame
+        transition.animateFrame(node: self.selectionNode, from: CGRect(origin: CGPoint(x: point.x - self.selectionNode.frame.height / 2.0, y: self.selectionNode.frame.minY), size: CGSize(width: self.selectionNode.frame.height, height: self.selectionNode.frame.height)), to: self.selectionNode.frame)
+        return selectionFrame
+    }
+    
     public func updateTheme(_ theme: SegmentedControlTheme) {
         guard theme != self.theme else {
             return
@@ -273,7 +324,7 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
         self.theme = theme
         
         self.backgroundColor = self.theme.backgroundColor
-        self.selectionNode.image = generateSelectionImage(theme: self.theme)
+        self.selectionNode.image = generateSelectionImage(theme: self.theme, cornerRadius: self.cornerRadius)
         
         for itemNode in self.itemNodes {
             if let title = itemNode.attributedTitle(for: .normal)?.string {
@@ -348,7 +399,7 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
         }
         
         if !self.dividerNodes.isEmpty {
-            let dividerSize = CGSize(width: 1.0, height: 16.0)
+            let dividerSize = CGSize(width: 1.0, height: size.height - 8.0)
             let delta: CGFloat = size.width / CGFloat(self.dividerNodes.count + 1)
             for i in 0 ..< self.dividerNodes.count {
                 let dividerNode = self.dividerNodes[i]
@@ -379,6 +430,8 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
                 if let layout = strongSelf.validLayout {
                     let _ = strongSelf.updateLayout(layout, transition: .animated(duration: 0.2, curve: .slide))
                 }
+                
+                strongSelf.updatePointerInteraction()
             }
         })
     }
@@ -415,6 +468,8 @@ public final class SegmentedControlNode: ASDisplayNode, UIGestureRecognizerDeleg
                                 if commit {
                                     strongSelf._selectedIndex = gestureSelectedIndex
                                     strongSelf.selectedIndexChanged(gestureSelectedIndex)
+                                    
+                                    strongSelf.updatePointerInteraction()
                                 } else {
                                     if let layout = strongSelf.validLayout {
                                         let _ = strongSelf.updateLayout(layout, transition: .animated(duration: 0.2, curve: .slide))

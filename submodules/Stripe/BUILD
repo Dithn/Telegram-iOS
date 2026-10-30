@@ -1,4 +1,6 @@
 
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
 objc_library(
     name = "Stripe",
     enable_modules = True,
@@ -15,6 +17,7 @@ objc_library(
     ],
     copts = [
         "-I{}/PublicHeaders/Stripe".format(package_name()),
+        "-Werror",
     ],
     sdk_frameworks = [
         "Foundation",

@@ -1,28 +1,29 @@
 import Foundation
+import LottieSettings
 import UIKit
 import Display
 import TelegramCore
 import SwiftSignalKit
 import AsyncDisplayKit
-import Postbox
 import StickerResources
 import AccountContext
 import AnimatedStickerNode
 import TelegramAnimatedStickerNode
 import ShimmerEffect
 import TelegramPresentationData
+import AccountContext
 
 final class HorizontalStickerGridItem: GridItem {
-    let account: Account
+    let context: AccountContext
     let file: TelegramMediaFile
     let theme: PresentationTheme
     let isPreviewed: (HorizontalStickerGridItem) -> Bool
-    let sendSticker: (FileMediaReference, ASDisplayNode, CGRect) -> Void
+    let sendSticker: (FileMediaReference, UIView, CGRect) -> Void
     
     let section: GridSection? = nil
     
-    init(account: Account, file: TelegramMediaFile, theme: PresentationTheme, isPreviewed: @escaping (HorizontalStickerGridItem) -> Bool, sendSticker: @escaping (FileMediaReference, ASDisplayNode, CGRect) -> Void) {
-        self.account = account
+    init(context: AccountContext, file: TelegramMediaFile, theme: PresentationTheme, isPreviewed: @escaping (HorizontalStickerGridItem) -> Bool, sendSticker: @escaping (FileMediaReference, UIView, CGRect) -> Void) {
+        self.context = context
         self.file = file
         self.theme = theme
         self.isPreviewed = isPreviewed
@@ -31,7 +32,7 @@ final class HorizontalStickerGridItem: GridItem {
     
     func node(layout: GridNodeLayout, synchronousLoad: Bool) -> GridItemNode {
         let node = HorizontalStickerGridItemNode()
-        node.setup(account: self.account, item: self)
+        node.setup(context: self.context, item: self)
         node.sendSticker = self.sendSticker
         return node
     }
@@ -41,20 +42,23 @@ final class HorizontalStickerGridItem: GridItem {
             assertionFailure()
             return
         }
-        node.setup(account: self.account, item: self)
+        node.setup(context: self.context, item: self)
         node.sendSticker = self.sendSticker
     }
 }
 
 final class HorizontalStickerGridItemNode: GridItemNode {
-    private var currentState: (Account, HorizontalStickerGridItem, CGSize)?
+    private var currentState: (AccountContext, HorizontalStickerGridItem, CGSize)?
     let imageNode: TransformImageNode
     private(set) var animationNode: AnimatedStickerNode?
     private(set) var placeholderNode: StickerShimmerEffectNode?
+    private var lockBackground: UIVisualEffectView?
+    private var lockTintView: UIView?
+    private var lockIconNode: ASImageNode?
     
     private let stickerFetchedDisposable = MetaDisposable()
     
-    var sendSticker: ((FileMediaReference, ASDisplayNode, CGRect) -> Void)?
+    var sendSticker: ((FileMediaReference, UIView, CGRect) -> Void)?
     
     private var currentIsPreviewing: Bool = false
     
@@ -77,7 +81,7 @@ final class HorizontalStickerGridItemNode: GridItemNode {
     
     var stickerItem: StickerPackItem? {
         if let (_, item, _) = self.currentState {
-            return StickerPackItem(index: ItemCollectionItemIndex(index: 0, id: 0), file: item.file, indexKeys: [])
+            return StickerPackItem(index: EngineItemCollectionItemIndex(index: 0, id: 0), file: item.file, indexKeys: [])
         } else {
             return nil
         }
@@ -134,15 +138,15 @@ final class HorizontalStickerGridItemNode: GridItemNode {
         self.imageNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.imageNodeTap(_:))))
     }
     
-    func setup(account: Account, item: HorizontalStickerGridItem) {
-        if self.currentState == nil || self.currentState!.0 !== account || self.currentState!.1.file.id != item.file.id {
+    func setup(context: AccountContext, item: HorizontalStickerGridItem) {
+        if self.currentState == nil || self.currentState!.0 !== context || self.currentState!.1.file.id != item.file.id {
             if let dimensions = item.file.dimensions {
                 if item.file.isAnimatedSticker || item.file.isVideoSticker {
                     let animationNode: AnimatedStickerNode
                     if let currentAnimationNode = self.animationNode {
                         animationNode = currentAnimationNode
                     } else {
-                        animationNode = AnimatedStickerNode()
+                        animationNode = DefaultAnimatedStickerNodeImpl(lottieSettings: context.lottieRenderingSettings)
                         animationNode.transform = self.imageNode.transform
                         animationNode.visibility = self.isVisibleInGrid
                         animationNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.imageNodeTap(_:))))
@@ -158,9 +162,9 @@ final class HorizontalStickerGridItemNode: GridItemNode {
                     let fittedDimensions = dimensions.cgSize.aspectFitted(CGSize(width: 160.0, height: 160.0))
                     
                     if item.file.isVideoSticker {
-                        self.imageNode.setSignal(chatMessageSticker(postbox: account.postbox, file: item.file, small: true, synchronousLoad: false))
+                        self.imageNode.setSignal(chatMessageSticker(postbox: context.account.postbox, userLocation: .other, file: item.file, small: true, synchronousLoad: false))
                     } else {
-                        self.imageNode.setSignal(chatMessageAnimatedSticker(postbox: account.postbox, file: item.file, small: true, size: fittedDimensions, synchronousLoad: false))
+                        self.imageNode.setSignal(chatMessageAnimatedSticker(postbox: context.account.postbox, userLocation: .other, file: item.file, small: true, size: fittedDimensions, synchronousLoad: false))
                     }
                     animationNode.started = { [weak self] in
                         guard let strongSelf = self else {
@@ -178,22 +182,63 @@ final class HorizontalStickerGridItemNode: GridItemNode {
                             strongSelf.removePlaceholder(animated: false)
                         }
                     }
-                    animationNode.setup(source: AnimatedStickerResourceSource(account: account, resource: item.file.resource, isVideo: item.file.isVideoSticker), width: Int(fittedDimensions.width), height: Int(fittedDimensions.height), mode: .cached)
+                    animationNode.setup(source: AnimatedStickerResourceSource(account: context.account, resource: item.file.resource, isVideo: item.file.isVideoSticker), width: Int(fittedDimensions.width), height: Int(fittedDimensions.height), playbackMode: .loop, mode: .cached)
                     
-                    self.stickerFetchedDisposable.set(freeMediaFileResourceInteractiveFetched(account: account, fileReference: stickerPackFileReference(item.file), resource: item.file.resource).start())
+                    self.stickerFetchedDisposable.set(freeMediaFileResourceInteractiveFetched(account: context.account, userLocation: .other, fileReference: stickerPackFileReference(item.file), resource: item.file.resource).startStrict())
                 } else {
                     self.imageNode.alpha = 1.0
-                    self.imageNode.setSignal(chatMessageSticker(account: account, file: item.file, small: true))
+                    self.imageNode.setSignal(chatMessageSticker(account: context.account, userLocation: .other, file: item.file, small: true))
                     
                     if let currentAnimationNode = self.animationNode {
                         self.animationNode = nil
                         currentAnimationNode.removeFromSupernode()
                     }
                     
-                    self.stickerFetchedDisposable.set(freeMediaFileResourceInteractiveFetched(account: account, fileReference: stickerPackFileReference(item.file), resource: chatMessageStickerResource(file: item.file, small: true)).start())
+                    self.stickerFetchedDisposable.set(freeMediaFileResourceInteractiveFetched(account: context.account, userLocation: .other, fileReference: stickerPackFileReference(item.file), resource: chatMessageStickerResource(file: item.file, small: true)).startStrict())
                 }
                 
-                self.currentState = (account, item, dimensions.cgSize)
+                if item.file.isPremiumSticker {
+                    let lockBackground: UIVisualEffectView
+                    let lockIconNode: ASImageNode
+                    if let currentBackground = self.lockBackground, let currentIcon = self.lockIconNode {
+                        lockBackground = currentBackground
+                        lockIconNode = currentIcon
+                    } else {
+                        let effect: UIBlurEffect
+                        if #available(iOS 10.0, *) {
+                            effect = UIBlurEffect(style: .regular)
+                        } else {
+                            effect = UIBlurEffect(style: .light)
+                        }
+                        lockBackground = UIVisualEffectView(effect: effect)
+                        lockBackground.clipsToBounds = true
+                        lockBackground.isUserInteractionEnabled = false
+                        lockIconNode = ASImageNode()
+                        lockIconNode.displaysAsynchronously = false
+                        lockIconNode.image = generateTintedImage(image: UIImage(bundleImageName: "Chat List/PeerPremiumIcon"), color: .white)
+                        lockIconNode.transform = CATransform3DMakeRotation(CGFloat.pi / 2.0, 0.0, 0.0, 1.0)
+                        
+                        let lockTintView = UIView()
+                        lockTintView.backgroundColor = UIColor(rgb: 0x000000, alpha: 0.15)
+                        lockBackground.contentView.addSubview(lockTintView)
+                        
+                        self.lockBackground = lockBackground
+                        self.lockTintView = lockTintView
+                        self.lockIconNode = lockIconNode
+                        
+                        self.view.addSubview(lockBackground)
+                        self.addSubnode(lockIconNode)
+                    }
+                } else if let lockBackground = self.lockBackground, let lockTintView = self.lockTintView, let lockIconNode = self.lockIconNode {
+                    self.lockBackground = nil
+                    self.lockTintView = nil
+                    self.lockIconNode = nil
+                    lockBackground.removeFromSuperview()
+                    lockTintView.removeFromSuperview()
+                    lockIconNode.removeFromSupernode()
+                }
+                
+                self.currentState = (context, item, dimensions.cgSize)
                 self.setNeedsLayout()
             }
         }
@@ -210,8 +255,8 @@ final class HorizontalStickerGridItemNode: GridItemNode {
         if let placeholderNode = self.placeholderNode {
             placeholderNode.frame = bounds
             
-            if let theme = self.currentState?.1.theme, let file = self.currentState?.1.file {
-                placeholderNode.update(backgroundColor: theme.list.plainBackgroundColor, foregroundColor: theme.list.mediaPlaceholderColor.mixedWith(theme.list.plainBackgroundColor, alpha: 0.4), shimmeringColor: theme.list.mediaPlaceholderColor.withAlphaComponent(0.3), data: file.immediateThumbnailData, size: bounds.size)
+            if let context = self.currentState?.0, let theme = self.currentState?.1.theme, let file = self.currentState?.1.file {
+                placeholderNode.update(backgroundColor: nil, foregroundColor: theme.list.itemPrimaryTextColor.withMultipliedAlpha(0.05), shimmeringColor: theme.list.mediaPlaceholderColor.withAlphaComponent(0.2), data: file.immediateThumbnailData, size: bounds.size, enableEffect: context.sharedContext.energyUsageSettings.fullTranslucency)
             }
         }
         
@@ -228,6 +273,21 @@ final class HorizontalStickerGridItemNode: GridItemNode {
                 animationNode.updateLayout(size: self.imageNode.bounds.size)
             }
         }
+        
+        if let lockBackground = self.lockBackground, let lockTintView = self.lockTintView, let lockIconNode = self.lockIconNode {
+            let lockSize = CGSize(width: 16.0, height: 16.0)
+            let lockBackgroundFrame = CGRect(origin: CGPoint(x: 0.0, y: bounds.height - lockSize.height), size: lockSize)
+            lockBackground.frame = lockBackgroundFrame
+            lockBackground.layer.cornerRadius = lockSize.width / 2.0
+            if #available(iOS 13.0, *) {
+                lockBackground.layer.cornerCurve = .circular
+            }
+            lockTintView.frame = CGRect(origin: CGPoint(), size: lockBackgroundFrame.size)
+            if let icon = lockIconNode.image {
+                let iconSize = CGSize(width: icon.size.width - 4.0, height: icon.size.height - 4.0)
+                lockIconNode.frame = CGRect(origin: CGPoint(x: lockBackgroundFrame.minX + floorToScreenPixels((lockBackgroundFrame.width - iconSize.width) / 2.0), y: lockBackgroundFrame.minY + floorToScreenPixels((lockBackgroundFrame.height - iconSize.height) / 2.0)), size: iconSize)
+            }
+        }
     }
     
     override func updateAbsoluteRect(_ absoluteRect: CGRect, within containerSize: CGSize) {
@@ -238,7 +298,7 @@ final class HorizontalStickerGridItemNode: GridItemNode {
     
     @objc func imageNodeTap(_ recognizer: UITapGestureRecognizer) {
         if let (_, item, _) = self.currentState, case .ended = recognizer.state {
-            self.sendSticker?(.standalone(media: item.file), self, self.bounds)
+            self.sendSticker?(.standalone(media: item.file), self.view, self.bounds)
         }
     }
     

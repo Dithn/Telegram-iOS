@@ -4,7 +4,7 @@ import AsyncDisplayKit
 import SwiftSignalKit
 import UIKitRuntimeUtils
 
-final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGestureRecognizerDelegate {
+final class NavigationModalContainer: ASDisplayNode, ASScrollViewDelegate, ASGestureRecognizerDelegate {
     private var theme: NavigationControllerTheme
     let isFlat: Bool
     
@@ -27,6 +27,22 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
     
     private var validLayout: ContainerViewLayout?
     private var horizontalDismissOffset: CGFloat?
+    
+    /// The card's frame now, in this container's coordinates: where `update` placed it, moved by an interactive dismiss
+    /// (down with the scroll, aside with the edge pan). Nil before the first layout.
+    var presentedCardFrame: CGRect? {
+        guard let layout = self.validLayout else {
+            return nil
+        }
+        // The card sits one screen down in the scroll content, which rests scrolled one screen down.
+        var frame = self.container.frame.offsetBy(dx: 0.0, dy: -layout.size.height)
+        if let horizontalDismissOffset = self.horizontalDismissOffset {
+            frame.origin.x += horizontalDismissOffset
+        } else {
+            frame.origin.y += self.dismissProgress * layout.size.height
+        }
+        return frame
+    }
     
     var keyboardViewManager: KeyboardViewManager? {
         didSet {
@@ -51,7 +67,7 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
         
         self.scrollNode = ASScrollNode()
         
-        self.container = NavigationContainer(controllerRemoved: controllerRemoved)
+        self.container = NavigationContainer(isFlat: false, controllerRemoved: controllerRemoved)
         self.container.clipsToBounds = true
         
         super.init()
@@ -89,7 +105,9 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
         }
         self.scrollNode.view.delaysContentTouches = false
         self.scrollNode.view.clipsToBounds = false
-        self.scrollNode.view.delegate = self
+        self.scrollNode.view.delegate = self.wrappedScrollViewDelegate
+        self.scrollNode.view.tag = 0x5C4011
+        self.scrollNode.view.scrollsToTop = false
         
         let panRecognizer = InteractiveTransitionGestureRecognizer(target: self, action: #selector(self.panGesture(_:)), allowedDirections: { [weak self] _ in
             guard let strongSelf = self, !strongSelf.isDismissed else {
@@ -97,6 +115,9 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
             }
             return .right
         })
+        if #available(iOS 13.4, *) {
+            panRecognizer.allowedScrollTypesMask = .continuous
+        }
         self.panRecognizer = panRecognizer
         if let layout = self.validLayout {
             switch layout.metrics.widthClass {
@@ -106,12 +127,30 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
                 panRecognizer.isEnabled = false
             }
         }
-        panRecognizer.delegate = self
+        panRecognizer.delegate = self.wrappedGestureRecognizerDelegate
         panRecognizer.delaysTouchesBegan = false
         panRecognizer.cancelsTouchesInView = true
         if !self.isFlat {
             self.view.addGestureRecognizer(panRecognizer)
             self.dim.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.dimTapGesture(_:))))
+        }
+    }
+    
+    public override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer == self.panRecognizer, let gestureRecognizer = self.panRecognizer, gestureRecognizer.numberOfTouches == 0 {
+            let translation = gestureRecognizer.velocity(in: gestureRecognizer.view)
+            if abs(translation.y) > 4.0 && abs(translation.y) > abs(translation.x) * 2.5 {
+                return false
+            }
+            if translation.x < 4.0 {
+                return false
+            }
+            if self.isDismissed {
+                return false
+            }
+            return true
+        } else {
+            return true
         }
     }
     
@@ -224,6 +263,8 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
         self.view.endEditing(true)
     }
     
+    private var isDraggingHeader = false
+    
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         if self.ignoreScrolling || self.isDismissed {
             return
@@ -232,6 +273,9 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
         progress = max(0.0, min(1.0, progress))
         self.dismissProgress = progress
         self.applyDismissProgress(transition: .immediate, completion: {})
+        
+        let location = scrollView.panGestureRecognizer.location(in: scrollView).offsetBy(dx: 0.0, dy: -self.container.frame.minY)
+        self.isDraggingHeader = location.y < 66.0
     }
     
     private func applyDismissProgress(transition: ContainedViewLayoutTransition, completion: @escaping () -> Void) {
@@ -256,10 +300,20 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
         let transition: ContainedViewLayoutTransition
         let dismissProgress: CGFloat
         if (velocity.y < -0.5 || progress >= 0.5) && self.checkInteractiveDismissWithControllers() {
-            dismissProgress = 1.0
-            targetOffset = 0.0
-            transition = .animated(duration: duration, curve: .easeInOut)
-            self.isDismissed = true
+            if let controller = self.container.controllers.last as? MinimizableController, controller.isMinimizable {
+                dismissProgress = 0.0
+                targetOffset = 0.0
+                transition = .immediate
+                
+                let topEdgeOffset = self.container.view.convert(self.container.bounds, to: self.view).minY
+                controller.requestMinimize(topEdgeOffset: topEdgeOffset, initialVelocity: velocity.y)
+                self.dim.removeFromSupernode()
+            } else {
+                dismissProgress = 1.0
+                targetOffset = 0.0
+                transition = .animated(duration: duration, curve: .easeInOut)
+                self.isDismissed = true
+            }
         } else {
             dismissProgress = 0.0
             targetOffset = self.bounds.height
@@ -291,7 +345,7 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
     }
     
-    func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+    func scrollViewShouldScroll(toTop scrollView: UIScrollView) -> Bool {
         return false
     }
     
@@ -299,19 +353,28 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
         if self.isDismissed {
             return
         }
+        // On a device without floating panels (iPhone Duo) a modal is the phone card, also when wide.
+        let layout = layout.forOptionalFloatingPresentation
         
         self.isUpdatingState = true
         
         self.validLayout = layout
         
         var isStandaloneModal = false
-        if let controller = controllers.first, case .standaloneModal = controller.navigationPresentation {
-            isStandaloneModal = true
+        var flatReceivesModalTransition = false
+        if let controller = controllers.first {
+            if case .standaloneModal = controller.navigationPresentation {
+                isStandaloneModal = true
+            }
+            if controller.flatReceivesModalTransition {
+                flatReceivesModalTransition = true
+            }
         }
+        let _ = flatReceivesModalTransition
         
         transition.updateFrame(node: self.dim, frame: CGRect(origin: CGPoint(), size: layout.size))
         self.ignoreScrolling = true
-        self.scrollNode.view.isScrollEnabled = (layout.inputHeight == nil || layout.inputHeight == 0.0) && self.isInteractiveDimissEnabled
+        self.scrollNode.view.isScrollEnabled = (layout.inputHeight == nil || layout.inputHeight == 0.0) && self.isInteractiveDimissEnabled && !self.isFlat
         let previousBounds = self.scrollNode.bounds
         let scrollNodeFrame = CGRect(origin: CGPoint(x: self.horizontalDismissOffset ?? 0.0, y: 0.0), size: layout.size)
         self.scrollNode.frame = scrollNodeFrame
@@ -327,9 +390,12 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
         }
         self.ignoreScrolling = false
         
-        self.scrollNode.view.isScrollEnabled = !isStandaloneModal
+        self.scrollNode.view.isScrollEnabled = !isStandaloneModal && !self.isFlat
         
-        let isLandscape = layout.orientation == .landscape
+        // A viewer that fills the screen beside a status island (iPhone Duo, unfolded portrait) is laid out like a
+        // landscape modal: the whole screen, no card.
+        let fillsScreenBesideStatusIsland = layout.topBarStatusIsland != nil && (controllers.first?.fillsScreenBesideStatusIsland ?? false)
+        let isLandscape = layout.orientation == .landscape || fillsScreenBesideStatusIsland
         let containerLayout: ContainerViewLayout
         let containerFrame: CGRect
         let containerScale: CGFloat
@@ -341,10 +407,14 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
             } else {
                 self.dim.backgroundColor = UIColor(white: 0.0, alpha: 0.25)
             }
-            if isStandaloneModal || isLandscape || self.isFlat {
+            if isStandaloneModal || isLandscape || (self.isFlat && !flatReceivesModalTransition) {
                 self.container.cornerRadius = 0.0
             } else {
-                self.container.cornerRadius = 10.0
+                var cornerRadius: CGFloat = 10.0
+                if let controller = controllers.first, controller._hasGlassStyle {
+                    cornerRadius = 38.0
+                }
+                self.container.cornerRadius = cornerRadius
             }
             
             if #available(iOS 11.0, *) {
@@ -378,17 +448,26 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
                     effectiveStatusBarHeight = nil
                 }
                 
-                containerLayout = ContainerViewLayout(size: CGSize(width: layout.size.width, height: layout.size.height - topInset), metrics: layout.metrics, deviceMetrics: layout.deviceMetrics, intrinsicInsets: UIEdgeInsets(top: 0.0, left: layout.intrinsicInsets.left, bottom: layout.intrinsicInsets.bottom, right: layout.intrinsicInsets.right), safeInsets: UIEdgeInsets(top: 0.0, left: layout.safeInsets.left, bottom: layout.safeInsets.bottom, right: layout.safeInsets.right), additionalInsets: layout.additionalInsets, statusBarHeight: effectiveStatusBarHeight, inputHeight: layout.inputHeight, inputHeightIsInteractivellyChanging: layout.inputHeightIsInteractivellyChanging, inVoiceOver: layout.inVoiceOver)
+                containerLayout = ContainerViewLayout(size: CGSize(width: layout.size.width, height: layout.size.height - topInset), metrics: layout.metrics, deviceMetrics: layout.deviceMetrics, intrinsicInsets: UIEdgeInsets(top: 0.0, left: layout.intrinsicInsets.left, bottom: layout.intrinsicInsets.bottom, right: layout.intrinsicInsets.right), safeInsets: UIEdgeInsets(top: 0.0, left: layout.safeInsets.left, bottom: layout.safeInsets.bottom, right: layout.safeInsets.right), reservedCorners: layout.reservedCorners.offsettingTop(by: topInset), division: nil, additionalInsets: layout.additionalInsets, statusBarHeight: effectiveStatusBarHeight, inputHeight: layout.inputHeight, inputHeightIsInteractivellyChanging: layout.inputHeightIsInteractivellyChanging, inVoiceOver: layout.inVoiceOver, presentedInFormSheet: false)
+                // Beside a status island (iPhone Duo, unfolded portrait) a modal covered by another one stays where it
+                // is rather than sliding back.
+                let coveredByModalTransition: CGFloat = layout.topBarStatusIsland != nil ? 0.0 : coveredByModalTransition
                 let unscaledFrame = CGRect(origin: CGPoint(x: 0.0, y: topInset - coveredByModalTransition * 10.0), size: containerLayout.size)
                 let maxScale: CGFloat = (containerLayout.size.width - 16.0 * 2.0) / containerLayout.size.width
                 containerScale = 1.0 * (1.0 - coveredByModalTransition) + maxScale * coveredByModalTransition
-                let maxScaledTopInset: CGFloat = topInset - 10.0
+                var maxScaledTopInset: CGFloat = topInset - 10.0
+                if flatReceivesModalTransition {
+                    maxScaledTopInset = 0.0
+                    if let statusBarHeight = layout.statusBarHeight {
+                        maxScaledTopInset += statusBarHeight
+                    }
+                }
                 let scaledTopInset: CGFloat = topInset * (1.0 - coveredByModalTransition) + maxScaledTopInset * coveredByModalTransition
                 containerFrame = unscaledFrame.offsetBy(dx: 0.0, dy: scaledTopInset - (unscaledFrame.midY - containerScale * unscaledFrame.height / 2.0))
             }
         } else {
             self.panRecognizer?.isEnabled = false
-            if self.isFlat {
+            if self.isFlat && !flatReceivesModalTransition {
                 self.dim.backgroundColor = .clear
                 self.container.clipsToBounds = true
                 self.container.cornerRadius = 0.0
@@ -398,7 +477,7 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
             } else {
                 self.dim.backgroundColor = UIColor(white: 0.0, alpha: 0.4)
                 self.container.clipsToBounds = true
-                self.container.cornerRadius = 10.0
+                self.container.cornerRadius = 38.0
                 if #available(iOS 11.0, *) {
                     self.container.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
                 }
@@ -408,7 +487,10 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
             
             let maxSide = max(layout.size.width, layout.size.height)
             let minSide = min(layout.size.width, layout.size.height)
-            let containerSize = CGSize(width: min(layout.size.width - 20.0, floor(maxSide / 2.0)), height: min(layout.size.height, minSide) - verticalInset * 2.0)
+            var containerSize = CGSize(width: min(layout.size.width - 20.0, floor(maxSide / 2.0)), height: min(layout.size.height, minSide) - verticalInset * 2.0)
+            if let preferredSize = controllers.last?.preferredContentSizeForLayout(layout) {
+                containerSize = preferredSize
+            }
             containerFrame = CGRect(origin: CGPoint(x: floor((layout.size.width - containerSize.width) / 2.0), y: floor((layout.size.height - containerSize.height) / 2.0)), size: containerSize)
             containerScale = 1.0
             
@@ -424,7 +506,7 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
                 effectiveStatusBarHeight = nil
             }
             
-            containerLayout = ContainerViewLayout(size: containerSize, metrics: layout.metrics, deviceMetrics: layout.deviceMetrics, intrinsicInsets: UIEdgeInsets(), safeInsets: UIEdgeInsets(), additionalInsets: UIEdgeInsets(), statusBarHeight: effectiveStatusBarHeight, inputHeight: inputHeight, inputHeightIsInteractivellyChanging: layout.inputHeightIsInteractivellyChanging, inVoiceOver: layout.inVoiceOver)
+            containerLayout = ContainerViewLayout(size: containerSize, metrics: layout.metrics, deviceMetrics: layout.deviceMetrics, intrinsicInsets: UIEdgeInsets(), safeInsets: UIEdgeInsets(), reservedCorners: .none, division: nil, additionalInsets: UIEdgeInsets(), statusBarHeight: effectiveStatusBarHeight, inputHeight: inputHeight, inputHeightIsInteractivellyChanging: layout.inputHeightIsInteractivellyChanging, inVoiceOver: layout.inVoiceOver, presentedInFormSheet: true)
         }
         transition.updateFrameAsPositionAndBounds(node: self.container, frame: containerFrame.offsetBy(dx: 0.0, dy: layout.size.height))
         transition.updateTransformScale(node: self.container, scale: containerScale)
@@ -461,6 +543,9 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
                 let alphaTransition: ContainedViewLayoutTransition = .animated(duration: 0.25, curve: .easeInOut)
                 let positionTransition: ContainedViewLayoutTransition = .animated(duration: 0.25, curve: .easeInOut)
                 alphaTransition.updateAlpha(node: self.dim, alpha: 0.0, beginWithCurrentState: true)
+                if let lastController = self.container.controllers.last as? MinimizableController, lastController.isMinimized {
+                    self.dim.layer.removeAllAnimations()
+                }
                 positionTransition.updatePosition(node: self.container, position: CGPoint(x: self.container.position.x, y: self.bounds.height + self.container.bounds.height / 2.0 + self.bounds.height), beginWithCurrentState: true, completion: { [weak self] _ in
                     guard let strongSelf = self else {
                         return
@@ -490,6 +575,12 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
         }
         if !self.container.bounds.contains(self.view.convert(point, to: self.container.view)) {
             return self.dim.view
+        }
+        if self.isFlat {
+            if result === self.container.view && !self.container.isTransitioning {
+                return nil
+            }
+            return result
         }
         var currentParent: UIView? = result
         var enableScrolling = true
@@ -521,6 +612,9 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
                 } else if listNode.scroller.isDecelerating && listNode.scroller.contentOffset.y < listNode.scroller.contentInset.top {
                     return self.scrollNode.view
                 }
+            } else if let currentParent, currentParent.disablesInteractiveModalDismiss {
+                enableScrolling = false
+                break
             }
             currentParent = currentParent?.superview
         }
@@ -535,7 +629,7 @@ final class NavigationModalContainer: ASDisplayNode, UIScrollViewDelegate, UIGes
                 enableScrolling = false
             }
         }
-        self.scrollNode.view.isScrollEnabled = enableScrolling
+        self.scrollNode.view.isScrollEnabled = enableScrolling && !self.isFlat
         return result
     }
 }

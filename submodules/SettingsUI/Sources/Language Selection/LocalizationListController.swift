@@ -2,15 +2,29 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import Postbox
 import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
 import AccountContext
 import SearchUI
+import ItemListUI
+
+public enum LocalizationListEntryTag: ItemListItemTag, Equatable {
+    case showButton
+    case translateChats
+
+    public func isEqual(to other: ItemListItemTag) -> Bool {
+        if let other = other as? LocalizationListEntryTag, self == other {
+            return true
+        } else {
+            return false
+        }
+    }
+}
 
 public class LocalizationListController: ViewController {
     private let context: AccountContext
+    private let focusOnItemTag: LocalizationListEntryTag?
     
     private var controllerNode: LocalizationListControllerNode {
         return self.displayNode as! LocalizationListControllerNode
@@ -31,14 +45,16 @@ public class LocalizationListController: ViewController {
     
     private var previousContentOffset: ListViewVisibleContentOffset?
     
-    public init(context: AccountContext) {
+    public init(context: AccountContext, focusOnItemTag: LocalizationListEntryTag? = nil) {
         self.context = context
+        self.focusOnItemTag = focusOnItemTag
         
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
         
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
         
-        self.editItem = UIBarButtonItem(title: self.presentationData.strings.Common_Done, style: .done, target: self, action: #selector(self.editPressed))
+        self.editItem = UIBarButtonItem(title: "___done", style: .done, target: self, action: #selector(self.editPressed))
+        self.editItem.staysInRow = true
         self.doneItem = UIBarButtonItem(title: self.presentationData.strings.Common_Edit, style: .plain, target: self, action: #selector(self.editPressed))
         
         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
@@ -70,7 +86,7 @@ public class LocalizationListController: ViewController {
             }
         })
         
-        self.searchContentNode = NavigationBarSearchContentNode(theme: self.presentationData.theme, placeholder: self.presentationData.strings.Common_Search, activate: { [weak self] in
+        self.searchContentNode = NavigationBarSearchContentNode(theme: self.presentationData.theme, placeholder: self.presentationData.strings.Common_Search, inline: true, activate: { [weak self] in
             self?.activateSearch()
         })
         self.navigationBar?.setContentNode(self.searchContentNode, animated: false)
@@ -86,13 +102,14 @@ public class LocalizationListController: ViewController {
     
     private func updateThemeAndStrings() {
         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
-        self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: self.presentationData))
+        self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: self.presentationData), transition: .immediate)
         self.searchContentNode?.updateThemeAndPlaceholder(theme: self.presentationData.theme, placeholder: self.presentationData.strings.Common_Search)
         self.title = self.presentationData.strings.Settings_AppLanguage
         self.navigationItem.backBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Common_Back, style: .plain, target: nil, action: nil)
         self.controllerNode.updatePresentationData(self.presentationData)
         
-        let editItem = UIBarButtonItem(title: self.presentationData.strings.Common_Done, style: .done, target: self, action: #selector(self.editPressed))
+        let editItem = UIBarButtonItem(title: "___done", style: .done, target: self, action: #selector(self.editPressed))
+        editItem.staysInRow = true
         let doneItem = UIBarButtonItem(title: self.presentationData.strings.Common_Edit, style: .plain, target: self, action: #selector(self.editPressed))
         if self.navigationItem.rightBarButtonItem === self.editItem {
             self.navigationItem.rightBarButtonItem = editItem
@@ -125,29 +142,12 @@ public class LocalizationListController: ViewController {
             self?.present(c, in: .window(.root), with: a)
         }, push: { [weak self] c in
             self?.push(c)
-        })
+        }, focusOnItemTag: self.focusOnItemTag)
         
-        self.controllerNode.listNode.visibleContentOffsetChanged = { [weak self] offset in
+        self.controllerNode.listNode.visibleContentOffsetChanged = { [weak self] offset, _ in
             if let strongSelf = self {
                 if let searchContentNode = strongSelf.searchContentNode {
                     searchContentNode.updateListVisibleContentOffset(offset)
-                }
-                
-                var previousContentOffsetValue: CGFloat?
-                if let previousContentOffset = strongSelf.previousContentOffset, case let .known(value) = previousContentOffset {
-                    previousContentOffsetValue = value
-                }
-                switch offset {
-                    case let .known(value):
-                        let transition: ContainedViewLayoutTransition
-                        if let previousContentOffsetValue = previousContentOffsetValue, value <= 0.0, previousContentOffsetValue > 30.0 {
-                            transition = .animated(duration: 0.2, curve: .easeInOut)
-                        } else {
-                            transition = .immediate
-                        }
-                        strongSelf.navigationBar?.updateBackgroundAlpha(min(30.0, max(0.0, value - 54.0)) / 30.0, transition: transition)
-                    case .unknown, .none:
-                        strongSelf.navigationBar?.updateBackgroundAlpha(1.0, transition: .immediate)
                 }
                 
                 strongSelf.previousContentOffset = offset
@@ -162,7 +162,6 @@ public class LocalizationListController: ViewController {
         
         self._ready.set(self.controllerNode._ready.get())
         
-        self.navigationBar?.updateBackgroundAlpha(0.0, transition: .immediate)
         
         self.displayNodeDidLoad()
     }

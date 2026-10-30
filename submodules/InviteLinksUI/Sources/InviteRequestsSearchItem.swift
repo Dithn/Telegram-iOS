@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import ItemListUI
@@ -39,7 +38,7 @@ final class SearchNavigationContentNode: NavigationBarContentNode, ItemListContr
         
         self.cancel = cancel
         
-        self.searchBar = SearchBarNode(theme: SearchBarNodeTheme(theme: theme, hasSeparator: false), strings: strings, fieldStyle: .modern, displayBackground: false)
+        self.searchBar = SearchBarNode(theme: SearchBarNodeTheme(theme: theme, hasSeparator: false), presentationTheme: theme, strings: strings, fieldStyle: .modern, displayBackground: false)
         
         super.init()
         
@@ -67,7 +66,7 @@ final class SearchNavigationContentNode: NavigationBarContentNode, ItemListContr
     
     func updateTheme(_ theme: PresentationTheme) {
         self.theme = theme
-        self.searchBar.updateThemeAndStrings(theme: SearchBarNodeTheme(theme: self.theme), strings: self.strings)
+        self.searchBar.updateThemeAndStrings(theme: SearchBarNodeTheme(theme: self.theme), presentationTheme: self.theme, strings: self.strings)
         self.updatePlaceholder()
     }
     
@@ -79,10 +78,12 @@ final class SearchNavigationContentNode: NavigationBarContentNode, ItemListContr
         return 56.0
     }
     
-    override func updateLayout(size: CGSize, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition) {
+    override func updateLayout(size: CGSize, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition) -> CGSize {
         let searchBarFrame = CGRect(origin: CGPoint(x: 0.0, y: size.height - self.nominalHeight), size: CGSize(width: size.width, height: 56.0))
         self.searchBar.frame = searchBarFrame
         self.searchBar.updateLayout(boundingSize: searchBarFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+        
+        return size
     }
     
     func activate() {
@@ -97,7 +98,7 @@ final class SearchNavigationContentNode: NavigationBarContentNode, ItemListContr
 
 final class InviteRequestsSearchItem: ItemListControllerSearch {
     let context: AccountContext
-    let peerId: PeerId
+    let peerId: EnginePeer.Id
     let cancel: () -> Void
     let openPeer: (EnginePeer) -> Void
     let approveRequest: (EnginePeer) -> Void
@@ -111,7 +112,7 @@ final class InviteRequestsSearchItem: ItemListControllerSearch {
     private var activity: ValuePromise<Bool> = ValuePromise(ignoreRepeated: false)
     private let activityDisposable = MetaDisposable()
     
-    init(context: AccountContext, peerId: PeerId, cancel: @escaping () -> Void, openPeer: @escaping (EnginePeer) -> Void, approveRequest: @escaping (EnginePeer) -> Void, denyRequest: @escaping (EnginePeer) -> Void, navigateToChat: @escaping (EnginePeer) -> Void, pushController: @escaping (ViewController) -> Void, dismissInput: @escaping () -> Void, presentInGlobalOverlay: @escaping (ViewController) -> Void) {
+    init(context: AccountContext, peerId: EnginePeer.Id, cancel: @escaping () -> Void, openPeer: @escaping (EnginePeer) -> Void, approveRequest: @escaping (EnginePeer) -> Void, denyRequest: @escaping (EnginePeer) -> Void, navigateToChat: @escaping (EnginePeer) -> Void, pushController: @escaping (ViewController) -> Void, dismissInput: @escaping () -> Void, presentInGlobalOverlay: @escaping (ViewController) -> Void) {
         self.context = context
         self.peerId = peerId
         self.cancel = cancel
@@ -151,7 +152,7 @@ final class InviteRequestsSearchItem: ItemListControllerSearch {
         }
     }
     
-    func titleContentNode(current: (NavigationBarContentNode & ItemListControllerSearchNavigationContentNode)?) -> NavigationBarContentNode & ItemListControllerSearchNavigationContentNode {
+    func titleContentNode(current: (NavigationBarContentNode & ItemListControllerSearchNavigationContentNode)?) -> (NavigationBarContentNode & ItemListControllerSearchNavigationContentNode)? {
         let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
         if let current = current as? SearchNavigationContentNode {
             current.updateTheme(presentationData.theme)
@@ -175,7 +176,7 @@ final class InviteRequestsSearchItem: ItemListControllerSearch {
 private final class InviteRequestsSearchItemNode: ItemListControllerSearchNode {
     private let containerNode: InviteRequestsSearchContainerNode
     
-    init(context: AccountContext, peerId: PeerId, openPeer: @escaping (EnginePeer) -> Void, approveRequest: @escaping (EnginePeer) -> Void, denyRequest: @escaping (EnginePeer) -> Void, navigateToChat: @escaping (EnginePeer) -> Void, cancel: @escaping () -> Void, updateActivity: @escaping(Bool) -> Void, pushController: @escaping (ViewController) -> Void, dismissInput: @escaping () -> Void, presentInGlobalOverlay: @escaping (ViewController) -> Void) {
+    init(context: AccountContext, peerId: EnginePeer.Id, openPeer: @escaping (EnginePeer) -> Void, approveRequest: @escaping (EnginePeer) -> Void, denyRequest: @escaping (EnginePeer) -> Void, navigateToChat: @escaping (EnginePeer) -> Void, cancel: @escaping () -> Void, updateActivity: @escaping(Bool) -> Void, pushController: @escaping (ViewController) -> Void, dismissInput: @escaping () -> Void, presentInGlobalOverlay: @escaping (ViewController) -> Void) {
         self.containerNode = InviteRequestsSearchContainerNode(context: context, forceTheme: nil, peerId: peerId, openPeer: { peer in
             openPeer(peer)
         }, approveRequest: { peer in
@@ -340,14 +341,14 @@ public final class InviteRequestsSearchContainerNode: SearchDisplayControllerCon
         return _hasDim
     }
     
-    private var processedPeerIdsPromise = ValuePromise<Set<PeerId>>(Set())
-    private var processedPeerIds = Set<PeerId>() {
+    private var processedPeerIdsPromise = ValuePromise<Set<EnginePeer.Id>>(Set())
+    private var processedPeerIds = Set<EnginePeer.Id>() {
         didSet {
             self.processedPeerIdsPromise.set(self.processedPeerIds)
         }
     }
     
-    public init(context: AccountContext, forceTheme: PresentationTheme?, peerId: PeerId, openPeer: @escaping (EnginePeer) -> Void, approveRequest: @escaping (EnginePeer) -> Void, denyRequest: @escaping (EnginePeer) -> Void, navigateToChat: @escaping (EnginePeer) -> Void, updateActivity: @escaping (Bool) -> Void, pushController: @escaping (ViewController) -> Void, presentInGlobalOverlay: @escaping (ViewController) -> Void) {
+    public init(context: AccountContext, forceTheme: PresentationTheme?, peerId: EnginePeer.Id, openPeer: @escaping (EnginePeer) -> Void, approveRequest: @escaping (EnginePeer) -> Void, denyRequest: @escaping (EnginePeer) -> Void, navigateToChat: @escaping (EnginePeer) -> Void, updateActivity: @escaping (Bool) -> Void, pushController: @escaping (ViewController) -> Void, presentInGlobalOverlay: @escaping (ViewController) -> Void) {
         self.context = context
         self.openPeer = openPeer
         
@@ -363,7 +364,7 @@ public final class InviteRequestsSearchContainerNode: SearchDisplayControllerCon
         self.dimNode = ASDisplayNode()
         self.dimNode.backgroundColor = UIColor.black.withAlphaComponent(0.5)
         
-        self.listNode = ListView()
+        self.listNode = ListViewImpl()
         self.listNode.accessibilityPageScrolledString = { row, count in
             return presentationData.strings.VoiceOver_ScrollStatus(row, count).string
         }
@@ -456,7 +457,7 @@ public final class InviteRequestsSearchContainerNode: SearchDisplayControllerCon
         //            dismissPromise.set(true)
         //        }
                 
-                let contextController = ContextController(account: context.account, presentationData: presentationData, source: .extracted(source), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
+                let contextController = makeContextController(presentationData: presentationData, source: .extracted(source), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
                 presentInGlobalOverlay(contextController)
             })
         })

@@ -1,7 +1,7 @@
 #import <YuvConversion/YUV.h>
 #import <Accelerate/Accelerate.h>
 
-void encodeRGBAToYUVA(uint8_t *yuva, uint8_t const *argb, int width, int height, int bytesPerRow, bool unpremultiply) {
+void encodeRGBAToYUVA(uint8_t *yuva, uint8_t const *argb, int width, int height, int bytesPerRow, bool compactAlpha, bool unpremultiply) {
     static vImage_ARGBToYpCbCr info;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -24,15 +24,28 @@ void encodeRGBAToYUVA(uint8_t *yuva, uint8_t const *argb, int width, int height,
         error = vImageUnpremultiplyData_ARGB8888(&src, &src, kvImageDoNotTile);
     }
     
-    uint8_t *alpha = yuva + width * height * 2;
+    uint8_t *alpha;
+    if (compactAlpha) {
+        alpha = yuva + width * height * 2;
+    } else {
+        alpha = yuva + width * height / 2 * 3;
+    }
     int i = 0;
     for (int y = 0; y < height; y += 1) {
         uint8_t const *argbRow = argb + y * bytesPerRow;
-        for (int x = 0; x < width; x += 2) {
-            uint8_t a0 = (argbRow[x * 4 + 0] >> 4) << 4;
-            uint8_t a1 = (argbRow[(x + 1) * 4 + 0] >> 4) << 4;
-            alpha[i / 2] = (a0 & (0xf0U)) | ((a1 & (0xf0U)) >> 4);
-            i += 2;
+        if (compactAlpha) {
+            for (int x = 0; x < width; x += 2) {
+                uint8_t a0 = (argbRow[x * 4 + 0] >> 4) << 4;
+                uint8_t a1 = (argbRow[(x + 1) * 4 + 0] >> 4) << 4;
+                alpha[i / 2] = (a0 & (0xf0U)) | ((a1 & (0xf0U)) >> 4);
+                i += 2;
+            }
+        } else {
+            for (int x = 0; x < width; x += 1) {
+                uint8_t a = argbRow[x * 4];
+                alpha[i] = a;
+                i += 1;
+            }
         }
     }
     
@@ -173,7 +186,7 @@ void decodeYUVAToRGBA(uint8_t const *yuva, uint8_t *argb, int width, int height,
     }
 }
 
-void decodeYUVAPlanesToRGBA(uint8_t const *srcYpData, int srcYpBytesPerRow, uint8_t const *srcCbData, int srcCbBytesPerRow, uint8_t const *srcCrData, int srcCrBytesPerRow, bool hasAlpha, uint8_t const *alphaData, uint8_t *argb, int width, int height, int bytesPerRow) {
+void decodeYUVAPlanesToRGBA(uint8_t const *srcYpData, int srcYpBytesPerRow, uint8_t const *srcCbData, int srcCbBytesPerRow, uint8_t const *srcCrData, int srcCrBytesPerRow, bool hasAlpha, uint8_t const *alphaData, uint8_t *argb, int width, int height, int bytesPerRow, bool unpremultiply) {
     static vImage_YpCbCrToARGB info;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -220,7 +233,11 @@ void decodeYUVAPlanesToRGBA(uint8_t const *srcYpData, int srcYpBytesPerRow, uint
     }
 
     uint8_t permuteMap[4] = {3, 2, 1, 0};
-    error = vImageUnpremultiplyData_ARGB8888(&dest, &dest, kvImageDoNotTile);
+    if (unpremultiply) {
+        error = vImageUnpremultiplyData_ARGB8888(&dest, &dest, kvImageDoNotTile);
+    } else {
+        error = vImagePremultiplyData_ARGB8888(&dest, &dest, kvImageDoNotTile);
+    }
     error = vImagePermuteChannels_ARGB8888(&dest, &dest, permuteMap, kvImageDoNotTile);
     
     if (error != kvImageNoError) {

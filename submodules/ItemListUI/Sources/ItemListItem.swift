@@ -15,6 +15,10 @@ public protocol ItemListItem {
     var requestsNoInset: Bool { get }
 }
 
+public protocol ItemListRevealOptionsStatefulItem: ItemListItem {
+    var hasActiveRevealOptions: Bool { get }
+}
+
 public extension ItemListItem {
     //let accessoryItem: ListViewAccessoryItem?
     
@@ -33,10 +37,18 @@ public extension ItemListItem {
 
 public protocol ItemListItemNode {
     var tag: ItemListItemTag? { get }
+    
+    func displayHighlight()
+}
+
+public extension ItemListItemNode {
+    func displayHighlight() {
+    }
 }
 
 public protocol ItemListItemFocusableNode {
     func focus()
+    func selectAll()
 }
 
 public enum ItemListInsetWithOtherSection {
@@ -54,53 +66,15 @@ public enum ItemListNeighbor {
 public struct ItemListNeighbors {
     public var top: ItemListNeighbor
     public var bottom: ItemListNeighbor
+    public var topHasActiveRevealOptions: Bool
+    public var bottomHasActiveRevealOptions: Bool
     
-    public init(top: ItemListNeighbor, bottom: ItemListNeighbor) {
+    public init(top: ItemListNeighbor, bottom: ItemListNeighbor, topHasActiveRevealOptions: Bool = false, bottomHasActiveRevealOptions: Bool = false) {
         self.top = top
         self.bottom = bottom
+        self.topHasActiveRevealOptions = topHasActiveRevealOptions
+        self.bottomHasActiveRevealOptions = bottomHasActiveRevealOptions
     }
-}
-
-public func itemListNeighbors(item: ItemListItem, topItem: ItemListItem?, bottomItem: ItemListItem?) -> ItemListNeighbors {
-    let topNeighbor: ItemListNeighbor
-    if let topItem = topItem {
-        if topItem.sectionId != item.sectionId {
-            let topInset: ItemListInsetWithOtherSection
-            if topItem.requestsNoInset {
-                topInset = .none
-            } else {
-                if topItem is ItemListTextItem {
-                    topInset = .reduced
-                } else {
-                    topInset = .full
-                }
-            }
-            topNeighbor = .otherSection(topInset)
-        } else {
-            topNeighbor = .sameSection(alwaysPlain: topItem.isAlwaysPlain)
-        }
-    } else {
-        topNeighbor = .none
-    }
-    
-    let bottomNeighbor: ItemListNeighbor
-    if let bottomItem = bottomItem {
-        if bottomItem.sectionId != item.sectionId {
-            let bottomInset: ItemListInsetWithOtherSection
-            if bottomItem.requestsNoInset {
-                bottomInset = .none
-            } else {
-                bottomInset = .full
-            }
-            bottomNeighbor = .otherSection(bottomInset)
-        } else {
-            bottomNeighbor = .sameSection(alwaysPlain: bottomItem.isAlwaysPlain)
-        }
-    } else {
-        bottomNeighbor = .none
-    }
-    
-    return ItemListNeighbors(top: topNeighbor, bottom: bottomNeighbor)
 }
 
 public func itemListNeighborsPlainInsets(_ neighbors: ItemListNeighbors) -> UIEdgeInsets {
@@ -121,6 +95,10 @@ public func itemListNeighborsPlainInsets(_ neighbors: ItemListNeighbors) -> UIEd
 }
 
 public func itemListNeighborsGroupedInsets(_ neighbors: ItemListNeighbors, _ params: ListViewItemLayoutParams) -> UIEdgeInsets {
+    if params.isStandalone {
+        return UIEdgeInsets()
+    }
+    
     let topInset: CGFloat
     switch neighbors.top {
     case .none:
@@ -152,18 +130,22 @@ public func itemListNeighborsGroupedInsets(_ neighbors: ItemListNeighbors, _ par
 }
 
 public func itemListHasRoundedBlockLayout(_ params: ListViewItemLayoutParams) -> Bool {
-    return params.width >= 375.0
+    return params.width >= 320.0
 }
 
 public final class ItemListPresentationData: Equatable {
     public let theme: PresentationTheme
     public let fontSize: PresentationFontSize
     public let strings: PresentationStrings
+    public let nameDisplayOrder: PresentationPersonNameOrder
+    public let dateTimeFormat: PresentationDateTimeFormat
     
-    public init(theme: PresentationTheme, fontSize: PresentationFontSize, strings: PresentationStrings) {
+    public init(theme: PresentationTheme, fontSize: PresentationFontSize, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat) {
         self.theme = theme
         self.fontSize = fontSize
         self.strings = strings
+        self.nameDisplayOrder = nameDisplayOrder
+        self.dateTimeFormat = dateTimeFormat
     }
     
     public static func ==(lhs: ItemListPresentationData, rhs: ItemListPresentationData) -> Bool {
@@ -174,6 +156,12 @@ public final class ItemListPresentationData: Equatable {
             return false
         }
         if lhs.fontSize != rhs.fontSize {
+            return false
+        }
+        if lhs.nameDisplayOrder != rhs.nameDisplayOrder {
+            return false
+        }
+        if lhs.dateTimeFormat != rhs.dateTimeFormat {
             return false
         }
         return true
@@ -226,6 +214,6 @@ public extension PresentationFontSize {
 
 public extension ItemListPresentationData {
     convenience init(_ presentationData: PresentationData) {
-        self.init(theme: presentationData.theme, fontSize: presentationData.listsFontSize, strings: presentationData.strings)
+        self.init(theme: presentationData.theme, fontSize: presentationData.listsFontSize, strings: presentationData.strings, nameDisplayOrder: presentationData.nameDisplayOrder, dateTimeFormat: presentationData.dateTimeFormat)
     }
 }

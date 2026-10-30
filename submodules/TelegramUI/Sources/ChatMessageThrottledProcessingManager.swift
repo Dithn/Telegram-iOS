@@ -1,34 +1,38 @@
 import Foundation
 import UIKit
-import Postbox
 import SwiftSignalKit
+import TelegramCore
 
 final class ChatMessageThrottledProcessingManager {
-    private let queue = Queue()
+    private let queue = Queue.mainQueue()
     
     private let delay: Double
     private let submitInterval: Double?
     
-    var process: ((Set<MessageId>) -> Void)?
+    var process: ((Set<EngineMessageAndThreadId>) -> Void)?
     
     private var timer: SwiftSignalKit.Timer?
-    private var processedList: [MessageId] = []
-    private var processed: [MessageId: Double] = [:]
-    private var buffer = Set<MessageId>()
+    private var processedList: [EngineMessageAndThreadId] = []
+    private var processed: [EngineMessageAndThreadId: Double] = [:]
+    private var buffer = Set<EngineMessageAndThreadId>()
     
     init(delay: Double = 1.0, submitInterval: Double? = nil) {
         self.delay = delay
         self.submitInterval = submitInterval
     }
     
-    func setProcess(process: @escaping (Set<MessageId>) -> Void) {
+    func setProcess(process: @escaping (Set<EngineMessageAndThreadId>) -> Void) {
         self.queue.async {
             self.process = process
         }
     }
     
-    func add(_ messageIds: [MessageId]) {
-        self.queue.async {
+    func add(_ messageIds: [EngineMessageAndThreadId]) {
+        self.queue.async { [weak self] in
+            guard let self else {
+                return
+            }
+
             let timestamp = CFAbsoluteTimeGetCurrent()
             
             for id in messageIds {
@@ -76,45 +80,49 @@ final class ChatMessageThrottledProcessingManager {
 
 
 final class ChatMessageVisibleThrottledProcessingManager {
-    private let queue = Queue()
+    private let queue = Queue.mainQueue()
     
-    private let delay: Double
+    private let interval: Double
     
-    private var currentIds = Set<MessageId>()
+    private var currentIds = Set<EngineMessageAndThreadId>()
     
-    var process: ((Set<MessageId>) -> Void)?
+    var process: ((Set<EngineMessageAndThreadId>) -> Void)?
     
-    private var timer: SwiftSignalKit.Timer?
+    private let timer: SwiftSignalKit.Timer
     
-    init(delay: Double = 1.0) {
-        self.delay = delay
+    init(interval: Double = 5.0) {
+        self.interval = interval
+        
+        var completionImpl: (() -> Void)?
+        let timer = SwiftSignalKit.Timer(timeout: self.interval, repeat: true, completion: {
+            completionImpl?()
+        }, queue: self.queue)
+        self.timer = timer
+        timer.start()
+                
+        completionImpl = { [weak self] in
+            if let strongSelf = self, !strongSelf.currentIds.isEmpty {
+                strongSelf.process?(strongSelf.currentIds)
+            }
+        }
     }
     
-    func setProcess(process: @escaping (Set<MessageId>) -> Void) {
+    deinit {
+        self.timer.invalidate()
+    }
+    
+    func setProcess(process: @escaping (Set<EngineMessageAndThreadId>) -> Void) {
         self.queue.async {
             self.process = process
         }
     }
     
-    func update(_ ids: Set<MessageId>) {
+    func update(_ ids: Set<EngineMessageAndThreadId>) {
         self.queue.async {
             if self.currentIds != ids {
                 self.currentIds = ids
-                if self.timer == nil {
-                    var completionImpl: (() -> Void)?
-                    let timer = SwiftSignalKit.Timer(timeout: self.delay, repeat: false, completion: {
-                        completionImpl?()
-                    }, queue: self.queue)
-                    completionImpl = { [weak self, weak timer] in
-                        if let strongSelf = self {
-                            if let timer = timer, strongSelf.timer === timer {
-                                strongSelf.timer = nil
-                            }
-                            strongSelf.process?(strongSelf.currentIds)
-                        }
-                    }
-                    self.timer = timer
-                    timer.start()
+                if !self.currentIds.isEmpty {
+                    self.process?(self.currentIds)
                 }
             }
         }

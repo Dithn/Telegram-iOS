@@ -1,14 +1,16 @@
+#import <LegacyComponents/LegacyComponents.h>
+
 #import "TGPhotoToolsController.h"
 
 #import "LegacyComponentsInternal.h"
 
 #import <LegacyComponents/TGPhotoEditorAnimation.h>
-#import "TGPhotoEditorInterfaceAssets.h"
+#import <LegacyComponents/TGPhotoEditorInterfaceAssets.h>
 #import "TGPhotoEditorCollectionView.h"
 #import "TGPhotoToolCell.h"
 
 #import <LegacyComponents/TGPhotoEditorUtils.h>
-#import "UICollectionView+Utils.h"
+#import <LegacyComponents/UICollectionView+Utils.h>
 #import <LegacyComponents/TGPaintUtils.h>
 
 #import "PGPhotoEditor.h"
@@ -18,13 +20,12 @@
 #import "PGTintTool.h"
 #import <LegacyComponents/TGPaintingData.h>
 
-#import "TGPhotoEditorController.h"
+#import <LegacyComponents/TGPhotoEditorController.h>
 #import "TGPhotoEditorPreviewView.h"
 #import "TGPhotoEditorHUDView.h"
-#import "TGPhotoEditorSparseView.h"
-#import "TGPhotoEntitiesContainerView.h"
+#import <LegacyComponents/TGPhotoEditorSparseView.h>
 
-#import "TGPhotoPaintController.h"
+#import "TGPhotoDrawingController.h"
 
 const CGFloat TGPhotoEditorToolsPanelSize = 180.0f;
 const CGFloat TGPhotoEditorToolsLandscapePanelSize = TGPhotoEditorToolsPanelSize + 40.0f;
@@ -48,7 +49,7 @@ const CGFloat TGPhotoEditorToolsLandscapePanelSize = TGPhotoEditorToolsPanelSize
     TGPhotoEditorCollectionView *_portraitCollectionView;
     TGPhotoEditorCollectionView *_landscapeCollectionView;
     TGPhotoEditorHUDView *_hudView;
-    TGPhotoEntitiesContainerView *_entitiesView;
+    UIView<TGPhotoDrawingEntitiesView> *_entitiesView;
     
     void (^_changeBlock)(PGPhotoTool *, id, bool);
     void (^_interactionBegan)(void);
@@ -71,7 +72,7 @@ const CGFloat TGPhotoEditorToolsLandscapePanelSize = TGPhotoEditorToolsPanelSize
 
 @implementation TGPhotoToolsController
 
-- (instancetype)initWithContext:(id<LegacyComponentsContext>)context photoEditor:(PGPhotoEditor *)photoEditor previewView:(TGPhotoEditorPreviewView *)previewView entitiesView:(TGPhotoEntitiesContainerView *)entitiesView
+- (instancetype)initWithContext:(id<LegacyComponentsContext>)context photoEditor:(PGPhotoEditor *)photoEditor previewView:(TGPhotoEditorPreviewView *)previewView entitiesView:(UIView<TGPhotoDrawingEntitiesView> *)entitiesView
 {
     self = [super initWithContext:context];
     if (self != nil)
@@ -151,6 +152,9 @@ const CGFloat TGPhotoEditorToolsLandscapePanelSize = TGPhotoEditorToolsPanelSize
         }
         if (!tool.isHidden)
         {
+            if (tool.isRegional && self.intent == TGPhotoEditorControllerWallpaperIntent) {
+                continue;
+            }
             [tools addObject:tool];
             if (tool.isSimple)
                 [simpleTools addObject:tool];
@@ -266,6 +270,7 @@ const CGFloat TGPhotoEditorToolsLandscapePanelSize = TGPhotoEditorToolsPanelSize
     _portraitCollectionView.toolsDataSource = self;
     _portraitCollectionView.interactionBegan = _interactionBegan;
     _portraitCollectionView.interactionEnded = _interactionEnded;
+    _portraitCollectionView.canCancelContentTouches = true;
     [_portraitToolsWrapperView addSubview:_portraitCollectionView];
     
     if (!TGIsPad())
@@ -278,6 +283,7 @@ const CGFloat TGPhotoEditorToolsLandscapePanelSize = TGPhotoEditorToolsPanelSize
         _landscapeCollectionView.toolsDataSource = self;
         _landscapeCollectionView.interactionBegan = _interactionBegan;
         _landscapeCollectionView.interactionEnded = _interactionEnded;
+        _landscapeCollectionView.canCancelContentTouches = true;
         [_landscapeToolsWrapperView addSubview:_landscapeCollectionView];
     }
     
@@ -450,24 +456,40 @@ const CGFloat TGPhotoEditorToolsLandscapePanelSize = TGPhotoEditorToolsPanelSize
     UIView *snapshotView = nil;
     POPSpringAnimation *snapshotAnimation = nil;
     
-    if (saving && CGRectIsNull(targetFrame) && parentView != nil)
+    if (saving && parentView != nil)
     {
-        snapshotView = [previewView snapshotViewAfterScreenUpdates:false];
-        snapshotView.frame = previewView.frame;
-        
-        CGSize fittedSize = TGScaleToSize(previewView.frame.size, self.view.frame.size);
-        targetFrame = CGRectMake((self.view.frame.size.width - fittedSize.width) / 2, (self.view.frame.size.height - fittedSize.height) / 2, fittedSize.width, fittedSize.height);
-        
-        [parentView addSubview:snapshotView];
-        
-        snapshotAnimation = [TGPhotoEditorAnimation prepareTransitionAnimationForPropertyNamed:kPOPViewFrame];
-        snapshotAnimation.fromValue = [NSValue valueWithCGRect:snapshotView.frame];
-        snapshotAnimation.toValue = [NSValue valueWithCGRect:targetFrame];
+        if (CGRectIsNull(targetFrame)) {
+            snapshotView = [previewView snapshotViewAfterScreenUpdates:false];
+            snapshotView.frame = previewView.frame;
+            
+            CGSize fittedSize = TGScaleToSize(previewView.frame.size, self.view.frame.size);
+            targetFrame = CGRectMake((self.view.frame.size.width - fittedSize.width) / 2, (self.view.frame.size.height - fittedSize.height) / 2, fittedSize.width, fittedSize.height);
+            
+            [parentView addSubview:snapshotView];
+            
+            snapshotAnimation = [TGPhotoEditorAnimation prepareTransitionAnimationForPropertyNamed:kPOPViewFrame];
+            snapshotAnimation.fromValue = [NSValue valueWithCGRect:snapshotView.frame];
+            snapshotAnimation.toValue = [NSValue valueWithCGRect:targetFrame];
+        } else if (self.intent == TGPhotoEditorControllerWallpaperIntent) {
+            snapshotView = [previewView snapshotViewAfterScreenUpdates:false];
+            snapshotView.frame = [self.view convertRect:previewView.frame toView:parentView];
+            
+            [parentView addSubview:snapshotView];
+            
+            snapshotAnimation = [TGPhotoEditorAnimation prepareTransitionAnimationForPropertyNamed:kPOPViewFrame];
+            snapshotAnimation.fromValue = [NSValue valueWithCGRect:snapshotView.frame];
+            snapshotAnimation.toValue = [NSValue valueWithCGRect:targetFrame];
+        }
+    }
+    
+    CGRect previewTargetFrame = targetFrame;
+    if (self.intent == TGPhotoEditorControllerWallpaperIntent && saving) {
+        previewTargetFrame = [parentView convertRect:targetFrame toView:self.view];
     }
     
     POPSpringAnimation *previewAnimation = [TGPhotoEditorAnimation prepareTransitionAnimationForPropertyNamed:kPOPViewFrame];
     previewAnimation.fromValue = [NSValue valueWithCGRect:previewView.frame];
-    previewAnimation.toValue = [NSValue valueWithCGRect:targetFrame];
+    previewAnimation.toValue = [NSValue valueWithCGRect:previewTargetFrame];
     
     POPSpringAnimation *previewAlphaAnimation = [TGPhotoEditorAnimation prepareTransitionAnimationForPropertyNamed:kPOPViewAlpha];
     previewAlphaAnimation.fromValue = @(previewView.alpha);
@@ -479,7 +501,13 @@ const CGFloat TGPhotoEditorToolsLandscapePanelSize = TGPhotoEditorToolsPanelSize
     
     [TGPhotoEditorAnimation performBlock:^(__unused bool allFinished)
     {
-        [snapshotView removeFromSuperview];
+        if (self.intent == TGPhotoEditorControllerWallpaperIntent) {
+            TGDispatchAfter(0.3, dispatch_get_main_queue(), ^{
+                [snapshotView removeFromSuperview];
+            });
+        } else {
+            [snapshotView removeFromSuperview];
+        }
          
         if (completion != nil)
             completion();
@@ -1018,6 +1046,8 @@ const CGFloat TGPhotoEditorToolsLandscapePanelSize = TGPhotoEditorToolsPanelSize
 - (TGPhotoEditorTab)availableTabs
 {
     if (self.photoEditor.forVideo) {
+        return TGPhotoEditorToolsTab | TGPhotoEditorTintTab | TGPhotoEditorCurvesTab;
+    } else if (self.intent == TGPhotoEditorControllerWallpaperIntent) {
         return TGPhotoEditorToolsTab | TGPhotoEditorTintTab | TGPhotoEditorCurvesTab;
     } else {
         return TGPhotoEditorToolsTab | TGPhotoEditorTintTab | TGPhotoEditorBlurTab | TGPhotoEditorCurvesTab;

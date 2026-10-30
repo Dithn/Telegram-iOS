@@ -17,7 +17,6 @@ import ContextUI
 import TelegramStringFormatting
 import ItemListPeerActionItem
 import ItemListPeerItem
-import ShareController
 import UndoUI
 
 private final class InviteRequestsControllerArguments {
@@ -100,7 +99,7 @@ private enum InviteRequestsEntry: ItemListNodeEntry {
         let arguments = arguments as! InviteRequestsControllerArguments
         switch self {
             case let .header(theme, text):
-                return InviteLinkHeaderItem(context: arguments.context, theme: theme, text: text, animationName: "Requests", sectionId: self.section, linkAction: { _ in
+                return InviteLinkHeaderItem(context: arguments.context, theme: theme, text: NSAttributedString(string: text), animationName: "Requests", sectionId: self.section, linkAction: { _ in
                     arguments.openLinks()
                 })
             case let .requestsHeader(_, text):
@@ -198,7 +197,7 @@ public func inviteRequestsController(context: AccountContext, updatedPresentatio
             } else {
                 string = presentationData.strings.MemberRequests_UserAddedToGroup(peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)).string
             }
-            presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .invitedToVoiceChat(context: context, peer: peer, text: string), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
+            presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .invitedToVoiceChat(context: context, peer: peer, title: nil, text: string, action: nil, duration: 3), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
         })
     }
     
@@ -268,7 +267,7 @@ public func inviteRequestsController(context: AccountContext, updatedPresentatio
     //            dismissPromise.set(true)
     //        }
             
-            let contextController = ContextController(account: context.account, presentationData: presentationData, source: .extracted(source), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
+            let contextController = makeContextController(presentationData: presentationData, source: .extracted(source), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
             presentInGlobalOverlayImpl?(contextController)
         })
     })
@@ -377,13 +376,13 @@ public func inviteRequestsController(context: AccountContext, updatedPresentatio
         }
     }
     navigateToProfileImpl = { [weak controller] peer in
-        if let navigationController = controller?.navigationController as? NavigationController, let controller = context.sharedContext.makePeerInfoController(context: context, updatedPresentationData: nil, peer: peer._asPeer(), mode: .generic, avatarInitiallyExpanded: peer.largeProfileImage != nil, fromChat: false, requestsContext: nil) {
+        if let navigationController = controller?.navigationController as? NavigationController, let controller = context.sharedContext.makePeerInfoController(context: context, updatedPresentationData: nil, peer: peer, mode: .generic, avatarInitiallyExpanded: peer.largeProfileImage != nil, fromChat: false, requestsContext: nil) {
             navigationController.pushViewController(controller)
         }
     }
     navigateToChatImpl = { [weak controller] peer in
         if let navigationController = controller?.navigationController as? NavigationController {
-            context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(id: peer.id), keepStack: .always))
+            context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer), keepStack: .always))
         }
     }
     dismissInputImpl = { [weak controller] in
@@ -425,10 +424,10 @@ final class InviteRequestsContextExtractedContentSource: ContextExtractedContent
     }
     
     func takeView() -> ContextControllerTakeViewInfo? {
-        return ContextControllerTakeViewInfo(contentContainingNode: self.sourceNode, contentAreaInScreenSpace: UIScreen.main.bounds)
+        return ContextControllerTakeViewInfo(containingItem: .node(self.sourceNode), contentAreaInScreenSpace: mainWindowScreenBounds)
     }
     
     func putBack() -> ContextControllerPutBackViewInfo? {
-        return ContextControllerPutBackViewInfo(contentAreaInScreenSpace: UIScreen.main.bounds)
+        return ContextControllerPutBackViewInfo(contentAreaInScreenSpace: mainWindowScreenBounds)
     }
 }

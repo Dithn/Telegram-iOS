@@ -3,7 +3,6 @@ import UIKit
 import Display
 import AsyncDisplayKit
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
@@ -64,20 +63,20 @@ public class ItemListInviteRequestItem: ListViewItem, ItemListItem {
         self.tag = tag
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             var firstWithHeader = false
             var last = false
             if self.style == .plain {
-                if previousItem == nil {
+                if neighbors.previous == nil {
                     firstWithHeader = true
                 }
-                if nextItem == nil {
+                if neighbors.next == nil {
                     last = true
                 }
             }
             let node = ItemListInviteRequestItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem), firstWithHeader, last)
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)), firstWithHeader, last)
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -90,7 +89,7 @@ public class ItemListInviteRequestItem: ListViewItem, ItemListItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? ItemListInviteRequestItemNode {
                 let makeLayout = nodeValue.asyncLayout()
@@ -99,15 +98,15 @@ public class ItemListInviteRequestItem: ListViewItem, ItemListItem {
                     var firstWithHeader = false
                     var last = false
                     if self.style == .plain {
-                        if previousItem == nil {
+                        if neighbors.previous == nil {
                             firstWithHeader = true
                         }
-                        if nextItem == nil {
+                        if neighbors.next == nil {
                             last = true
                         }
                     }
                     
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem), firstWithHeader, last)
+                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)), firstWithHeader, last)
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply()
@@ -223,7 +222,7 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
         
         self.contentWrapperNode = ASDisplayNode()
         
-        super.init(layerBacked: false, dynamicBounce: false, rotated: false, seeThrough: false)
+        super.init(layerBacked: false, rotated: false, seeThrough: false)
         
         self.isAccessibilityElement = true
         
@@ -339,8 +338,8 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
                                     return
                                 }
                                 strongSelf.avatarListNode?.controlsContainerNode.alpha = 0.0
-                                let pinchController = PinchController(sourceNode: sourceNode, getContentAreaInScreenSpace: {
-                                    return UIScreen.main.bounds
+                                let pinchController = makePinchController(sourceNode: sourceNode, getContentAreaInScreenSpace: {
+                                    return mainWindowScreenBounds
                                 })
                                 item.context.sharedContext.mainWindow?.presentInGlobalOverlay(pinchController)
                             }
@@ -389,7 +388,7 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
                             let avatarListNode = PeerInfoAvatarListContainerNode(context: item.context)
                             avatarListWrapperNode.contentNode.clipsToBounds = true
                             avatarListNode.backgroundColor = .clear
-                            avatarListNode.peer = peer
+                            avatarListNode.peer = EnginePeer(peer)
                             avatarListNode.firstFullSizeOnly = true
                             avatarListNode.offsetLocation = true
                             avatarListNode.customCenterTapAction = { [weak self] in
@@ -405,7 +404,7 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
                             avatarListContainerNode.addSubnode(avatarListNode.controlsClippingOffsetNode)
                             avatarListWrapperNode.contentNode.addSubnode(avatarListContainerNode)
                             
-                            avatarListNode.update(size: targetRect.size, peer: peer, customNode: nil, additionalEntry: .single(nil), isExpanded: true, transition: .immediate)
+                            avatarListNode.update(size: targetRect.size, peer: EnginePeer(peer), customNode: nil, additionalEntry: .single(nil), isExpanded: true, transition: .immediate)
                             strongSelf.offsetContainerNode.supernode?.addSubnode(avatarListWrapperNode)
                             
                             strongSelf.avatarListWrapperNode = avatarListWrapperNode
@@ -523,7 +522,7 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
         
         let currentItem = self.layoutParams?.0
                 
-        return { item, params, neighbors, firstWithHeader, last in
+        return { [weak self] item, params, neighbors, firstWithHeader, last in
             var updatedTheme: PresentationTheme?
         
             let titleFont = Font.semibold(item.presentationData.fontSize.itemListBaseFontSize)
@@ -622,9 +621,9 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
                     }
                     var extractedRect: CGRect
                     if case .blocks = item.style {
-                        extractedRect = CGRect(origin: CGPoint(), size: layout.contentSize).insetBy(dx: params.leftInset, dy: 0.0)
+                        extractedRect = CGRect(origin: CGPoint(), size: layout.contentSize).inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                     } else {
-                        extractedRect = CGRect(origin: CGPoint(), size: layout.contentSize).insetBy(dx: params.leftInset + 16.0, dy: 0.0)
+                        extractedRect = CGRect(origin: CGPoint(), size: layout.contentSize).inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset + 16.0, bottom: 0.0, right: params.rightInset + 16.0))
                     }
                     var extractedHeight = extractedRect.height + expandedSubtitleLayout.size.height - subtitleLayout.size.height
                     var extractedVerticalOffset: CGFloat = 0.0
@@ -722,10 +721,10 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
                                     strongSelf.bottomStripeNode.isHidden = hasCorners
                             }
                             
-                            strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                            strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: true) : nil
                             
                             strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
-                            strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                            strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                             strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: separatorHeight))
                             strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: params.width - bottomStripeInset, height: separatorHeight))
                     }
@@ -735,7 +734,7 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
                     strongSelf.avatarNode.frame = avatarFrame
                     
                     if let importer = item.importer, let peer = importer.peer.peer.flatMap({ EnginePeer($0) }) {
-                        strongSelf.avatarNode.setPeer(context: item.context, theme: item.presentationData.theme, peer: peer, overrideImage: nil, emptyColor: item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: false, storeUnrounded: true)
+                        strongSelf.avatarNode.setPeer(context: item.context, theme: item.presentationData.theme, peer: peer, overrideImage: peer.isDeleted ? .deletedIcon : nil, emptyColor: item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: false, storeUnrounded: true)
                     }
                     
                     transition.updateFrame(node: strongSelf.titleNode, frame: CGRect(origin: CGPoint(x: leftInset, y: verticalInset), size: titleLayout.size))
@@ -858,7 +857,7 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
         }
     }
     
-    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     

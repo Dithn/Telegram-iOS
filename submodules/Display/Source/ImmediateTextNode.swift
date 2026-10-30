@@ -4,9 +4,16 @@ import UIKit
 public struct ImmediateTextNodeLayoutInfo {
     public let size: CGSize
     public let truncated: Bool
+    public let numberOfLines: Int
+    
+    public init(size: CGSize, truncated: Bool, numberOfLines: Int) {
+        self.size = size
+        self.truncated = truncated
+        self.numberOfLines = numberOfLines
+    }
 }
 
-public class ImmediateTextNode: TextNode {
+open class ImmediateTextNode: TextNode {
     public var attributedText: NSAttributedString?
     public var textAlignment: NSTextAlignment = .natural
     public var verticalAlignment: TextVerticalAlignment = .top
@@ -15,10 +22,11 @@ public class ImmediateTextNode: TextNode {
     public var lineSpacing: CGFloat = 0.0
     public var insets: UIEdgeInsets = UIEdgeInsets()
     public var textShadowColor: UIColor?
+    public var textShadowBlur: CGFloat?
     public var textStroke: (UIColor, CGFloat)?
     public var cutout: TextNodeCutout?
     public var displaySpoilers = false
-
+    
     public var truncationMode: NSLineBreakMode {
         get {
             switch self.truncationType {
@@ -52,7 +60,7 @@ public class ImmediateTextNode: TextNode {
     
     public var trailingLineWidth: CGFloat?
     
-    var constrainedSize: CGSize?
+    public var constrainedSize: CGSize?
     
     public var highlightAttributeAction: (([NSAttributedString.Key: Any]) -> NSAttributedString.Key?)? {
         didSet {
@@ -86,11 +94,11 @@ public class ImmediateTextNode: TextNode {
         return node
     }
     
-    public func updateLayout(_ constrainedSize: CGSize) -> CGSize {
+    open func updateLayout(_ constrainedSize: CGSize) -> CGSize {
         self.constrainedSize = constrainedSize
         
         let makeLayout = TextNode.asyncLayout(self)
-        let (layout, apply) = makeLayout(TextNodeLayoutArguments(attributedString: self.attributedText, backgroundColor: nil, maximumNumberOfLines: self.maximumNumberOfLines, truncationType: self.truncationType, constrainedSize: constrainedSize, alignment: self.textAlignment, verticalAlignment: self.verticalAlignment, lineSpacing: self.lineSpacing, cutout: self.cutout, insets: self.insets, textShadowColor: self.textShadowColor, textStroke: self.textStroke, displaySpoilers: self.displaySpoilers))
+        let (layout, apply) = makeLayout(TextNodeLayoutArguments(attributedString: self.attributedText, backgroundColor: nil, maximumNumberOfLines: self.maximumNumberOfLines, truncationType: self.truncationType, constrainedSize: constrainedSize, alignment: self.textAlignment, verticalAlignment: self.verticalAlignment, lineSpacing: self.lineSpacing, cutout: self.cutout, insets: self.insets, textShadowColor: self.textShadowColor, textShadowBlur: self.textShadowBlur, textStroke: self.textStroke, displaySpoilers: self.displaySpoilers))
         let _ = apply()
         if layout.numberOfLines > 1 {
             self.trailingLineWidth = layout.trailingLineWidth
@@ -106,7 +114,7 @@ public class ImmediateTextNode: TextNode {
         let makeLayout = TextNode.asyncLayout(self)
         let (layout, apply) = makeLayout(TextNodeLayoutArguments(attributedString: self.attributedText, backgroundColor: nil, maximumNumberOfLines: self.maximumNumberOfLines, truncationType: self.truncationType, constrainedSize: constrainedSize, alignment: self.textAlignment, verticalAlignment: self.verticalAlignment, lineSpacing: self.lineSpacing, cutout: self.cutout, insets: self.insets, displaySpoilers: self.displaySpoilers))
         let _ = apply()
-        return ImmediateTextNodeLayoutInfo(size: layout.size, truncated: layout.truncated)
+        return ImmediateTextNodeLayoutInfo(size: layout.size, truncated: layout.truncated, numberOfLines: layout.numberOfLines)
     }
     
     public func updateLayoutFullInfo(_ constrainedSize: CGSize) -> TextNodeLayout {
@@ -124,7 +132,7 @@ public class ImmediateTextNode: TextNode {
         }
     }
     
-    override public func didLoad() {
+    override open func didLoad() {
         super.didLoad()
         
         self.updateInteractiveActions()
@@ -225,7 +233,7 @@ public class ASTextNode: ImmediateTextNode {
     }
 }
 
-public class ImmediateTextView: TextView {
+open class ImmediateTextView: TextView {
     public var attributedText: NSAttributedString?
     public var textAlignment: NSTextAlignment = .natural
     public var verticalAlignment: TextVerticalAlignment = .top
@@ -234,10 +242,11 @@ public class ImmediateTextView: TextView {
     public var lineSpacing: CGFloat = 0.0
     public var insets: UIEdgeInsets = UIEdgeInsets()
     public var textShadowColor: UIColor?
+    public var textShadowBlur: CGFloat?
     public var textStroke: (UIColor, CGFloat)?
     public var cutout: TextNodeCutout?
     public var displaySpoilers = false
-
+    
     public var truncationMode: NSLineBreakMode {
         get {
             switch self.truncationType {
@@ -268,6 +277,7 @@ public class ImmediateTextView: TextView {
     private var linkHighlightingNode: LinkHighlightingNode?
     
     public var linkHighlightColor: UIColor?
+    public var linkHighlightInset: UIEdgeInsets = .zero
     
     public var trailingLineWidth: CGFloat?
     
@@ -286,7 +296,7 @@ public class ImmediateTextView: TextView {
         self.constrainedSize = constrainedSize
         
         let makeLayout = TextView.asyncLayout(self)
-        let (layout, apply) = makeLayout(TextNodeLayoutArguments(attributedString: self.attributedText, backgroundColor: nil, maximumNumberOfLines: self.maximumNumberOfLines, truncationType: self.truncationType, constrainedSize: constrainedSize, alignment: self.textAlignment, verticalAlignment: self.verticalAlignment, lineSpacing: self.lineSpacing, cutout: self.cutout, insets: self.insets, textShadowColor: self.textShadowColor, textStroke: self.textStroke, displaySpoilers: self.displaySpoilers))
+        let (layout, apply) = makeLayout(TextNodeLayoutArguments(attributedString: self.attributedText, backgroundColor: nil, maximumNumberOfLines: self.maximumNumberOfLines, truncationType: self.truncationType, constrainedSize: constrainedSize, alignment: self.textAlignment, verticalAlignment: self.verticalAlignment, lineSpacing: self.lineSpacing, cutout: self.cutout, insets: self.insets, textShadowColor: self.textShadowColor, textShadowBlur: self.textShadowBlur, textStroke: self.textStroke, displaySpoilers: self.displaySpoilers))
         let _ = apply()
         if layout.numberOfLines > 1 {
             self.trailingLineWidth = layout.trailingLineWidth
@@ -302,7 +312,7 @@ public class ImmediateTextView: TextView {
         let makeLayout = TextView.asyncLayout(self)
         let (layout, apply) = makeLayout(TextNodeLayoutArguments(attributedString: self.attributedText, backgroundColor: nil, maximumNumberOfLines: self.maximumNumberOfLines, truncationType: self.truncationType, constrainedSize: constrainedSize, alignment: self.textAlignment, verticalAlignment: self.verticalAlignment, lineSpacing: self.lineSpacing, cutout: self.cutout, insets: self.insets, displaySpoilers: self.displaySpoilers))
         let _ = apply()
-        return ImmediateTextNodeLayoutInfo(size: layout.size, truncated: layout.truncated)
+        return ImmediateTextNodeLayoutInfo(size: layout.size, truncated: layout.truncated, numberOfLines: layout.numberOfLines)
     }
     
     public func updateLayoutFullInfo(_ constrainedSize: CGSize) -> TextNodeLayout {
@@ -347,7 +357,7 @@ public class ImmediateTextView: TextView {
                             }
                         }
                         
-                        if let rects = rects {
+                        if var rects, !rects.isEmpty {
                             let linkHighlightingNode: LinkHighlightingNode
                             if let current = strongSelf.linkHighlightingNode {
                                 linkHighlightingNode = current
@@ -357,7 +367,8 @@ public class ImmediateTextView: TextView {
                                 strongSelf.addSubnode(linkHighlightingNode)
                             }
                             linkHighlightingNode.frame = strongSelf.bounds
-                            linkHighlightingNode.updateRects(rects.map { $0.offsetBy(dx: 0.0, dy: 0.0) })
+                            rects[rects.count - 1] = rects[rects.count - 1].inset(by: strongSelf.linkHighlightInset)
+                            linkHighlightingNode.updateRects(rects)
                         } else if let linkHighlightingNode = strongSelf.linkHighlightingNode {
                             strongSelf.linkHighlightingNode = nil
                             linkHighlightingNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.18, removeOnCompletion: false, completion: { [weak linkHighlightingNode] _ in

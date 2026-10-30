@@ -5,6 +5,8 @@ import AsyncDisplayKit
 import SwiftSignalKit
 import TelegramPresentationData
 import SwitchNode
+import AppBundle
+import ComponentFlow
 
 public enum ItemListSwitchItemNodeType {
     case regular
@@ -12,12 +14,23 @@ public enum ItemListSwitchItemNodeType {
 }
 
 public class ItemListSwitchItem: ListViewItem, ItemListItem {
+    public enum TextColor {
+        case primary
+        case accent
+    }
+    
     let presentationData: ItemListPresentationData
+    let systemStyle: ItemListSystemStyle
+    let icon: UIImage?
     let title: String
+    let text: String?
+    let textColor: TextColor
+    let titleBadgeComponent: AnyComponent<Empty>?
     let value: Bool
     let type: ItemListSwitchItemNodeType
     let enableInteractiveChanges: Bool
     let enabled: Bool
+    let displayLocked: Bool
     let disableLeadingInset: Bool
     let maximumNumberOfLines: Int
     let noCorners: Bool
@@ -25,15 +38,22 @@ public class ItemListSwitchItem: ListViewItem, ItemListItem {
     let style: ItemListStyle
     let updated: (Bool) -> Void
     let activatedWhileDisabled: () -> Void
+    let action: (() -> Void)?
     public let tag: ItemListItemTag?
     
-    public init(presentationData: ItemListPresentationData, title: String, value: Bool, type: ItemListSwitchItemNodeType = .regular, enableInteractiveChanges: Bool = true, enabled: Bool = true, disableLeadingInset: Bool = false, maximumNumberOfLines: Int = 1, noCorners: Bool = false, sectionId: ItemListSectionId, style: ItemListStyle, updated: @escaping (Bool) -> Void, activatedWhileDisabled: @escaping () -> Void = {}, tag: ItemListItemTag? = nil) {
+    public init(presentationData: ItemListPresentationData, systemStyle: ItemListSystemStyle = .legacy, icon: UIImage? = nil, title: String, text: String? = nil, textColor: TextColor = .primary, titleBadgeComponent: AnyComponent<Empty>? = nil, value: Bool, type: ItemListSwitchItemNodeType = .regular, enableInteractiveChanges: Bool = true, enabled: Bool = true, displayLocked: Bool = false, disableLeadingInset: Bool = false, maximumNumberOfLines: Int = 1, noCorners: Bool = false, sectionId: ItemListSectionId, style: ItemListStyle, updated: @escaping (Bool) -> Void, activatedWhileDisabled: @escaping () -> Void = {}, action: (() -> Void)? = nil, tag: ItemListItemTag? = nil) {
         self.presentationData = presentationData
+        self.systemStyle = systemStyle
+        self.icon = icon
         self.title = title
+        self.text = text
+        self.textColor = textColor
+        self.titleBadgeComponent = titleBadgeComponent
         self.value = value
         self.type = type
         self.enableInteractiveChanges = enableInteractiveChanges
         self.enabled = enabled
+        self.displayLocked = displayLocked
         self.disableLeadingInset = disableLeadingInset
         self.maximumNumberOfLines = maximumNumberOfLines
         self.noCorners = noCorners
@@ -41,13 +61,14 @@ public class ItemListSwitchItem: ListViewItem, ItemListItem {
         self.style = style
         self.updated = updated
         self.activatedWhileDisabled = activatedWhileDisabled
+        self.action = action
         self.tag = tag
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = ItemListSwitchItemNode(type: self.type)
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -60,13 +81,13 @@ public class ItemListSwitchItem: ListViewItem, ItemListItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? ItemListSwitchItemNode {
                 let makeLayout = nodeValue.asyncLayout()
                 
                 async {
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             var animated = true
@@ -80,9 +101,20 @@ public class ItemListSwitchItem: ListViewItem, ItemListItem {
             }
         }
     }
+    
+    public var selectable: Bool {
+        return self.action != nil && self.enabled
+    }
+    
+    public func selected(listView: ListView){
+        listView.clearHighlightAnimated(true)
+        if self.enabled {
+            self.action?()
+        }
+    }
 }
 
-private protocol ItemListSwitchNodeImpl {
+protocol ItemListSwitchNodeImpl {
     var frameColor: UIColor { get set }
     var contentColor: UIColor { get set }
     var handleColor: UIColor { get set }
@@ -115,15 +147,22 @@ extension IconSwitchNode: ItemListSwitchNodeImpl {
 
 public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
     private let backgroundNode: ASDisplayNode
+    private let highlightNode: ASDisplayNode
     private let topStripeNode: ASDisplayNode
     private let bottomStripeNode: ASDisplayNode
     private let highlightedBackgroundNode: ASDisplayNode
     private let maskNode: ASImageNode
     
+    private let iconNode: ASImageNode
     private let titleNode: TextNode
+    private var textNode: TextNode?
     private var switchNode: ASDisplayNode & ItemListSwitchNodeImpl
     private let switchGestureNode: ASDisplayNode
     private var disabledOverlayNode: ASDisplayNode?
+    
+    private var titleBadgeComponentView: ComponentView<Empty>?
+    
+    private var lockedIconNode: ASImageNode?
     
     private let activateArea: AccessibilityAreaNode
     
@@ -132,11 +171,18 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
     public var tag: ItemListItemTag? {
         return self.item?.tag
     }
+
+    public var contextSourceView: UIView {
+        return self.textNode?.view ?? self.switchNode.view
+    }
     
     public init(type: ItemListSwitchItemNodeType) {
         self.backgroundNode = ASDisplayNode()
         self.backgroundNode.isLayerBacked = true
         self.backgroundNode.backgroundColor = .white
+
+        self.highlightNode = ASDisplayNode()
+        self.highlightNode.isLayerBacked = true
         
         self.maskNode = ASImageNode()
         self.maskNode.isUserInteractionEnabled = false
@@ -147,8 +193,14 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
         self.bottomStripeNode = ASDisplayNode()
         self.bottomStripeNode.isLayerBacked = true
         
+        self.iconNode = ASImageNode()
+        self.iconNode.isLayerBacked = true
+        self.iconNode.displaysAsynchronously = false
+        
         self.titleNode = TextNode()
+        self.titleNode.anchorPoint = CGPoint()
         self.titleNode.isUserInteractionEnabled = false
+        
         switch type {
             case .regular:
                 self.switchNode = SwitchNode()
@@ -163,7 +215,7 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
         
         self.activateArea = AccessibilityAreaNode()
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
         
         self.addSubnode(self.titleNode)
         self.addSubnode(self.switchNode)
@@ -190,25 +242,66 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
         self.switchGestureNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.tapGesture(_:))))
     }
     
+    public func displayHighlight() {
+        if self.backgroundNode.supernode != nil {
+            self.insertSubnode(self.highlightNode, aboveSubnode: self.backgroundNode)
+        } else {
+            self.insertSubnode(self.highlightNode, at: 0)
+        }
+        
+        Queue.mainQueue().after(1.2, {
+            self.highlightNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.3, removeOnCompletion: false, completion: { _ in
+                self.highlightNode.removeFromSupernode()
+            })
+        })
+    }
+
+    public func updateHasContextMenu(hasContextMenu: Bool) {
+        let transition: ContainedViewLayoutTransition
+        if hasContextMenu {
+            transition = .immediate
+        } else {
+            transition = .animated(duration: 0.3, curve: .easeInOut)
+        }
+        if let textNode = self.textNode {
+            transition.updateAlpha(node: textNode, alpha: hasContextMenu ? 0.5 : 1.0)
+        } else {
+            transition.updateAlpha(node: self.switchNode, alpha: hasContextMenu ? 0.5 : 1.0)
+        }
+    }
+    
     func asyncLayout() -> (_ item: ItemListSwitchItem, _ params: ListViewItemLayoutParams, _ insets: ItemListNeighbors) -> (ListViewItemNodeLayout, (Bool) -> Void) {
         let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
+        let makeTextLayout = TextNode.asyncLayout(self.textNode)
         
         let currentItem = self.item
         var currentDisabledOverlayNode = self.disabledOverlayNode
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             var contentSize: CGSize
             var insets: UIEdgeInsets
             let separatorHeight = UIScreenPixel
+            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
+            
             let itemBackgroundColor: UIColor
             let itemSeparatorColor: UIColor
             
             let titleFont = Font.regular(item.presentationData.fontSize.itemListBaseFontSize)
+            let textFont = Font.regular(item.presentationData.fontSize.itemListBaseFontSize * 14.0 / 17.0)
             
             var updatedTheme: PresentationTheme?
-            
             if currentItem?.presentationData.theme !== item.presentationData.theme {
                 updatedTheme = item.presentationData.theme
+            }
+            
+            var updatedValue = false
+            if currentItem?.value != item.value {
+                updatedValue = true
+            }
+            
+            var updateIcon = false
+            if currentItem?.icon != item.icon {
+                updateIcon = true
             }
             
             switch item.style {
@@ -224,14 +317,47 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
                 insets = itemListNeighborsGroupedInsets(neighbors, params)
             }
             
+            
+            
+            var topInset: CGFloat
+            if item.text != nil {
+                topInset = 9.0
+            } else {
+                topInset = 11.0
+            }
+            if case .glass = item.systemStyle {
+                contentSize.height = 52.0
+                topInset += 4.0
+            }
+            
+            var leftInset = 16.0 + params.leftInset
+            if let _ = item.icon {
+                leftInset += 43.0
+            }
+            
             if item.disableLeadingInset {
                 insets.top = 0.0
                 insets.bottom = 0.0
             }
             
-            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.title, font: titleFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: item.maximumNumberOfLines, truncationType: .end, constrainedSize: CGSize(width: params.width - params.leftInset - params.rightInset - 80.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.title, font: titleFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: item.maximumNumberOfLines, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - params.rightInset - 64.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
-            contentSize.height = max(contentSize.height, titleLayout.size.height + 22.0)
+            contentSize.height = max(contentSize.height, titleLayout.size.height + topInset * 2.0)
+            
+            var textLayoutAndApply: (TextNodeLayout, () -> TextNode)?
+            
+            if let text = item.text {
+                let textColor: UIColor
+                switch item.textColor {
+                case .primary:
+                    textColor = item.presentationData.theme.list.itemSecondaryTextColor
+                case .accent:
+                    textColor = item.presentationData.theme.list.itemAccentColor
+                }
+                let (textLayout, textApply) = makeTextLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: text, font: textFont, textColor: textColor), backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - params.rightInset - 84.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+                contentSize.height += -1.0 + textLayout.size.height
+                textLayoutAndApply = (textLayout, textApply)
+            }
             
             if !item.enabled {
                 if currentDisabledOverlayNode == nil {
@@ -246,6 +372,13 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
             
             return (ListViewItemNodeLayout(contentSize: contentSize, insets: insets), { [weak self] animated in
                 if let strongSelf = self {
+                    let transition: ContainedViewLayoutTransition
+                    if animated {
+                        transition = ContainedViewLayoutTransition.animated(duration: 0.4, curve: .spring)
+                    } else {
+                        transition = .immediate
+                    }
+                    
                     strongSelf.item = item
                     
                     strongSelf.activateArea.frame = CGRect(origin: CGPoint(x: params.leftInset, y: 0.0), size: CGSize(width: params.width - params.leftInset - params.rightInset, height: layout.contentSize.height))
@@ -260,11 +393,25 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
                     }
                     strongSelf.activateArea.accessibilityTraits = accessibilityTraits
                     
-                    let transition: ContainedViewLayoutTransition
-                    if animated {
-                        transition = ContainedViewLayoutTransition.animated(duration: 0.4, curve: .spring)
-                    } else {
-                        transition = .immediate
+                    if let icon = item.icon {
+                        var iconTransition = transition
+                        if strongSelf.iconNode.supernode == nil {
+                            iconTransition = .immediate
+                            strongSelf.addSubnode(strongSelf.iconNode)
+                        }
+                        if updateIcon {
+                            strongSelf.iconNode.image = icon
+                        }
+                        let iconY: CGFloat
+                        if item.text == nil {
+                            iconY = floor((layout.contentSize.height - icon.size.height) / 2.0)
+                        } else {
+                            iconY = max(0.0, floor(topInset + titleLayout.size.height + 1.0 - icon.size.height * 0.5))
+                        }
+                        iconTransition.updateFrame(node: strongSelf.iconNode, frame: CGRect(origin: CGPoint(x: params.leftInset + floor((leftInset - params.leftInset - icon.size.width) / 2.0), y: iconY), size: icon.size))
+                    } else if strongSelf.iconNode.supernode != nil {
+                        strongSelf.iconNode.image = nil
+                        strongSelf.iconNode.removeFromSupernode()
                     }
                     
                     if let currentDisabledOverlayNode = currentDisabledOverlayNode {
@@ -289,19 +436,16 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
                         strongSelf.topStripeNode.backgroundColor = itemSeparatorColor
                         strongSelf.bottomStripeNode.backgroundColor = itemSeparatorColor
                         strongSelf.backgroundNode.backgroundColor = itemBackgroundColor
-                        
                         strongSelf.switchNode.frameColor = item.presentationData.theme.list.itemSwitchColors.frameColor
                         strongSelf.switchNode.contentColor = item.presentationData.theme.list.itemSwitchColors.contentColor
                         strongSelf.switchNode.handleColor = item.presentationData.theme.list.itemSwitchColors.handleColor
                         strongSelf.switchNode.positiveContentColor = item.presentationData.theme.list.itemSwitchColors.positiveColor
                         strongSelf.switchNode.negativeContentColor = item.presentationData.theme.list.itemSwitchColors.negativeColor
-                        
                         strongSelf.highlightedBackgroundNode.backgroundColor = item.presentationData.theme.list.itemHighlightedBackgroundColor
+                        strongSelf.highlightNode.backgroundColor = item.presentationData.theme.list.itemSearchHighlightColor
                     }
                     
                     let _ = titleApply()
-                    
-                    let leftInset = 16.0 + params.leftInset
                     
                     switch item.style {
                         case .plain:
@@ -317,7 +461,7 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
                             if strongSelf.maskNode.supernode != nil {
                                 strongSelf.maskNode.removeFromSupernode()
                             }
-                            strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: leftInset, y: contentSize.height - separatorHeight), size: CGSize(width: params.width - leftInset, height: separatorHeight))
+                            transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: leftInset, y: contentSize.height - separatorHeight), size: CGSize(width: params.width - leftInset, height: separatorHeight)))
                         case .blocks:
                             if strongSelf.backgroundNode.supernode == nil {
                                 strongSelf.insertSubnode(strongSelf.backgroundNode, at: 0)
@@ -345,7 +489,7 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
                             let bottomStripeInset: CGFloat
                             switch neighbors.bottom {
                                 case .sameSection(false):
-                                    bottomStripeInset = 16.0 + params.leftInset
+                                    bottomStripeInset = leftInset
                                     strongSelf.bottomStripeNode.isHidden = false
                                 default:
                                     bottomStripeInset = 0.0
@@ -353,22 +497,56 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
                                     strongSelf.bottomStripeNode.isHidden = hasCorners
                             }
                             
-                            strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                            strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                             
-                            strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
-                            strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
-                            strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight))
-                            strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: layoutSize.width - bottomStripeInset, height: separatorHeight))
+                            transition.updateFrame(node: strongSelf.backgroundNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight))))
+                            transition.updateFrame(node: strongSelf.highlightNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight))))
+                            // Per side: the margins differ beside iPhone Duo's strip; equal margins give the symmetric frame.
+                            let backgroundFrame = strongSelf.backgroundNode.frame
+                            transition.updateFrame(node: strongSelf.maskNode, frame: CGRect(x: backgroundFrame.minX + params.leftInset, y: backgroundFrame.minY, width: backgroundFrame.width - params.leftInset - params.rightInset, height: backgroundFrame.height))
+                            transition.updateFrame(node: strongSelf.topStripeNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight)))
+                            transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: layoutSize.width - params.rightInset - bottomStripeInset - separatorRightInset, height: separatorHeight)))
                     }
                     
-                    strongSelf.titleNode.frame = CGRect(origin: CGPoint(x: leftInset, y: floorToScreenPixels((contentSize.height - titleLayout.size.height) / 2.0)), size: titleLayout.size)
+                    var titleOriginY = floorToScreenPixels((contentSize.height - titleLayout.size.height) / 2.0) + 1.0
+                    if textLayoutAndApply != nil {
+                        titleOriginY = topInset + 1.0
+                    }
+                    let titleFrame = CGRect(origin: CGPoint(x: leftInset, y: titleOriginY), size: titleLayout.size)
+                    transition.updatePosition(node: strongSelf.titleNode, position: titleFrame.origin)
+                    strongSelf.titleNode.bounds = CGRect(origin: CGPoint(), size: titleFrame.size)
+                    
+                    if let (textLayout, textApply) = textLayoutAndApply {
+                        let textNode = textApply()
+                        if strongSelf.textNode !== textNode {
+                            strongSelf.textNode?.removeFromSupernode()
+                            strongSelf.textNode = textNode
+                            textNode.isUserInteractionEnabled = false
+                            strongSelf.addSubnode(textNode)
+                            
+                            if transition.isAnimated {
+                                textNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+                            }
+                        }
+                        textNode.frame = CGRect(origin: CGPoint(x: leftInset, y: strongSelf.titleNode.frame.maxY + 2.0), size: textLayout.size)
+                    } else if let textNode = strongSelf.textNode {
+                        strongSelf.textNode = nil
+                        if transition.isAnimated {
+                            textNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false, completion: { [weak textNode] _ in
+                                textNode?.removeFromSupernode()
+                            })
+                        } else {
+                            textNode.removeFromSupernode()
+                        }
+                    }
+                    
                     if let switchView = strongSelf.switchNode.view as? UISwitch {
                         if strongSelf.switchNode.bounds.size.width.isZero {
                             switchView.sizeToFit()
                         }
                         let switchSize = switchView.bounds.size
                         
-                        strongSelf.switchNode.frame = CGRect(origin: CGPoint(x: params.width - params.rightInset - switchSize.width - 15.0, y: floor((contentSize.height - switchSize.height) / 2.0)), size: switchSize)
+                        transition.updateFrame(node: strongSelf.switchNode, frame: CGRect(origin: CGPoint(x: params.width - params.rightInset - switchSize.width - 15.0, y: floor((contentSize.height - switchSize.height) / 2.0)), size: switchSize))
                         strongSelf.switchGestureNode.frame = strongSelf.switchNode.frame
                         if switchView.isOn != item.value {
                             switchView.setOn(item.value, animated: animated)
@@ -377,7 +555,84 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
                     }
                     strongSelf.switchGestureNode.isHidden = item.enableInteractiveChanges && item.enabled
                     
-                    strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: 44.0 + UIScreenPixel + UIScreenPixel))
+                    if item.displayLocked {
+                        var lockedIconTransition = transition
+                        var updateLockedIconImage = false
+                        if let _ = updatedTheme {
+                            updateLockedIconImage = true
+                        }
+                        if updatedValue {
+                            updateLockedIconImage = true
+                        }
+                        
+                        let lockedIconNode: ASImageNode
+                        if let current = strongSelf.lockedIconNode {
+                            lockedIconNode = current
+                        } else {
+                            lockedIconTransition = .immediate
+                            updateLockedIconImage = true
+                            lockedIconNode = ASImageNode()
+                            strongSelf.lockedIconNode = lockedIconNode
+                            strongSelf.insertSubnode(lockedIconNode, aboveSubnode: strongSelf.switchNode)
+                        }
+                        
+                        if updateLockedIconImage, let image = generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Accessory Panels/TextLockIcon"), color: item.value ? item.presentationData.theme.list.itemSwitchColors.positiveColor : item.presentationData.theme.list.itemSecondaryTextColor) {
+                            lockedIconNode.image = image
+                        }
+                        
+                        let switchFrame = strongSelf.switchNode.frame
+                        
+                        if let icon = lockedIconNode.image {
+                            let iconOrigin: CGPoint
+                            switch item.systemStyle {
+                            case .glass:
+                                let offset: CGPoint
+                                if #available(iOS 26.0, *) {
+                                    offset = .zero
+                                } else {
+                                    offset = CGPoint(x: 5.0, y: 1.0)
+                                }
+                                
+                                iconOrigin = CGPoint(x: item.value ? switchFrame.maxX - icon.size.width - 16.0 + UIScreenPixel + offset.x : switchFrame.minX + 16.0 - UIScreenPixel - offset.x, y: switchFrame.minY + 8.0 + offset.y)
+                            case .legacy:
+                                iconOrigin = CGPoint(x: item.value ? switchFrame.maxX - icon.size.width - 11.0 : switchFrame.minX + 11.0, y: switchFrame.minY + 9.0)
+                            }
+                            lockedIconTransition.updateFrame(node: lockedIconNode, frame: CGRect(origin: iconOrigin, size: icon.size))
+                        }
+                    } else if let lockedIconNode = strongSelf.lockedIconNode {
+                        strongSelf.lockedIconNode = nil
+                        lockedIconNode.removeFromSupernode()
+                    }
+                    
+                    if let component = item.titleBadgeComponent {
+                        let componentView: ComponentView<Empty>
+                        if let current = strongSelf.titleBadgeComponentView {
+                            componentView = current
+                        } else {
+                            componentView = ComponentView<Empty>()
+                            strongSelf.titleBadgeComponentView = componentView
+                        }
+                        
+                        let badgeSize = componentView.update(
+                            transition: .immediate,
+                            component: component,
+                            environment: {},
+                            containerSize: contentSize
+                        )
+                        if let view = componentView.view {
+                            var titleBadgeTransition = transition
+                            if view.superview == nil {
+                                titleBadgeTransition = .immediate
+                                strongSelf.view.addSubview(view)
+                            }
+                            titleBadgeTransition.updateFrame(view: view, frame: CGRect(origin: CGPoint(x: strongSelf.titleNode.frame.maxX + 7.0, y: floor((contentSize.height - badgeSize.height) / 2.0)), size: badgeSize))
+                        }
+                    } else if let componentView = strongSelf.titleBadgeComponentView {
+                        strongSelf.titleBadgeComponentView = nil
+                        componentView.view?.removeFromSuperview()
+                    }
+                    
+                    transition.updateFrame(node: strongSelf.highlightedBackgroundNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: layoutSize.height + UIScreenPixel + UIScreenPixel)))
                 }
             })
         }
@@ -438,7 +693,7 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
         }
     }
     
-    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.allowsGroupOpacity = true
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4, completion: { [weak self] _ in
             self?.layer.allowsGroupOpacity = false
@@ -459,7 +714,7 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
     
     @objc private func tapGesture(_ recognizer: UITapGestureRecognizer) {
         if let item = self.item, let switchView = self.switchNode.view as? UISwitch, case .ended = recognizer.state {
-            if item.enabled {
+            if item.enabled && !item.displayLocked {
                 let value = switchView.isOn
                 item.updated(!value)
             } else {

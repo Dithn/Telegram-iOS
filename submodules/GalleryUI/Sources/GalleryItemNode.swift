@@ -3,7 +3,6 @@ import UIKit
 import AsyncDisplayKit
 import Display
 import SwiftSignalKit
-import Postbox
 
 public enum GalleryItemNodeNavigationStyle {
     case light
@@ -11,6 +10,12 @@ public enum GalleryItemNodeNavigationStyle {
 }
 
 open class GalleryItemNode: ASDisplayNode {
+    public enum ActiveEdge {
+        case left
+        case right
+        case middle
+    }
+    
     private var _index: Int?
     public var index: Int {
         get {
@@ -22,10 +27,11 @@ open class GalleryItemNode: ASDisplayNode {
     
     public var toggleControlsVisibility: () -> Void = { }
     public var updateControlsVisibility: (Bool) -> Void = { _ in }
+    public var controlsVisibility: () -> Bool = { return true }
     public var updateOrientation: (UIInterfaceOrientation) -> Void = { _ in }
     public var dismiss: () -> Void = { }
-    public var beginCustomDismiss: (Bool) -> Void = { _ in }
-    public var completeCustomDismiss: () -> Void = { }
+    public var beginCustomDismiss: (GalleryControllerNode.CustomDismissType) -> Void = { _ in }
+    public var completeCustomDismiss: (Bool) -> Void = { _ in }
     public var baseNavigationController: () -> NavigationController? = { return nil }
     public var galleryController: () -> ViewController? = { return nil }
     public var alternativeDismiss: () -> Bool = { return false }
@@ -46,7 +52,7 @@ open class GalleryItemNode: ASDisplayNode {
         return .single("")
     }
     
-    open func titleView() -> Signal<UIView?, NoError> {
+    open func titleContent() -> Signal<GalleryTitleView.Content?, NoError> {
         return .single(nil)
     }
     
@@ -88,7 +94,7 @@ open class GalleryItemNode: ASDisplayNode {
     open func visibilityUpdated(isVisible: Bool) {
     }
     
-    open func controlsVisibilityUpdated(isVisible: Bool) {
+    open func controlsVisibilityUpdated(isVisible: Bool, animated: Bool) {
     }
     
     open func adjustForPreviewing() {
@@ -100,7 +106,29 @@ open class GalleryItemNode: ASDisplayNode {
     open func animateOut(to node: (ASDisplayNode, CGRect, () -> (UIView?, UIView?)), addToTransitionSurface: (UIView) -> Void, completion: @escaping () -> Void) {
     }
     
+    open func maybePerformActionForSwipeDismiss() -> Bool {
+        return false
+    }
+    
+    open func maybePerformActionForSwipeDownDismiss() -> Bool {
+        return false
+    }
+    
     open func contentSize() -> CGSize? {
         return nil
+    }
+    
+    open var keyShortcuts: [KeyShortcut] {
+        return []
+    }
+    
+    open func hasActiveEdgeAction(edge: ActiveEdge) -> Bool {
+        return false
+    }
+    
+    open func setActiveEdgeAction(edge: ActiveEdge?) {
+    }
+    
+    open func adjustActiveEdgeAction(distance: CGFloat) {
     }
 }

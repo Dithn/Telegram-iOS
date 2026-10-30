@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import AsyncDisplayKit
+import Display
 
 private final class InstantPageTileNodeParameters: NSObject {
     let tile: InstantPageTile
@@ -14,11 +15,13 @@ private final class InstantPageTileNodeParameters: NSObject {
     }
 }
 
-final class InstantPageTileNode: ASDisplayNode {
-    private let tile: InstantPageTile
+public final class InstantPageTileNode: ASDisplayNode {
+    private var tile: InstantPageTile
+    private var tileBackgroundColor: UIColor
     
-    init(tile: InstantPageTile, backgroundColor: UIColor) {
+    public init(tile: InstantPageTile, backgroundColor: UIColor) {
         self.tile = tile
+        self.tileBackgroundColor = backgroundColor
         
         super.init()
         
@@ -27,19 +30,27 @@ final class InstantPageTileNode: ASDisplayNode {
         self.backgroundColor = backgroundColor
     }
     
-    override func drawParameters(forAsyncLayer layer: _ASDisplayLayer) -> NSObjectProtocol? {
-        return InstantPageTileNodeParameters(tile: self.tile, backgroundColor: self.backgroundColor ?? UIColor.white)
+    public func update(tile: InstantPageTile, backgroundColor: UIColor) {
+        self.tile = tile
+        self.tileBackgroundColor = backgroundColor
+        self.backgroundColor = backgroundColor
+        self.setNeedsDisplay()
+    }
+    
+    public override func drawParameters(forAsyncLayer layer: _ASDisplayLayer) -> NSObjectProtocol? {
+        return InstantPageTileNodeParameters(tile: self.tile, backgroundColor: self.tileBackgroundColor)
     }
     
     @objc override public class func draw(_ bounds: CGRect, withParameters parameters: Any?, isCancelled: () -> Bool, isRasterizing: Bool) {
-        
         let context = UIGraphicsGetCurrentContext()!
         
         if let parameters = parameters as? InstantPageTileNodeParameters {
             if !isRasterizing {
-                context.setBlendMode(.copy)
-                context.setFillColor(parameters.backgroundColor.cgColor)
-                context.fill(bounds)
+                if !parameters.backgroundColor.alpha.isZero {
+                    context.setBlendMode(.copy)
+                    context.setFillColor(parameters.backgroundColor.cgColor)
+                    context.fill(bounds)
+                }
             }
             
             parameters.tile.draw(context: context)

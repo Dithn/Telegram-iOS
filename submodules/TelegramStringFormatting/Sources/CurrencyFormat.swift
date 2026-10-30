@@ -1,21 +1,36 @@
 import Foundation
 import AppBundle
 
-private final class CurrencyFormatterEntry {
-    let symbol: String
-    let thousandsSeparator: String
-    let decimalSeparator: String
-    let symbolOnLeft: Bool
-    let spaceBetweenAmountAndSymbol: Bool
-    let decimalDigits: Int
+public final class CurrencyFormatterEntry {
+    public let symbol: String
+    public let thousandsSeparator: String
+    public let decimalSeparator: String
+    public let symbolOnLeft: Bool
+    public let spaceBetweenAmountAndSymbol: Bool
+    public let decimalDigits: Int
     
-    init(symbol: String, thousandsSeparator: String, decimalSeparator: String, symbolOnLeft: Bool, spaceBetweenAmountAndSymbol: Bool, decimalDigits: Int) {
+    public init(symbol: String, thousandsSeparator: String, decimalSeparator: String, symbolOnLeft: Bool, spaceBetweenAmountAndSymbol: Bool, decimalDigits: Int) {
         self.symbol = symbol
         self.thousandsSeparator = thousandsSeparator
         self.decimalSeparator = decimalSeparator
         self.symbolOnLeft = symbolOnLeft
         self.spaceBetweenAmountAndSymbol = spaceBetweenAmountAndSymbol
         self.decimalDigits = decimalDigits
+    }
+}
+
+private func getCurrencyExp(currency: String) -> Int {
+    switch currency {
+    case "CLF":
+        return 4
+    case "BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND":
+        return 3
+    case "BIF", "BYR", "CLP", "CVE", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "UGX", "UYI", "VND", "VUV", "XAF", "XOF", "XPF":
+        return 0
+    case "MRO":
+        return 1
+    default:
+        return 2
     }
 }
 
@@ -35,11 +50,29 @@ private func loadCurrencyFormatterEntries() -> [String: CurrencyFormatterEntry] 
     
     for (code, contents) in dict {
         if let contentsDict = contents as? [String: AnyObject] {
-            let entry = CurrencyFormatterEntry(symbol: contentsDict["symbol"] as! String, thousandsSeparator: contentsDict["thousandsSeparator"] as! String, decimalSeparator: contentsDict["decimalSeparator"] as! String, symbolOnLeft: (contentsDict["symbolOnLeft"] as! NSNumber).boolValue, spaceBetweenAmountAndSymbol: (contentsDict["spaceBetweenAmountAndSymbol"] as! NSNumber).boolValue, decimalDigits: (contentsDict["decimalDigits"] as! NSNumber).intValue)
+            let entry = CurrencyFormatterEntry(
+                symbol: contentsDict["symbol"] as! String,
+                thousandsSeparator: contentsDict["thousandsSeparator"] as! String,
+                decimalSeparator: contentsDict["decimalSeparator"] as! String,
+                symbolOnLeft: (contentsDict["symbolOnLeft"] as! NSNumber).boolValue,
+                spaceBetweenAmountAndSymbol: (contentsDict["spaceBetweenAmountAndSymbol"] as! NSNumber).boolValue,
+                decimalDigits: getCurrencyExp(currency: code.uppercased())
+            )
             result[code] = entry
             result[code.lowercased()] = entry
         }
     }
+    
+    let tonEntry = CurrencyFormatterEntry(
+        symbol: "GRAM",
+        thousandsSeparator: ".",
+        decimalSeparator: ",",
+        symbolOnLeft: true,
+        spaceBetweenAmountAndSymbol: false,
+        decimalDigits: 9
+    )
+    result["TON"] = tonEntry
+    result["ton"] = tonEntry
     
     return result
 }
@@ -123,6 +156,23 @@ public func currencyToFractionalAmount(value: Int64, currency: String) -> Double
     return Double(value) / factor
 }
 
+private func formatIntegerWithThousandsSeparator(_ number: Int64, separator: String) -> String {
+    if number == 0 {
+        return "0"
+    }
+    let numberString = String(number)
+    var result = ""
+    let digits = Array(numberString)
+    for (index, digit) in digits.enumerated() {
+        let remainingDigits = digits.count - index
+        if remainingDigits % 3 == 0 && index > 0 {
+            result.append(separator)
+        }
+        result.append(digit)
+    }
+    return result
+}
+
 public func formatCurrencyAmount(_ amount: Int64, currency: String) -> String {
     if let entry = currencyFormatterEntries[currency] ?? currencyFormatterEntries["USD"] {
         var result = ""
@@ -144,12 +194,13 @@ public func formatCurrencyAmount(_ amount: Int64, currency: String) -> String {
                 fractional.append(Character(scalar))
             }
         }
-        result.append("\(integerPart)")
+        let integerString = formatIntegerWithThousandsSeparator(integerPart, separator: entry.thousandsSeparator)
+        result.append(integerString)
         if !fractional.isEmpty {
             result.append(entry.decimalSeparator)
-        }
-        for i in 0 ..< fractional.count {
-            result.append(fractional[fractional.count - i - 1])
+            for i in 0 ..< fractional.count {
+                result.append(fractional[fractional.count - i - 1])
+            }
         }
         if !entry.symbolOnLeft {
             if entry.spaceBetweenAmountAndSymbol {
@@ -157,7 +208,6 @@ public func formatCurrencyAmount(_ amount: Int64, currency: String) -> String {
             }
             result.append(entry.symbol)
         }
-        
         return result
     } else {
         assertionFailure()
@@ -169,8 +219,8 @@ public func formatCurrencyAmount(_ amount: Int64, currency: String) -> String {
     }
 }
 
-public func formatCurrencyAmountCustom(_ amount: Int64, currency: String) -> (String, String, Bool) {
-    if let entry = currencyFormatterEntries[currency] ?? currencyFormatterEntries["USD"] {
+public func formatCurrencyAmountCustom(_ amount: Int64, currency: String, customFormat: CurrencyFormatterEntry? = nil) -> (String, String, Bool) {
+    if let entry = customFormat ?? currencyFormatterEntries[currency] ?? currencyFormatterEntries["USD"] {
         var result = ""
         if amount < 0 {
             result.append("-")

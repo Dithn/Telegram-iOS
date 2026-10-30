@@ -113,7 +113,7 @@ final class MessageHistoryThreadHoleIndexTable: Table {
             postboxLog("MessageHistoryThreadHoleIndexTable: Initializing \(peerId) \(threadId)")
             self.metadataTable.setIsThreadHoleIndexInitialized(peerId: peerId, threadId: threadId)
             
-            if let messageNamespaces = self.seedConfiguration.messageThreadHoles[peerId.namespace] {
+            if let messageNamespaces = self.seedConfiguration.messageThreadHoles(peerId.namespace, threadId) {
                 for namespace in messageNamespaces {
                     var operations: [MessageHistoryIndexHoleOperationKey: [MessageHistoryIndexHoleOperation]] = [:]
                     self.add(peerId: peerId, threadId: threadId, namespace: namespace, space: .everywhere, range: 1 ... (Int32.max - 1), operations: &operations)
@@ -185,6 +185,26 @@ final class MessageHistoryThreadHoleIndexTable: Table {
                 return false
             }, limit: 1)
         }
+        return result
+    }
+    
+    func latest(peerId: PeerId, threadId: Int64, namespace: MessageId.Namespace, space: MessageHistoryHoleSpace) -> ClosedRange<MessageId.Id>? {
+        self.ensureInitialized(peerId: peerId, threadId: threadId)
+        
+        var result: ClosedRange<MessageId.Id>?
+        self.valueBox.range(self.table, start: self.upperBound(peerId: peerId, threadId: threadId, namespace: namespace, space: space), end: self.lowerBound(peerId: peerId, threadId: threadId, namespace: namespace, space: space), values: { key, value in
+            
+            let (keyThreadId, upperId, keySpace) = decomposeKey(key)
+            assert(keyThreadId == threadId)
+            assert(keySpace == space)
+            assert(upperId.peerId == peerId)
+            assert(upperId.namespace == namespace)
+            let lowerId = decodeValue(value: value, peerId: peerId, namespace: namespace)
+            result = lowerId.id ... upperId.id
+            
+            return false
+        }, limit: 1)
+        
         return result
     }
     
@@ -329,7 +349,7 @@ final class MessageHistoryThreadHoleIndexTable: Table {
             self.valueBox.set(self.table, key: self.key(threadId: threadId, id: MessageId(peerId: peerId, namespace: namespace, id: closedRange.upperBound), space: space), value: MemoryBuffer(memory: &lowerBound, capacity: 4, length: 4, freeWhenDone: false))
         }
         
-        //addOperation(.insert(clippedRange), peerId: peerId, namespace: namespace, space: space, to: &operations)
+        addMessageHistoryHoleOperation(.insert(clippedRange), peerId: peerId, threadId: threadId, namespace: namespace, space: MessageHistoryHoleOperationSpace(space), to: &operations)
     }
     
     func remove(peerId: PeerId, threadId: Int64, namespace: MessageId.Namespace, space: MessageHistoryHoleSpace, range: ClosedRange<MessageId.Id>, operations: inout [MessageHistoryIndexHoleOperationKey: [MessageHistoryIndexHoleOperation]]) {
@@ -337,7 +357,7 @@ final class MessageHistoryThreadHoleIndexTable: Table {
         
         self.removeInternal(peerId: peerId, threadId: threadId, namespace: namespace, space: space, range: range, operations: &operations)
         
-        /*switch space {
+        switch space {
             case .everywhere:
                 if let namespaceHoleTags = self.seedConfiguration.messageHoles[peerId.namespace]?[namespace] {
                     for tag in namespaceHoleTags {
@@ -346,7 +366,7 @@ final class MessageHistoryThreadHoleIndexTable: Table {
                 }
             case .tag:
                 break
-        }*/
+        }
     }
     
     private func removeInternal(peerId: PeerId, threadId: Int64, namespace: MessageId.Namespace, space: MessageHistoryHoleSpace, range: ClosedRange<MessageId.Id>, operations: inout [MessageHistoryIndexHoleOperationKey: [MessageHistoryIndexHoleOperation]]) {
@@ -393,9 +413,9 @@ final class MessageHistoryThreadHoleIndexTable: Table {
             self.valueBox.set(self.table, key: self.key(threadId: threadId, id: MessageId(peerId: peerId, namespace: namespace, id: closedRange.upperBound), space: space), value: MemoryBuffer(memory: &lowerBound, capacity: 4, length: 4, freeWhenDone: false))
         }
         
-        /*if !removeKeys.isEmpty {
-            addOperation(.remove(range), peerId: peerId, namespace: namespace, space: space, to: &operations)
-        }*/
+        if !removeKeys.isEmpty {
+            addMessageHistoryHoleOperation(.remove(range), peerId: peerId, threadId: threadId, namespace: namespace, space: MessageHistoryHoleOperationSpace(space), to: &operations)
+        }
     }
     
     func debugList(peerId: PeerId, threadId: Int64, namespace: MessageId.Namespace, space: MessageHistoryHoleSpace) -> [ClosedRange<MessageId.Id>] {

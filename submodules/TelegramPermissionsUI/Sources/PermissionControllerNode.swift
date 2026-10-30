@@ -124,7 +124,13 @@ final class PermissionControllerNode: ASDisplayNode {
     }
     
     private func transition(state: PermissionControllerState, transition: ContainedViewLayoutTransition) {
-        let insets = state.layout.layout.insets(options: [.statusBar])
+        var insets = state.layout.layout.insets(options: [.statusBar])
+        if state.layout.layout.safeInsets.left != state.layout.layout.safeInsets.right {
+            // Beside iPhone Duo's side strip the content keeps to the band between the side insets; equal insets keep
+            // the full width as before.
+            insets.left = state.layout.layout.safeInsets.left
+            insets.right = state.layout.layout.safeInsets.right
+        }
         let contentFrame = CGRect(origin: CGPoint(x: 0.0, y: state.layout.navigationHeight), size: CGSize(width: state.layout.layout.size.width, height: state.layout.layout.size.height))
         
         if let state = state.data.state {
@@ -194,16 +200,6 @@ final class PermissionControllerNode: ASDisplayNode {
                                     title = self.presentationData.strings.Permissions_CellularDataTitle_v0
                                     text = self.presentationData.strings.Permissions_CellularDataText_v0
                                     buttonTitle = self.presentationData.strings.Permissions_CellularDataAllowInSettings_v0
-                                    hasPrivacyPolicy = false
-                                case let .nearbyLocation(status):
-                                    icon = nil
-                                    title = self.presentationData.strings.Permissions_PeopleNearbyTitle_v0
-                                    text = self.presentationData.strings.Permissions_PeopleNearbyText_v0
-                                    if status == .denied {
-                                        buttonTitle = self.presentationData.strings.Permissions_PeopleNearbyAllowInSettings_v0
-                                    } else {
-                                        buttonTitle = self.presentationData.strings.Permissions_PeopleNearbyAllow_v0
-                                    }
                                     hasPrivacyPolicy = false
                             }
                             

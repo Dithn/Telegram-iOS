@@ -40,13 +40,25 @@ public class MapSnapshotMediaResource {
 
 let TGGoogleMapsOffset: Int = 268435456
 let TGGoogleMapsRadius = Double(TGGoogleMapsOffset) / Double.pi
+private let maximumWebMercatorLatitude = 85.05112878
 
 private func yToLatitude(_ y: Int) -> Double {
     return ((Double.pi / 2.0) - 2 * atan(exp((Double(y - TGGoogleMapsOffset)) / TGGoogleMapsRadius))) * 180.0 / Double.pi;
 }
 
 private func latitudeToY(_ latitude: Double) -> Int {
-    return Int(round(Double(TGGoogleMapsOffset) - TGGoogleMapsRadius * log((1.0 + sin(latitude * Double.pi / 180.0)) / (1.0 - sin(latitude * Double.pi / 180.0))) / 2.0))
+    let clampedLatitude: Double
+    if latitude.isNaN {
+        clampedLatitude = 0.0
+    } else {
+        clampedLatitude = min(max(latitude, -maximumWebMercatorLatitude), maximumWebMercatorLatitude)
+    }
+    let y = Double(TGGoogleMapsOffset) - TGGoogleMapsRadius * log((1.0 + sin(clampedLatitude * Double.pi / 180.0)) / (1.0 - sin(clampedLatitude * Double.pi / 180.0))) / 2.0
+    guard y.isFinite else {
+        return TGGoogleMapsOffset
+    }
+    let clampedY = min(max(y, 0.0), Double(TGGoogleMapsOffset * 2))
+    return Int(round(clampedY))
 }
 
 private func adjustGMapLatitude(_ latitude: Double, offset: Int, zoom: Int) -> Double {
@@ -63,7 +75,7 @@ private func fetchMapSnapshotResource(resource: MapSnapshotMediaResource) -> Sig
             let latitude = adjustGMapLatitude(resource.latitude, offset: -10, zoom: 15)
             options.region = MKCoordinateRegion(center: CLLocationCoordinate2DMake(latitude, resource.longitude), span: MKCoordinateSpan(latitudeDelta: 0.003, longitudeDelta: 0.003))
             options.mapType = .standard
-            options.showsPointsOfInterest = false
+            options.pointOfInterestFilter = .excludingAll
             options.showsBuildings = true
             options.size = CGSize(width: CGFloat(resource.width + 1), height: CGFloat(resource.height + 10))
             options.scale = 2.0
@@ -109,11 +121,16 @@ public func chatMapSnapshotData(engine: TelegramEngine, resource: MapSnapshotMed
 }
 
 public func chatMapSnapshotImage(engine: TelegramEngine, resource: MapSnapshotMediaResource) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError> {
-    let signal = chatMapSnapshotData(engine: engine, resource: resource)
-    
+    // Emit an initial `nil` so a caller-supplied `emptyColor` placeholder draws during the (async
+    // MKMapSnapshotter) load instead of leaving the map area blank; the real snapshot data follows.
+    let signal = Signal<Data?, NoError>.single(nil)
+    |> then(chatMapSnapshotData(engine: engine, resource: resource))
+
     return signal |> map { fullSizeData in
         return { arguments in
-            let context = DrawingContext(size: arguments.drawingSize, clear: true)
+            guard let context = DrawingContext(size: arguments.drawingSize, clear: true) else {
+                return nil
+            }
             
             var fullSizeImage: CGImage?
             if let fullSizeData = fullSizeData {
@@ -157,8 +174,19 @@ public func chatMapSnapshotImage(engine: TelegramEngine, resource: MapSnapshotMe
                         c.setBlendMode(.normal)
                     }
                 }
+            } else if let emptyColor = arguments.emptyColor {
+                // No image yet (still loading) → fill the caller's placeholder color so the map area isn't
+                // blank during the async snapshot fetch. Gated on `emptyColor`, so callers that don't opt in
+                // keep the prior transparent loading state.
+                context.withFlippedContext { c in
+                    c.setBlendMode(.copy)
+                    c.setFillColor(emptyColor.cgColor)
+                    c.fill(arguments.drawingRect)
+
+                    c.setBlendMode(.normal)
+                }
             }
-            
+
             addCorners(context, arguments: arguments)
             
             return context

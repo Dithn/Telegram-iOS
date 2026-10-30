@@ -3,7 +3,7 @@
 #import <MtProtoKit/MtProtoKit.h>
 
 #import <UIKit/UIKit.h>
-#import <MobileCoreServices/MobileCoreServices.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <AddressBook/AddressBook.h>
 #import <AVFoundation/AVFoundation.h>
 #import <PassKit/PassKit.h>
@@ -21,46 +21,46 @@
     {
         for (NSItemProvider *provider in item.attachments)
         {
-            if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeMovie])
+            if ([provider hasItemConformingToTypeIdentifier:UTTypeMovie.identifier])
                 [providers addObject:provider];
-            else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeAudio])
+            else if ([provider hasItemConformingToTypeIdentifier:UTTypeAudio.identifier])
                 [providers addObject:provider];
-            else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeImage])
+            else if ([provider hasItemConformingToTypeIdentifier:UTTypeImage.identifier])
                 [providers addObject:provider];
-            else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeFileURL])
+            else if ([provider hasItemConformingToTypeIdentifier:UTTypeFileURL.identifier])
                 [providers addObject:provider];
-            else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeURL]) {
+            else if ([provider hasItemConformingToTypeIdentifier:UTTypeURL.identifier]) {
                 [providers removeAllObjects];
                 
                 [providers addObject:provider];
                 break;
             }
-            else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeVCard])
+            else if ([provider hasItemConformingToTypeIdentifier:UTTypeVCard.identifier])
                 [providers addObject:provider];
-            else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeText])
+            else if ([provider hasItemConformingToTypeIdentifier:UTTypeText.identifier])
                 [providers addObject:provider];
-            else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeData])
+            else if ([provider hasItemConformingToTypeIdentifier:UTTypeData.identifier])
                 [providers addObject:provider];
             else if ([provider hasItemConformingToTypeIdentifier:@"com.apple.pkpass"])
                 [providers addObject:provider];
         }
     }
     
-    NSInteger providerIndex = -1;
+    __unused NSInteger providerIndex = -1;
     for (NSItemProvider *provider in providers)
     {
         providerIndex++;
         
         MTSignal *dataSignal = nil;
-        if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeAudio])
+        if ([provider hasItemConformingToTypeIdentifier:UTTypeAudio.identifier])
             dataSignal = [self signalForAudioItemProvider:provider];
-        else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeMovie])
+        else if ([provider hasItemConformingToTypeIdentifier:UTTypeMovie.identifier])
             dataSignal = [self signalForVideoItemProvider:provider];
-        else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeGIF])
+        else if ([provider hasItemConformingToTypeIdentifier:UTTypeGIF.identifier])
             dataSignal = [self signalForDataItemProvider:provider];
-        else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeImage])
+        else if ([provider hasItemConformingToTypeIdentifier:UTTypeImage.identifier])
             dataSignal = [self signalForImageItemProvider:provider];
-        else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeFileURL])
+        else if ([provider hasItemConformingToTypeIdentifier:UTTypeFileURL.identifier])
         {
             dataSignal = [[self signalForUrlItemProvider:provider] mapToSignal:^MTSignal *(NSURL *url)
             {
@@ -77,13 +77,13 @@
                 return [MTSignal single:@{@"data": data, @"fileName": fileName, @"mimeType": mimeType}];
             }];
         }
-        else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeVCard])
+        else if ([provider hasItemConformingToTypeIdentifier:UTTypeVCard.identifier])
             dataSignal = [self signalForVCardItemProvider:provider];
-        else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeText])
+        else if ([provider hasItemConformingToTypeIdentifier:UTTypeText.identifier])
             dataSignal = [self signalForTextItemProvider:provider];
-        else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeURL])
+        else if ([provider hasItemConformingToTypeIdentifier:UTTypeURL.identifier])
             dataSignal = [self signalForTextUrlItemProvider:provider];
-        else if ([provider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeData])
+        else if ([provider hasItemConformingToTypeIdentifier:UTTypeData.identifier])
         {
             dataSignal = [[self signalForDataItemProvider:provider] map:^id(NSDictionary *dict)
             {
@@ -125,7 +125,7 @@
 {
     return [[MTSignal alloc] initWithGenerator:^id<MTDisposable>(MTSubscriber *subscriber)
     {
-        [itemProvider loadItemForTypeIdentifier:(NSString *)kUTTypeData options:nil completionHandler:^(NSData *data, NSError *error)
+        [itemProvider loadItemForTypeIdentifier:UTTypeData.identifier options:nil completionHandler:^(NSData *data, NSError *error)
         {
             if (error != nil)
                 [subscriber putError:nil];
@@ -140,7 +140,7 @@
     }];
 }
 
-static UIImage *TGScaleImageToPixelSize(UIImage *image, CGSize size) {
+__unused static UIImage *TGScaleImageToPixelSize(UIImage *image, CGSize size) {
     UIGraphicsBeginImageContextWithOptions(size, true, 1.0f);
     [image drawInRect:CGRectMake(0, 0, size.width, size.height) blendMode:kCGBlendModeCopy alpha:1.0f];
     UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
@@ -149,7 +149,7 @@ static UIImage *TGScaleImageToPixelSize(UIImage *image, CGSize size) {
     return result;
 }
 
-static CGSize TGFitSize(CGSize size, CGSize maxSize) {
+__unused static CGSize TGFitSize(CGSize size, CGSize maxSize) {
     if (size.width < 1)
         size.width = 1;
     if (size.height < 1)
@@ -173,9 +173,6 @@ static CGSize TGFitSize(CGSize size, CGSize maxSize) {
     return [[MTSignal alloc] initWithGenerator:^id<MTDisposable>(MTSubscriber *subscriber)
     {
         bool preferAsFile = false;
-#if DEBUG
-        preferAsFile = true;
-#endif
         
         CGSize maxSize = CGSizeMake(1280.0, 1280.0);
         NSDictionary *imageOptions = @{
@@ -184,16 +181,16 @@ static CGSize TGFitSize(CGSize size, CGSize maxSize) {
         if (preferAsFile) {
             imageOptions = nil;
         }
-        if ([itemProvider hasItemConformingToTypeIdentifier:(NSString *)kUTTypeImage]) {
-            [itemProvider loadItemForTypeIdentifier:(NSString *)kUTTypeImage options:imageOptions completionHandler:^(id<NSSecureCoding> _Nullable item, NSError * _Null_unspecified error) {
+        if ([itemProvider hasItemConformingToTypeIdentifier:UTTypeImage.identifier]) {
+            [itemProvider loadItemForTypeIdentifier:UTTypeImage.identifier options:imageOptions completionHandler:^(id<NSSecureCoding> _Nullable item, NSError * _Null_unspecified error) {
                 if (error != nil && ![(NSObject *)item respondsToSelector:@selector(CGImage)] && ![(NSObject *)item respondsToSelector:@selector(absoluteString)]) {
-                    [itemProvider loadItemForTypeIdentifier:(NSString *)kUTTypeData options:nil completionHandler:^(UIImage *image, NSError *error)
+                    [itemProvider loadItemForTypeIdentifier:UTTypeData.identifier options:nil completionHandler:^(NSData *data, NSError *error)
                      {
                          if (error != nil)
                              [subscriber putError:nil];
                          else
                          {
-                             [subscriber putNext:@{@"image": image}];
+                             [subscriber putNext:@{@"data": data}];
                              [subscriber putCompletion];
                          }
                      }];
@@ -237,7 +234,7 @@ static CGSize TGFitSize(CGSize size, CGSize maxSize) {
                             
                             NSString *tempPath = [NSTemporaryDirectory() stringByAppendingPathComponent:[[NSString alloc] initWithFormat:@"img%d", (int)arc4random()]];
                             CFURLRef tempUrl = (__bridge CFURLRef)[NSURL fileURLWithPath:tempPath];
-                            CGImageDestinationRef destination = CGImageDestinationCreateWithURL(tempUrl, kUTTypeJPEG, 1, NULL);
+                            CGImageDestinationRef destination = CGImageDestinationCreateWithURL(tempUrl, (__bridge CFStringRef)UTTypeJPEG.identifier, 1, NULL);
                             NSDictionary *properties = @{ (__bridge NSString *)kCGImageDestinationLossyCompressionQuality: @(0.52)};
 
                             CGImageDestinationSetProperties(destination, (__bridge CFDictionaryRef)properties);
@@ -266,13 +263,13 @@ static CGSize TGFitSize(CGSize size, CGSize maxSize) {
                 }
             }];
         } else {
-            [itemProvider loadItemForTypeIdentifier:(NSString *)kUTTypeData options:nil completionHandler:^(UIImage *image, NSError *error)
+            [itemProvider loadItemForTypeIdentifier:UTTypeData.identifier options:nil completionHandler:^(NSData *data, NSError *error)
              {
                  if (error != nil)
                      [subscriber putError:nil];
                  else
                  {
-                     [subscriber putNext:@{@"image": image}];
+                     [subscriber putNext:@{@"data": data}];
                      [subscriber putCompletion];
                  }
              }];
@@ -286,7 +283,7 @@ static CGSize TGFitSize(CGSize size, CGSize maxSize) {
 {
     MTSignal *itemSignal = [[MTSignal alloc] initWithGenerator:^id<MTDisposable>(MTSubscriber *subscriber)
     {
-        [itemProvider loadItemForTypeIdentifier:(NSString *)kUTTypeAudio options:nil completionHandler:^(NSURL *url, NSError *error)
+        [itemProvider loadItemForTypeIdentifier:UTTypeAudio.identifier options:nil completionHandler:^(NSURL *url, NSError *error)
         {
             if (error != nil)
                [subscriber putError:nil];
@@ -402,7 +399,7 @@ static CGSize TGFitSize(CGSize size, CGSize maxSize) {
 {
     MTSignal *assetSignal = [[MTSignal alloc] initWithGenerator:^id<MTDisposable>(MTSubscriber *subscriber)
     {
-        [itemProvider loadItemForTypeIdentifier:(NSString *)kUTTypeMovie options:nil completionHandler:^(NSURL *url, NSError *error)
+        [itemProvider loadItemForTypeIdentifier:UTTypeMovie.identifier options:nil completionHandler:^(NSURL *url, NSError *error)
         {
             if (error != nil)
             {
@@ -462,7 +459,7 @@ static CGSize TGFitSize(CGSize size, CGSize maxSize) {
 {
     return [[MTSignal alloc] initWithGenerator:^id<MTDisposable>(MTSubscriber *subscriber)
     {
-        [itemProvider loadItemForTypeIdentifier:(NSString *)kUTTypeFileURL options:nil completionHandler:^(NSURL *url, NSError *error)
+        [itemProvider loadItemForTypeIdentifier:UTTypeFileURL.identifier options:nil completionHandler:^(NSURL *url, NSError *error)
         {
             if (error != nil)
                 [subscriber putError:nil];
@@ -481,7 +478,7 @@ static CGSize TGFitSize(CGSize size, CGSize maxSize) {
 {
     return [[MTSignal alloc] initWithGenerator:^id<MTDisposable>(MTSubscriber *subscriber)
     {
-        [itemProvider loadItemForTypeIdentifier:(NSString *)kUTTypeText options:nil completionHandler:^(NSString *text, NSError *error)
+        [itemProvider loadItemForTypeIdentifier:UTTypeText.identifier options:nil completionHandler:^(NSString *text, NSError *error)
         {
             if (error != nil)
                 [subscriber putError:nil];
@@ -500,7 +497,7 @@ static CGSize TGFitSize(CGSize size, CGSize maxSize) {
 {
     return [[MTSignal alloc] initWithGenerator:^id<MTDisposable>(MTSubscriber *subscriber)
     {
-        [itemProvider loadItemForTypeIdentifier:(NSString *)kUTTypeURL options:nil completionHandler:^(NSURL *url, NSError *error)
+        [itemProvider loadItemForTypeIdentifier:UTTypeURL.identifier options:nil completionHandler:^(NSURL *url, NSError *error)
         {
             if (error != nil)
                 [subscriber putError:nil];
@@ -519,7 +516,7 @@ static CGSize TGFitSize(CGSize size, CGSize maxSize) {
 {
     return [[MTSignal alloc] initWithGenerator:^id<MTDisposable>(MTSubscriber *subscriber)
     {
-        [itemProvider loadItemForTypeIdentifier:(NSString *)kUTTypeVCard options:nil completionHandler:^(NSData *vcard, NSError *error)
+        [itemProvider loadItemForTypeIdentifier:UTTypeVCard.identifier options:nil completionHandler:^(NSData *vcard, NSError *error)
         {
             if (error != nil)
                 [subscriber putError:nil];

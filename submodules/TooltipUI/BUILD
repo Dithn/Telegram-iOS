@@ -11,6 +11,7 @@ swift_library(
     ],
     deps = [
         "//submodules/AsyncDisplayKit:AsyncDisplayKit",
+        "//submodules/LottieSettings:LottieSettings",
         "//submodules/Display:Display",
         "//submodules/TelegramPresentationData:TelegramPresentationData",
         "//submodules/AppBundle:AppBundle",
@@ -20,6 +21,15 @@ swift_library(
         "//submodules/TextFormat:TextFormat",
         "//submodules/UrlEscaping:UrlEscaping",
         "//submodules/AccountContext:AccountContext",
+        "//submodules/AvatarNode:AvatarNode",
+        "//submodules/ComponentFlow",
+        "//submodules/Markdown",
+        "//submodules/TelegramUI/Components/Stories/AvatarStoryIndicatorComponent",
+        "//submodules/Components/BalancedTextComponent",
+        "//submodules/Components/MultilineTextWithEntitiesComponent",
+        "//submodules/Components/MultilineTextComponent",
+        "//submodules/ShimmerEffect",
+        "//submodules/UIKitRuntimeUtils",
     ],
     visibility = [
         "//visibility:public",

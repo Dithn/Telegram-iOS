@@ -5,21 +5,19 @@ import Display
 import SwiftSignalKit
 import MapKit
 
-let defaultMapSpan = MKCoordinateSpan(latitudeDelta: 0.016, longitudeDelta: 0.016)
-let viewMapSpan = MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)
 private let pinOffset = CGPoint(x: 0.0, y: 33.0)
 
 public enum LocationMapMode {
     case map
-    case sattelite
+    case satellite
     case hybrid
     
     var mapType: MKMapType {
         switch self {
-            case .sattelite:
-                return .satellite
+            case .satellite:
+                return .satelliteFlyover
             case .hybrid:
-                return .hybrid
+                return .hybridFlyover
             default:
                 return .standard
         }
@@ -56,6 +54,14 @@ private class PickerAnnotationContainerView: UIView {
 private class LocationMapView: MKMapView, UIGestureRecognizerDelegate {
     var customHitTest: ((CGPoint) -> Bool)?
     private var allowSelectionChanges = true
+    
+    var onTouch: (() -> Void)?
+    
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        
+        self.onTouch?()
+    }
     
     @objc override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         if let customHitTest = self.customHitTest, customHitTest(gestureRecognizer.location(in: self)) {
@@ -103,7 +109,7 @@ func generateHeadingArrowImage() -> UIImage? {
         context.clip()
         
         var locations: [CGFloat] = [0.0, 0.4, 1.0]
-        let colors: [CGColor] = [UIColor(rgb: 0x007aff, alpha: 0.5).cgColor, UIColor(rgb: 0x007aff, alpha: 0.3).cgColor, UIColor(rgb: 0x007aff, alpha: 0.0).cgColor]
+        let colors: [CGColor] = [UIColor(rgb: 0x0088ff, alpha: 0.5).cgColor, UIColor(rgb: 0x0088ff, alpha: 0.3).cgColor, UIColor(rgb: 0x0088ff, alpha: 0.0).cgColor]
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: &locations)!
         
@@ -128,7 +134,76 @@ private func generateProximityDim(size: CGSize) -> UIImage {
     })!
 }
 
-final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
+protocol MKMapViewDelegateTarget: AnyObject {
+    func mapViewDidChangeVisibleRegion(_ mapView: MKMapView)
+    func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool)
+    func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool)
+    func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation)
+    func mapView(_ mapView: MKMapView, didFailToLocateUserWithError error: Error)
+    func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView?
+    func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView])
+    func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView)
+    func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView)
+    func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer
+}
+
+private final class MKMapViewDelegateImpl: NSObject, MKMapViewDelegate {
+    private weak var target: MKMapViewDelegateTarget?
+    
+    init(target: MKMapViewDelegateTarget) {
+        self.target = target
+        
+        super.init()
+    }
+    
+    func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+        self.target?.mapViewDidChangeVisibleRegion(mapView)
+    }
+
+    func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+        self.target?.mapView(mapView, regionWillChangeAnimated: animated)
+    }
+    
+    func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+        self.target?.mapView(mapView, regionDidChangeAnimated: animated)
+    }
+    
+    func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
+        self.target?.mapView(mapView, didUpdate: userLocation)
+    }
+    
+    func mapView(_ mapView: MKMapView, didFailToLocateUserWithError error: Error) {
+        self.target?.mapView(mapView, didFailToLocateUserWithError: error)
+    }
+    
+    func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+        return self.target?.mapView(mapView, viewFor: annotation)
+    }
+    
+    func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
+        self.target?.mapView(mapView, didAdd: views)
+    }
+    
+    func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+        self.target?.mapView(mapView, didSelect: view)
+    }
+    
+    func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
+        self.target?.mapView(mapView, didDeselect: view)
+    }
+    
+    func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+        return self.target?.mapView(mapView, rendererFor: overlay) ?? MKOverlayRenderer()
+    }
+}
+
+public final class LocationMapNode: ASDisplayNode, MKMapViewDelegateTarget {
+    private var delegateImpl: MKMapViewDelegateImpl?
+    
+    public static let defaultMapSpan = MKCoordinateSpan(latitudeDelta: 0.016, longitudeDelta: 0.016)
+    public static let viewMapSpan = MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)
+    public static let globalMapSpan = MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+    
     class ProximityCircleRenderer: MKCircleRenderer {
         override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
             super.draw(mapRect, zoomScale: zoomScale, in: context)
@@ -157,6 +232,7 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
     private let pickerAnnotationContainerView: PickerAnnotationContainerView
     private weak var userLocationAnnotationView: MKAnnotationView?
     private var headingArrowView: UIImageView?
+    private var compassView: MKCompassButton?
     
     private weak var defaultUserLocationAnnotation: MKAnnotation?
     
@@ -166,11 +242,42 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         return self.view as? LocationMapView
     }
     
+    private func updateUserHeadingTransform(mapHeading: CGFloat) {
+        if let heading = self.userHeading {
+            self.headingArrowView?.isHidden = false
+            self.headingArrowView?.transform = CGAffineTransform(rotationAngle: (heading - mapHeading) / 180.0 * CGFloat.pi)
+        } else {
+            self.headingArrowView?.isHidden = true
+            self.headingArrowView?.transform = CGAffineTransform.identity
+        }
+    }
+
+    private func updateHeadingTransforms(mapHeading: CGFloat? = nil) {
+        guard let mapView = self.mapView else {
+            return
+        }
+
+        let mapHeading = mapHeading ?? CGFloat(mapView.camera.heading)
+        self.updateUserHeadingTransform(mapHeading: mapHeading)
+
+        for annotation in mapView.annotations {
+            if let annotationView = mapView.view(for: annotation) as? LocationPinAnnotationView {
+                annotationView.updateMapHeading(mapHeading)
+            }
+        }
+
+        self.pickerAnnotationView?.updateMapHeading(mapHeading)
+        self.customUserLocationAnnotationView?.updateMapHeading(mapHeading)
+    }
+
     var returnedToUserLocation = true
     var ignoreRegionChanges = false
     var isDragging = false
+    var onTouch: (() -> Void)?
     var beganInteractiveDragging: (() -> Void)?
     var endedInteractiveDragging: ((CLLocationCoordinate2D) -> Void)?
+    var visibleRegionDidChange: (() -> Void)?
+    var disableHorizontalTransitionGesture = false
     
     var annotationSelected: ((LocationPinAnnotation?) -> Void)?
     var userLocationAnnotationSelected: (() -> Void)?
@@ -203,7 +310,7 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
     }
         
     private var circleOverlay: MKCircle?
-    var activeProximityRadius: Double? {
+    public var activeProximityRadius: Double? {
         didSet {
             if let activeProximityRadius = self.activeProximityRadius {
                 if let circleOverlay = self.circleOverlay {
@@ -224,7 +331,7 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
         
-    override init() {
+    override public init() {
         self.pickerAnnotationContainerView = PickerAnnotationContainerView()
         self.pickerAnnotationContainerView.isHidden = true
         
@@ -235,26 +342,44 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         })
     }
     
-    override func didLoad() {
+    override public func didLoad() {
         super.didLoad()
+        
+        guard let mapView = self.mapView else {
+            return
+        }
         
         self.headingArrowView = UIImageView()
         self.headingArrowView?.frame = CGRect(origin: CGPoint(), size: CGSize(width: 88.0, height: 88.0))
         self.headingArrowView?.image = generateHeadingArrowImage()
         
-        self.mapView?.interactiveTransitionGestureRecognizerTest = { p in
+        mapView.interactiveTransitionGestureRecognizerTest = { p in
             if p.x > 44.0 {
                 return true
             } else {
                 return false
             }
         }
-        self.mapView?.delegate = self
-        self.mapView?.mapType = self.mapMode.mapType
-        self.mapView?.isRotateEnabled = self.isRotateEnabled
-        self.mapView?.showsUserLocation = true
-        self.mapView?.showsPointsOfInterest = false
-        self.mapView?.customHitTest = { [weak self] point in
+        
+        mapView.disablesInteractiveTransitionGestureRecognizerNow = { [weak self] in
+            return self?.disableHorizontalTransitionGesture == true
+        }
+        
+        let delegateImpl = MKMapViewDelegateImpl(target: self)
+        self.delegateImpl = delegateImpl
+        
+        let compassView = MKCompassButton(mapView: mapView)
+        compassView.isUserInteractionEnabled = true
+        self.compassView = compassView
+        mapView.addSubview(compassView)
+        
+        mapView.delegate = delegateImpl
+        mapView.mapType = self.mapMode.mapType
+        mapView.isRotateEnabled = self.isRotateEnabled
+        mapView.showsUserLocation = true
+        mapView.pointOfInterestFilter = .excludingAll
+        mapView.showsCompass = false
+        mapView.customHitTest = { [weak self] point in
             guard let strongSelf = self else {
                 return false
             }
@@ -271,7 +396,14 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
             
             return false
         }
+        mapView.onTouch = { [weak self] in
+            guard let self else {
+                return
+            }
+            self.onTouch?()
+        }
         self.view.addSubview(self.pickerAnnotationContainerView)
+        self.updateHeadingTransforms()
     }
     
     var isRotateEnabled: Bool = true {
@@ -286,7 +418,13 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
     
-    var trackingMode: LocationTrackingMode = .none {
+    var isDark: Bool = false {
+        didSet {
+            self.mapView?.overrideUserInterfaceStyle = self.isDark ? .dark : .light
+        }
+    }
+    
+    public var trackingMode: LocationTrackingMode = .none {
         didSet {
             self.mapView?.userTrackingMode = self.trackingMode.userTrackingMode
             if self.trackingMode == .followWithHeading && self.headingArrowView?.image != nil {
@@ -294,13 +432,21 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
             } else if self.trackingMode != .followWithHeading && self.headingArrowView?.image == nil {
                 self.headingArrowView?.image = generateHeadingArrowImage()
             }
+            self.updateHeadingTransforms()
         }
     }
     
+    var topPadding: CGFloat = 0.0
     var mapOffset: CGFloat = 0.0
-    func setMapCenter(coordinate: CLLocationCoordinate2D, radius: Double, insets: UIEdgeInsets, offset: CGFloat, animated: Bool = false) {
+    var hasValidLayout: Bool = false
+    var pendingSetMapCenter: (coordinate: CLLocationCoordinate2D, span: MKCoordinateSpan, offset: CGPoint, isUserLocation: Bool, hidePicker: Bool, animated: Bool)?
+    
+    public func setMapCenter(coordinate: CLLocationCoordinate2D, radius: Double, insets: UIEdgeInsets, offset: CGFloat, animated: Bool = false) {
         self.mapOffset = offset
         self.ignoreRegionChanges = true
+        
+        var insets = insets
+        insets.top += self.topPadding
         
         let mapRect = MKMapRect(region: MKCoordinateRegion(center: coordinate, latitudinalMeters: radius * 2.0, longitudinalMeters: radius * 2.0))
         self.mapView?.setVisibleMapRect(mapRect, edgePadding: insets, animated: animated)
@@ -309,16 +455,39 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         self.proximityDimView.center = CGPoint(x: self.bounds.midX, y: self.bounds.midY + offset)
     }
     
-    func setMapCenter(coordinate: CLLocationCoordinate2D, span: MKCoordinateSpan = defaultMapSpan, offset: CGPoint = CGPoint(), isUserLocation: Bool = false, hidePicker: Bool = false, animated: Bool = false) {
+    public func setMapCenter(coordinate: CLLocationCoordinate2D, span: MKCoordinateSpan = defaultMapSpan, offset: CGPoint = CGPoint(), isUserLocation: Bool = false, hidePicker: Bool = false, animated: Bool = false) {
+        self.pendingSetMapCenter = (
+            coordinate, span, offset, isUserLocation, hidePicker, animated
+        )
+        
+        if self.hasValidLayout {
+            self.applyPendingSetMapCenter()
+        }
+    }
+    
+    private func applyPendingSetMapCenter() {
+        if !self.hasValidLayout {
+            return
+        }
+        guard let (coordinate, span, offset, isUserLocation, hidePicker, animated) = self.pendingSetMapCenter else {
+            return
+        }
+        self.pendingSetMapCenter = nil
+        
         let region = MKCoordinateRegion(center: coordinate, span: span)
         self.ignoreRegionChanges = true
-        if offset == CGPoint() {
+        if offset == CGPoint() && self.topPadding == 0.0 {
             self.mapView?.setRegion(region, animated: animated)
         } else {
             let mapRect = MKMapRect(region: region)
-            self.mapView?.setVisibleMapRect(mapRect, edgePadding: UIEdgeInsets(top: offset.y, left: offset.x, bottom: 0.0, right: 0.0), animated: animated)
+            var effectiveTopOffset: CGFloat = offset.y
+            if #available(iOS 18.0, *) {
+            } else {
+                effectiveTopOffset += self.topPadding
+            }
+            self.mapView?.setVisibleMapRect(mapRect, edgePadding: UIEdgeInsets(top: effectiveTopOffset, left: offset.x, bottom: 0.0, right: 0.0), animated: animated)
         }
-         self.ignoreRegionChanges = false
+        self.ignoreRegionChanges = false
         
         if isUserLocation {
             if !self.returnedToUserLocation {
@@ -333,7 +502,11 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
     
-    func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+    public func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+        self.updateHeadingTransforms(mapHeading: CGFloat(mapView.camera.heading))
+    }
+
+    public func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
         guard !self.ignoreRegionChanges, let scrollView = mapView.subviews.first, let gestureRecognizers = scrollView.gestureRecognizers else {
             return
         }
@@ -350,7 +523,10 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
     
-    func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+    public func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+        self.updateHeadingTransforms(mapHeading: CGFloat(mapView.camera.heading))
+        self.visibleRegionDidChange?()
+
         let wasDragging = self.isDragging
         if self.isDragging {
             self.isDragging = false
@@ -366,7 +542,7 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
     
-    func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
+    public func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
         guard let location = userLocation.location else {
             return
         }
@@ -374,11 +550,11 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         self.locationPromise.set(.single(location))
     }
     
-    func mapView(_ mapView: MKMapView, didFailToLocateUserWithError error: Error) {
+    public func mapView(_ mapView: MKMapView, didFailToLocateUserWithError error: Error) {
         self.locationPromise.set(.single(nil))
     }
     
-    func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+    public func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
         if annotation === mapView.userLocation {
             return nil
         }
@@ -394,7 +570,7 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         return nil
     }
     
-    func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
+    public func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
         for view in views {
             if view.annotation is MKUserLocation {
                 self.defaultUserLocationAnnotation = view.annotation
@@ -416,9 +592,10 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
                 container.insertSubview(self.proximityDimView, at: 0)
             }
         }
+        self.updateHeadingTransforms(mapHeading: CGFloat(mapView.camera.heading))
     }
     
-    func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+    public func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
         guard let annotation = view.annotation as? LocationPinAnnotation else {
             return
         }
@@ -434,7 +611,7 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
     
-    func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
+    public func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
         if let view = view as? LocationPinAnnotationView {
             Queue.mainQueue().after(0.2) {
                 view.setZPosition(view.defaultZPosition)
@@ -453,7 +630,7 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
         
-    func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+    public func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
         if let circle = overlay as? MKCircle {
             let renderer = ProximityCircleRenderer(circle: circle)
             renderer.fillColor = .clear
@@ -466,7 +643,7 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
             
-    var distancesToAllAnnotations: Signal<[Double], NoError> {
+    public var distancesToAllAnnotations: Signal<[Double], NoError> {
         let poll = Signal<[LocationPinAnnotation], NoError> { [weak self] subscriber in
             if let strongSelf = self {
                 subscriber.putNext(strongSelf.annotations)
@@ -491,30 +668,30 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
     
-    var currentUserLocation: CLLocation? {
+    public var currentUserLocation: CLLocation? {
         return self.mapView?.userLocation.location
     }
     
-    var userLocation: Signal<CLLocation?, NoError> {
+    public var userLocation: Signal<CLLocation?, NoError> {
         return .single(self.currentUserLocation)
         |> then (self.locationPromise.get())
     }
     
-    var mapCenterCoordinate: CLLocationCoordinate2D? {
+    public var mapCenterCoordinate: CLLocationCoordinate2D? {
         guard let mapView = self.mapView else {
             return nil
         }
         return mapView.convert(CGPoint(x: (mapView.frame.width + pinOffset.x) / 2.0, y: (mapView.frame.height + pinOffset.y) / 2.0), toCoordinateFrom: mapView)
     }
     
-    var mapSpan: MKCoordinateSpan? {
+    public var mapSpan: MKCoordinateSpan? {
         guard let mapView = self.mapView else {
             return nil
         }
         return mapView.region.span
     }
     
-    func resetAnnotationSelection() {
+    public func resetAnnotationSelection() {
         guard let mapView = self.mapView else {
             return
         }
@@ -523,14 +700,15 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
     
-    var pickerAnnotationView: LocationPinAnnotationView? = nil
-    var hasPickerAnnotation: Bool = false {
+    public var pickerAnnotationView: LocationPinAnnotationView? = nil
+    public var hasPickerAnnotation: Bool = false {
         didSet {
             if self.hasPickerAnnotation, let annotation = self.userLocationAnnotation {
                 let pickerAnnotationView = LocationPinAnnotationView(annotation: annotation)
                 pickerAnnotationView.center = CGPoint(x: self.pickerAnnotationContainerView.frame.width / 2.0, y: self.pickerAnnotationContainerView.frame.height / 2.0 + 16.0)
                 self.pickerAnnotationContainerView.addSubview(pickerAnnotationView)
                 self.pickerAnnotationView = pickerAnnotationView
+                self.updateHeadingTransforms()
             } else {
                 self.pickerAnnotationView?.removeFromSuperview()
                 self.pickerAnnotationView = nil
@@ -538,7 +716,7 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
     
-    func switchToPicking(raise: Bool = false, animated: Bool) {
+    public func switchToPicking(raise: Bool = false, animated: Bool) {
         guard self.hasPickerAnnotation else {
             return
         }
@@ -555,8 +733,8 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         self.resetScheduledPin()
     }
     
-    var customUserLocationAnnotationView: LocationPinAnnotationView? = nil
-    var userLocationAnnotation: LocationPinAnnotation? = nil {
+    public var customUserLocationAnnotationView: LocationPinAnnotationView? = nil
+    public var userLocationAnnotation: LocationPinAnnotation? = nil {
         didSet {
             if let annotation = self.userLocationAnnotation {
                 self.customUserLocationAnnotationView?.removeFromSuperview()
@@ -569,6 +747,7 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
                 self.customUserLocationAnnotationView = annotationView
                 
                 self.pickerAnnotationView?.annotation = annotation
+                self.updateHeadingTransforms()
             } else {
                 self.customUserLocationAnnotationView?.removeFromSuperview()
                 self.customUserLocationAnnotationView = nil
@@ -576,19 +755,13 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
     
-    var userHeading: CGFloat? = nil {
+    public var userHeading: CGFloat? = nil {
         didSet {
-            if let heading = self.userHeading {
-                self.headingArrowView?.isHidden = false
-                self.headingArrowView?.transform = CGAffineTransform(rotationAngle: CGFloat(heading / 180.0 * CGFloat.pi))
-            } else {
-                self.headingArrowView?.isHidden = true
-                self.headingArrowView?.transform = CGAffineTransform.identity
-            }
+            self.updateHeadingTransforms()
         }
     }
     
-    var annotations: [LocationPinAnnotation] = [] {
+    public var annotations: [LocationPinAnnotation] = [] {
         didSet {
             guard let mapView = self.mapView else {
                 return
@@ -703,7 +876,7 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         self.pinDisposable.set(nil)
     }
     
-    func showAll(animated: Bool = true) {
+    public func showAll(animated: Bool = true) {
         guard let mapView = self.mapView else {
             return
         }
@@ -730,11 +903,21 @@ final class LocationMapNode: ASDisplayNode, MKMapViewDelegate {
         }
     }
     
-    func updateLayout(size: CGSize) {
-        self.proximityDimView.frame = CGRect(origin: CGPoint(x: 0.0, y: self.mapOffset), size: size)
+    public func updateLayout(size: CGSize, topPadding: CGFloat, inset: CGFloat, transition: ContainedViewLayoutTransition) {
+        self.hasValidLayout = true
+        
+        self.topPadding = topPadding
+        
+        self.proximityDimView.frame = CGRect(origin: CGPoint(x: 0.0, y: self.topPadding + self.mapOffset), size: size)
         self.pickerAnnotationContainerView.frame = CGRect(x: 0.0, y: floorToScreenPixels((size.height - size.width) / 2.0), width: size.width, height: size.width)
         if let pickerAnnotationView = self.pickerAnnotationView {
             pickerAnnotationView.center = CGPoint(x: self.pickerAnnotationContainerView.frame.width / 2.0, y: self.pickerAnnotationContainerView.frame.height / 2.0)
         }
+        
+        if let compassView = self.compassView {
+            transition.updateFrame(view: compassView, frame:  CGRect(origin: CGPoint(x: size.width - compassView.frame.width - 16.0, y: inset + 14.0 + topPadding), size: compassView.frame.size))
+        }
+        
+        self.applyPendingSetMapCenter()
     }
 }

@@ -1,7 +1,7 @@
 import Foundation
 import SwiftSignalKit
 
-public enum ViewUpdateType : Equatable {
+public enum ViewUpdateType: Equatable {
     case Initial
     case InitialUnread(MessageIndex)
     case Generic
@@ -24,6 +24,9 @@ final class ViewTracker {
     
     private let chatListHolesView = MutableChatListHolesView()
     private let chatListHolesViewSubscribers = Bag<ValuePipe<ChatListHolesView>>()
+    
+    private let forumTopicListHolesView = MutableForumTopicListHolesView()
+    private let forumTopicListHolesViewSubscribers = Bag<ValuePipe<ForumTopicListHolesView>>()
     
     private var unsentMessageView: UnsentMessageHistoryView
     private let unsendMessageIdsViewSubscribers = Bag<ValuePipe<UnsentMessageIdsView>>()
@@ -81,6 +84,9 @@ final class ViewTracker {
     }
     
     func removeMessageHistoryView(index: Bag<(MutableMessageHistoryView, ValuePipe<(MessageHistoryView, ViewUpdateType)>)>.Index) {
+        #if DEBUG
+        assert(self.messageHistoryViews.get(index) != nil)
+        #endif
         self.messageHistoryViews.remove(index)
         
         self.updateTrackedHoles()
@@ -203,6 +209,17 @@ final class ViewTracker {
         let record = (view, ValuePipe<CombinedView>())
         let index = self.combinedViews.add(record)
         
+        if view.views.keys.contains(where: { key in
+            switch key {
+            case .messageHistoryThreadIndex:
+                return true
+            default:
+                return false
+            }
+        }) {
+            self.updateTrackedForumTopicListHoles()
+        }
+        
         return (index, record.1.signal())
     }
     
@@ -269,9 +286,9 @@ final class ViewTracker {
             
             var updateType: ViewUpdateType = .Generic
             switch mutableView.peerIds {
-                case let .single(peerId):
+                case let .single(peerId, threadId):
                     for key in transaction.currentPeerHoleOperations.keys {
-                        if key.peerId == peerId {
+                        if key.peerId == peerId && key.threadId == threadId {
                             updateType = .FillHole
                             break
                         }
@@ -334,10 +351,6 @@ final class ViewTracker {
         
         self.updateTrackedChatListHoles()
         
-        if updateTrackedHoles {
-            self.updateTrackedHoles()
-        }
-        
         if self.unsentMessageView.replay(transaction.unsentMessageOperations) {
             self.unsentViewUpdated()
         }
@@ -397,8 +410,13 @@ final class ViewTracker {
         }
         
         for (mutableView, pipe) in self.combinedViews.copyItems() {
-            if mutableView.replay(postbox: postbox, transaction: transaction) {
+            let result = mutableView.replay(postbox: postbox, transaction: transaction)
+            
+            if result.updated {
                 pipe.putNext(mutableView.immutableView())
+            }
+            if result.updateTrackedHoles {
+                updateTrackedHoles = true
             }
         }
         
@@ -407,6 +425,12 @@ final class ViewTracker {
                 pipe.putNext(view.immutableView())
             }
         }
+        
+        if updateTrackedHoles {
+            self.updateTrackedHoles()
+        }
+        
+        self.updateTrackedForumTopicListHoles()
     }
     
     private func updateTrackedChatListHoles() {
@@ -425,17 +449,66 @@ final class ViewTracker {
         }
     }
     
+    private func updateTrackedForumTopicListHoles() {
+        var firstHoles = Set<ForumTopicListHolesEntry>()
+        
+        for (views) in self.combinedViews.copyItems() {
+            for (key, view) in views.0.views {
+                if case .messageHistoryThreadIndex = key, let view = view as? MutableMessageHistoryThreadIndexView {
+                    if let hole = view.topHole() {
+                        firstHoles.insert(hole)
+                    }
+                } else if case .savedMessagesIndex = key, let view = view as? MutableMessageHistorySavedMessagesIndexView {
+                    if let hole = view.topHole() {
+                        firstHoles.insert(hole)
+                    }
+                }
+            }
+        }
+    
+        if self.forumTopicListHolesView.update(holes: firstHoles) {
+            for pipe in self.forumTopicListHolesViewSubscribers.copyItems() {
+                pipe.putNext(ForumTopicListHolesView(self.forumTopicListHolesView))
+            }
+        }
+    }
+    
     private func updateTrackedHoles() {
         var firstHolesAndTags = Set<MessageHistoryHolesViewEntry>()
         for (view, _) in self.messageHistoryViews.copyItems() {
             if let (hole, direction, count, userId) = view.firstHole() {
-                let space: MessageHistoryHoleSpace
+                let space: MessageHistoryHoleOperationSpace
                 if let tag = view.tag {
-                    space = .tag(tag)
+                    switch tag {
+                    case let .tag(value):
+                        space = .tag(value)
+                    case let .customTag(value, regularTag):
+                        space = .customTag(value, regularTag)
+                    }
                 } else {
                     space = .everywhere
                 }
                 firstHolesAndTags.insert(MessageHistoryHolesViewEntry(hole: hole, direction: direction, space: space, count: count, userId: userId))
+            }
+        }
+        for (view, _) in self.combinedViews.copyItems() {
+            for (_, subview) in view.views {
+                if let subview = subview as? MutableMessageHistoryView {
+                    if let (hole, direction, count, userId) = subview.firstHole() {
+                        let space: MessageHistoryHoleOperationSpace
+                        if let tag = subview.tag {
+                            switch tag {
+                            case let .tag(value):
+                                space = .tag(value)
+                            case let .customTag(value, regularTag):
+                                space = .customTag(value, regularTag)
+                            }
+                        } else {
+                            space = .everywhere
+                        }
+                        firstHolesAndTags.insert(MessageHistoryHolesViewEntry(hole: hole, direction: direction, space: space, count: count, userId: userId))
+                    }
+                }
             }
         }
         
@@ -499,6 +572,30 @@ final class ViewTracker {
                     self.queue.async {
                         pipeDisposable.dispose()
                         self.chatListHolesViewSubscribers.remove(index)
+                    }
+                })
+            }
+            return disposable
+        }
+    }
+    
+    func forumTopicListHolesViewSignal() -> Signal<ForumTopicListHolesView, NoError> {
+        return Signal { subscriber in
+            let disposable = MetaDisposable()
+            self.queue.async {
+                subscriber.putNext(ForumTopicListHolesView(self.forumTopicListHolesView))
+                
+                let pipe = ValuePipe<ForumTopicListHolesView>()
+                let index = self.forumTopicListHolesViewSubscribers.add(pipe)
+                
+                let pipeDisposable = pipe.signal().start(next: { view in
+                    subscriber.putNext(view)
+                })
+                
+                disposable.set(ActionDisposable {
+                    self.queue.async {
+                        pipeDisposable.dispose()
+                        self.forumTopicListHolesViewSubscribers.remove(index)
                     }
                 })
             }

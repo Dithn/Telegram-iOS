@@ -28,6 +28,9 @@
 @property (nonatomic, readonly) bool isScrubbing;
 @property (nonatomic, assign) bool isPlaying;
 @property (nonatomic, assign) NSTimeInterval value;
+
+- (instancetype)initWithFrame:(CGRect)frame cover:(bool)cover;
+
 - (void)setValue:(NSTimeInterval)value resetPosition:(bool)resetPosition;
 
 - (void)setTrimApplied:(bool)trimApplied;
@@ -43,11 +46,12 @@
 
 - (void)updateThumbnails;
 
-- (void)setThumbnailImage:(UIImage *)image forTimestamp:(NSTimeInterval)timestamp index:(NSInteger)index isSummaryThubmnail:(bool)isSummaryThumbnail;
+- (void)setThumbnailImage:(UIImage *)image forTimestamp:(NSTimeInterval)timestamp index:(NSInteger)index isSummaryThubmnail:(bool)isSummaryThumbnail last:(bool)last;
 
 - (CGPoint)scrubberPositionForPosition:(NSTimeInterval)position;
 
 - (void)_updateScrubberAnimationsAndResetCurrentPosition:(bool)resetCurrentPosition;
+- (void)_layoutTrimCurtainViews;
 
 @end
 

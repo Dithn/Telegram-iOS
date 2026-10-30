@@ -1,7 +1,10 @@
 import Postbox
 
-public final class EngineMessage {
+public final class EngineMessage: Equatable {
+    public static let newTopicThreadId: Int64 = Message.newTopicThreadId
+    
     public typealias Id = MessageId
+    public typealias StableId = UInt32
     public typealias Index = MessageIndex
     public typealias Tags = MessageTags
     public typealias Attribute = MessageAttribute
@@ -10,9 +13,16 @@ public final class EngineMessage {
     public typealias GlobalTags = GlobalMessageTags
     public typealias LocalTags = LocalMessageTags
     public typealias ForwardInfo = MessageForwardInfo
-
+    public typealias AssociatedThreadInfo = Message.AssociatedThreadInfo
+    public typealias CustomTag = MemoryBuffer
+    
+    public enum InputTag: Hashable {
+        case tag(Tags)
+        case custom(CustomTag)
+    }
+    
     private let impl: Message
-
+    
     public var stableId: UInt32 {
         return self.impl.stableId
     }
@@ -51,6 +61,9 @@ public final class EngineMessage {
     public var localTags: LocalTags {
         return self.impl.localTags
     }
+    public var customTags: [CustomTag] {
+        return self.impl.customTags
+    }
     public var forwardInfo: ForwardInfo? {
         return self.impl.forwardInfo
     }
@@ -60,20 +73,42 @@ public final class EngineMessage {
     public var text: String {
         return self.impl.text
     }
+    public var richText: RichTextMessageAttribute? {
+        return self.impl.richText
+    }
     public var attributes: [Attribute] {
         return self.impl.attributes
     }
     public var media: [Media] {
         return self.impl.media
     }
+    public var engineMedia: [EngineMedia] {
+        return self.impl.media.map(EngineMedia.init)
+    }
     public var peers: SimpleDictionary<EnginePeer.Id, Peer> {
         return self.impl.peers
+    }
+    public var enginePeers: [EnginePeer.Id: EnginePeer] {
+        var result: [EnginePeer.Id: EnginePeer] = [:]
+        for (id, peer) in self.impl.peers {
+            result[id] = EnginePeer(peer)
+        }
+        return result
     }
     public var associatedMessages: SimpleDictionary<EngineMessage.Id, Message> {
         return self.impl.associatedMessages
     }
     public var associatedMessageIds: [EngineMessage.Id] {
         return self.impl.associatedMessageIds
+    }
+    public var associatedMedia: [MediaId: Media] {
+        return self.impl.associatedMedia
+    }
+    public var associatedThreadInfo: Message.AssociatedThreadInfo? {
+        return self.impl.associatedThreadInfo
+    }
+    public var associatedStories: [StoryId: CodableEntry] {
+        return self.impl.associatedStories
     }
     
     public var index: MessageIndex {
@@ -93,6 +128,7 @@ public final class EngineMessage {
         tags: EngineMessage.Tags,
         globalTags: EngineMessage.GlobalTags,
         localTags: EngineMessage.LocalTags,
+        customTags: [EngineMessage.CustomTag],
         forwardInfo: EngineMessage.ForwardInfo?,
         author: EnginePeer?,
         text: String,
@@ -100,7 +136,10 @@ public final class EngineMessage {
         media: [EngineMedia],
         peers: [EnginePeer.Id: EnginePeer],
         associatedMessages: [EngineMessage.Id: EngineMessage],
-        associatedMessageIds: [EngineMessage.Id]
+        associatedMessageIds: [EngineMessage.Id],
+        associatedMedia: [MediaId: Media],
+        associatedThreadInfo: Message.AssociatedThreadInfo?,
+        associatedStories: [StoryId: CodableEntry]
     ) {
         var mappedPeers: [PeerId: Peer] = [:]
         for (id, peer) in peers {
@@ -125,6 +164,7 @@ public final class EngineMessage {
             tags: tags,
             globalTags: globalTags,
             localTags: localTags,
+            customTags: customTags,
             forwardInfo: forwardInfo,
             author: author?._asPeer(),
             text: text,
@@ -132,7 +172,10 @@ public final class EngineMessage {
             media: media.map { $0._asMedia() },
             peers: SimpleDictionary(mappedPeers),
             associatedMessages: SimpleDictionary(mappedAssociatedMessages),
-            associatedMessageIds: associatedMessageIds
+            associatedMessageIds: associatedMessageIds,
+            associatedMedia: associatedMedia,
+            associatedThreadInfo: associatedThreadInfo,
+            associatedStories: associatedStories
         )
     }
 
@@ -142,5 +185,106 @@ public final class EngineMessage {
 
     public func _asMessage() -> Message {
         return self.impl
+    }
+    
+    public static func ==(lhs: EngineMessage, rhs: EngineMessage) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.globallyUniqueId != rhs.globallyUniqueId {
+            return false
+        }
+        if lhs.groupingKey != rhs.groupingKey {
+            return false
+        }
+        if lhs.groupInfo != rhs.groupInfo {
+            return false
+        }
+        if lhs.threadId != rhs.threadId {
+            return false
+        }
+        if lhs.timestamp != rhs.timestamp {
+            return false
+        }
+        if lhs.flags != rhs.flags {
+            return false
+        }
+        if lhs.tags != rhs.tags {
+            return false
+        }
+        if lhs.globalTags != rhs.globalTags {
+            return false
+        }
+        if lhs.localTags != rhs.localTags {
+            return false
+        }
+        if lhs.forwardInfo != rhs.forwardInfo {
+            return false
+        }
+        if lhs.author != rhs.author {
+            return false
+        }
+        if lhs.text != rhs.text {
+            return false
+        }
+        if !areMediaArraysEqual(lhs.media, rhs.media) {
+            return false
+        }
+        if lhs.associatedThreadInfo != rhs.associatedThreadInfo {
+            return false
+        }
+        if lhs.attributes.count != rhs.attributes.count {
+            return false
+        }
+        if lhs.stableVersion != rhs.stableVersion {
+            return false
+        }
+        return true
+    }
+}
+
+public extension EngineMessage {
+    var containsSecretMedia: Bool {
+        return self._asMessage().containsSecretMedia
+    }
+
+    func effectiveReactions(isTags: Bool) -> [MessageReaction]? {
+        return self._asMessage().effectiveReactions(isTags: isTags)
+    }
+
+    func areReactionsTags(accountPeerId: EnginePeer.Id) -> Bool {
+        return self._asMessage().areReactionsTags(accountPeerId: accountPeerId)
+    }
+
+    var textEntitiesAttribute: TextEntitiesMessageAttribute? {
+        return self._asMessage().textEntitiesAttribute
+    }
+
+    var adAttribute: AdMessageAttribute? {
+        return self._asMessage().adAttribute
+    }
+
+    func effectivelyIncoming(_ accountPeerId: EnginePeer.Id) -> Bool {
+        return self._asMessage().effectivelyIncoming(accountPeerId)
+    }
+
+    var pendingProcessingAttribute: PendingProcessingMessageAttribute? {
+        return self._asMessage().pendingProcessingAttribute
+    }
+
+    var scheduleTime: Int32? {
+        return self._asMessage().scheduleTime
+    }
+
+    var scheduleRepeatPeriod: Int32? {
+        return self._asMessage().scheduleRepeatPeriod
+    }
+    
+    var editedTime: Int32? {
+        return self._asMessage().editedTime
+    }
+
+    var sourceAuthorInfo: SourceAuthorInfoMessageAttribute? {
+        return self._asMessage().sourceAuthorInfo
     }
 }

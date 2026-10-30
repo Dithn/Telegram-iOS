@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import <WebKit/WebKit.h>
 
 typedef NS_OPTIONS(NSUInteger, UIResponderDisableAutomaticKeyboardHandling) {
     UIResponderDisableAutomaticKeyboardHandlingForward = 1 << 0,
@@ -22,6 +23,48 @@ typedef NS_OPTIONS(NSUInteger, UIResponderDisableAutomaticKeyboardHandling) {
 
 - (void)internalSetStatusBarStyle:(UIStatusBarStyle)style animated:(BOOL)animated;
 - (void)internalSetStatusBarHidden:(BOOL)hidden animation:(UIStatusBarAnimation)animation;
+- (UIWindow * _Nullable)internalGetKeyboard;
+- (UIWindow * _Nullable)internalGetKeyboardForScene:(UIWindowScene * _Nullable)scene;
+
+@end
+
+@interface CALayerSpringParametersOverrideParameters : NSObject
+
+- (instancetype _Nonnull)init;
+
+@end
+
+@interface CALayerSpringParametersOverrideParametersSpring : CALayerSpringParametersOverrideParameters
+
+@property (nonatomic, readonly) CGFloat stiffness;
+@property (nonatomic, readonly) CGFloat damping;
+@property (nonatomic, readonly) double duration;
+
+- (instancetype _Nonnull)initWithStiffness:(CGFloat)stiffness damping:(CGFloat)damping duration:(double)duration;
+
+@end
+
+@interface CALayerSpringParametersOverrideParametersCustomCurve : CALayerSpringParametersOverrideParameters
+
+@property (nonatomic, readonly) CGPoint cp1;
+@property (nonatomic, readonly) CGPoint cp2;
+
+- (instancetype _Nonnull)initWithCp1:(CGPoint)cp1 cp2:(CGPoint)cp2;
+
+@end
+
+@interface CALayerSpringParametersOverride : NSObject
+
+@property (nonatomic, strong, readonly) CALayerSpringParametersOverrideParameters * _Nullable parameters;
+
+- (instancetype _Nonnull)initWithParameters:(CALayerSpringParametersOverrideParameters * _Nullable)parameters;
+
+@end
+
+@interface CALayer (TelegramAddAnimation)
+
++ (void)pushSpringParametersOverride:(CALayerSpringParametersOverride * _Nonnull)springParametersOverride;
++ (void)popSpringParametersOverride;
 
 @end
 
@@ -46,5 +89,32 @@ void applyKeyboardAutocorrection(UITextView * _Nonnull textView);
 @interface AboveStatusBarWindow : UIWindow
 
 @property (nonatomic, copy) UIInterfaceOrientationMask (^ _Nullable supportedOrientations)(void);
+
+@end
+
+@interface UIScrollView (FrameRateRangeOverride)
+
+- (void)fixScrollDisplayLink;
+
+@end
+
+void snapshotViewByDrawingInContext(UIView * _Nonnull view);
+
+@interface EffectSettingsContainerView : UIView
+
+@property (nonatomic) double lumaMin;
+@property (nonatomic) double lumaMax;
+@property (nonatomic) double glassBlurRadius;
+
++ (void)applyGlassBlurRadius:(double)radius toLayerTree:(CALayer * _Nonnull)layer depth:(int)depth;
+
+@property (class, nonatomic) double morphGlassBlurRadius;
+
+@end
+
+@interface WebHelpers : NSObject
+
++ (dispatch_block_t _Nonnull)addTrustedDomain:(NSString * _Nonnull)domain;
++ (void)forceRefreshTrustedDomains:(WKWebsiteDataStore * _Nonnull)websiteDataStore;
 
 @end

@@ -12,9 +12,11 @@ import TelegramStringFormatting
 
 final class BotReceiptControllerArguments {
     fileprivate let account: Account
+    fileprivate let source: BotPaymentInvoiceSource
     
-    fileprivate init(account: Account) {
+    fileprivate init(account: Account, source: BotPaymentInvoiceSource) {
         self.account = account
+        self.source = source
     }
 }
 
@@ -154,7 +156,7 @@ enum BotReceiptEntry: ItemListNodeEntry {
         let arguments = arguments as! BotReceiptControllerArguments
         switch self {
             case let .header(theme, invoice, botName):
-                return BotCheckoutHeaderItem(account: arguments.account, theme: theme, invoice: invoice, botName: botName, sectionId: self.section)
+                return BotCheckoutHeaderItem(account: arguments.account, theme: theme, invoice: invoice, source: arguments.source, botName: botName, sectionId: self.section)
             case let .price(_, theme, text, value, hasSeparator, isFinal):
                 return BotCheckoutPriceItem(theme: theme, title: text, label: value, isFinal: isFinal, hasSeparator: hasSeparator, shimmeringIndex: nil, sectionId: self.section)
             case let .paymentMethod(_, text, value):
@@ -284,7 +286,7 @@ final class BotReceiptControllerNode: ItemListControllerNode {
         
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
         
-        let arguments = BotReceiptControllerArguments(account: context.account)
+        let arguments = BotReceiptControllerArguments(account: context.account, source: .message(messageId))
         
         let signal: Signal<(ItemListPresentationData, (ItemListNodeState, Any)), NoError> = combineLatest(
             context.sharedContext.presentationData,
@@ -305,8 +307,8 @@ final class BotReceiptControllerNode: ItemListControllerNode {
         self.actionButtonPanelSeparator = ASDisplayNode()
         self.actionButtonPanelSeparator.backgroundColor = self.presentationData.theme.rootController.navigationBar.separatorColor
         
-        self.actionButton = BotCheckoutActionButton(activeFillColor: self.presentationData.theme.list.itemAccentColor, foregroundColor: self.presentationData.theme.list.plainBackgroundColor)
-        self.actionButton.setState(.active(self.presentationData.strings.Common_Done))
+        self.actionButton = BotCheckoutActionButton(activeFillColor: self.presentationData.theme.list.itemAccentColor, inactiveFillColor: self.presentationData.theme.list.itemDisabledTextColor, foregroundColor: self.presentationData.theme.list.plainBackgroundColor)
+        self.actionButton.setState(.active(text: self.presentationData.strings.Common_Done, isEnabled: true))
         
         super.init(controller: controller, navigationBar: navigationBar, state: signal)
         
@@ -317,7 +319,7 @@ final class BotReceiptControllerNode: ItemListControllerNode {
                 
                 strongSelf.receiptData.set(.single((receipt.invoice, receipt.info, receipt.shippingOption, receipt.credentialsTitle, receipt.invoiceMedia, receipt.tipAmount)))
             }
-        })
+        }).strict()
         
         self.actionButton.addTarget(self, action: #selector(self.actionButtonPressed), forControlEvents: .touchUpInside)
 
@@ -333,20 +335,23 @@ final class BotReceiptControllerNode: ItemListControllerNode {
     override func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition, additionalInsets: UIEdgeInsets) {
         var updatedInsets = layout.intrinsicInsets
 
-        let bottomPanelHorizontalInset: CGFloat = 16.0
+        let bottomPanelHorizontalInset: CGFloat = 30.0
         let bottomPanelVerticalInset: CGFloat = 16.0
         let bottomPanelHeight = max(updatedInsets.bottom, layout.inputHeight ?? 0.0) + bottomPanelVerticalInset * 2.0 + BotCheckoutActionButton.height
 
         transition.updateFrame(node: self.actionButtonPanelNode, frame: CGRect(origin: CGPoint(x: 0.0, y: layout.size.height - bottomPanelHeight), size: CGSize(width: layout.size.width, height: bottomPanelHeight)))
         transition.updateFrame(node: self.actionButtonPanelSeparator, frame: CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: layout.size.width, height: UIScreenPixel)))
 
-        let actionButtonFrame = CGRect(origin: CGPoint(x: bottomPanelHorizontalInset, y: bottomPanelVerticalInset), size: CGSize(width: layout.size.width - bottomPanelHorizontalInset * 2.0, height: BotCheckoutActionButton.height))
+        // The bottom button spans iPhone Duo's side strip; it keeps clear only of a corner block at the bottom, as the
+        // checkout's Pay button does. Equal insets keep the screen-wide button.
+        let actionButtonStripInsets: (left: CGFloat, right: CGFloat) = layout.safeInsets.left != layout.safeInsets.right ? layout.bottomEdgeSideInsets() : (0.0, 0.0)
+        let actionButtonFrame = CGRect(origin: CGPoint(x: bottomPanelHorizontalInset + actionButtonStripInsets.left, y: bottomPanelVerticalInset), size: CGSize(width: layout.size.width - bottomPanelHorizontalInset * 2.0 - actionButtonStripInsets.left - actionButtonStripInsets.right, height: BotCheckoutActionButton.height))
         transition.updateFrame(node: self.actionButton, frame: actionButtonFrame)
         self.actionButton.updateLayout(absoluteRect: actionButtonFrame.offsetBy(dx: self.actionButtonPanelNode.frame.minX, dy: self.actionButtonPanelNode.frame.minY), containerSize: layout.size, transition: transition)
 
         updatedInsets.bottom = bottomPanelHeight
 
-        super.containerLayoutUpdated(ContainerViewLayout(size: layout.size, metrics: layout.metrics, deviceMetrics: layout.deviceMetrics, intrinsicInsets: updatedInsets, safeInsets: layout.safeInsets, additionalInsets: layout.additionalInsets, statusBarHeight: layout.statusBarHeight, inputHeight: layout.inputHeight, inputHeightIsInteractivellyChanging: layout.inputHeightIsInteractivellyChanging, inVoiceOver: layout.inVoiceOver), navigationBarHeight: navigationBarHeight, transition: transition, additionalInsets: additionalInsets)
+        super.containerLayoutUpdated(ContainerViewLayout(size: layout.size, metrics: layout.metrics, deviceMetrics: layout.deviceMetrics, intrinsicInsets: updatedInsets, safeInsets: layout.safeInsets, reservedCorners: layout.reservedCorners, division: layout.division, additionalInsets: layout.additionalInsets, statusBarHeight: layout.statusBarHeight, inputHeight: layout.inputHeight, inputHeightIsInteractivellyChanging: layout.inputHeightIsInteractivellyChanging, inVoiceOver: layout.inVoiceOver, presentedInFormSheet: layout.presentedInFormSheet), navigationBarHeight: navigationBarHeight, transition: transition, additionalInsets: additionalInsets)
     }
     
     @objc func actionButtonPressed() {

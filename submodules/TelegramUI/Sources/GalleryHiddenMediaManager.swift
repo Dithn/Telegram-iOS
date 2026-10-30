@@ -1,6 +1,6 @@
 import Foundation
 import UIKit
-import Postbox
+import TelegramCore
 import SwiftSignalKit
 import AsyncDisplayKit
 import AccountContext
@@ -102,7 +102,7 @@ final class GalleryHiddenMediaManagerImpl: GalleryHiddenMediaManager {
         let context = SourceContext(disposable: disposable)
         self.sourceContexts[index] = context
 
-        disposable.set((signal |> deliverOnMainQueue).start(next: { [weak self, weak context] id in
+        disposable.set((signal |> deliverOnMainQueue).startStrict(next: { [weak self, weak context] id in
             guard let strongSelf = self, let context = context else {
                 return
             }
@@ -118,21 +118,6 @@ final class GalleryHiddenMediaManagerImpl: GalleryHiddenMediaManager {
         }))
 
         return index
-
-        /*let index = self.sourcesDisposables.add((signal |> deliverOnMainQueue).start(next: { [weak self] id in
-            if let strongSelf = self {
-                if id != state?.0 {
-                    if let (previousId, previousIndex) = state {
-                        strongSelf.removeHiddenMedia(id: previousId, index: previousIndex)
-                        state = nil
-                    }
-                    if let id = id {
-                        state = (id, strongSelf.addHiddenMedia(id: id))
-                    }
-                }
-            }
-        }))
-        return index*/
     }
     
     func removeSource(_ index: Int) {
@@ -159,7 +144,7 @@ final class GalleryHiddenMediaManagerImpl: GalleryHiddenMediaManager {
         }
     }
     
-    func findTarget(messageId: MessageId, media: Media) -> ((UIView) -> Void, ASDisplayNode, () -> (UIView?, UIView?))? {
+    func findTarget(messageId: EngineMessage.Id, media: EngineMedia) -> ((UIView) -> Void, ASDisplayNode, () -> (UIView?, UIView?))? {
         for i in (0 ..< self.targets.count).reversed() {
             if let holderTarget = self.targets[i].target {
                 if let result = holderTarget.getTransitionInfo(messageId: messageId, media: media) {

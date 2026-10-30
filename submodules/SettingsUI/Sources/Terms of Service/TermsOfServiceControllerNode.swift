@@ -1,7 +1,6 @@
 import Foundation
 import UIKit
 import TelegramCore
-import Postbox
 import SwiftSignalKit
 import Display
 import AsyncDisplayKit
@@ -60,7 +59,7 @@ final class TermsOfServiceControllerNode: ViewControllerTracingNode {
         
         let fontSize = floor(presentationData.listsFontSize.baseDisplaySize * 15.0 / 17.0)
         
-        self.contentTextNode.attributedText = stringWithAppliedEntities(text, entities: entities, baseColor: presentationData.theme.list.itemPrimaryTextColor, linkColor: presentationData.theme.list.itemAccentColor, baseFont: Font.regular(fontSize), linkFont: Font.regular(fontSize), boldFont: Font.semibold(fontSize), italicFont: Font.italic(fontSize), boldItalicFont: Font.semiboldItalic(fontSize), fixedFont: Font.monospace(fontSize), blockQuoteFont: Font.regular(fontSize))
+        self.contentTextNode.attributedText = stringWithAppliedEntities(text, entities: entities, baseColor: presentationData.theme.list.itemPrimaryTextColor, linkColor: presentationData.theme.list.itemAccentColor, baseFont: Font.regular(fontSize), linkFont: Font.regular(fontSize), boldFont: Font.semibold(fontSize), italicFont: Font.italic(fontSize), boldItalicFont: Font.semiboldItalic(fontSize), fixedFont: Font.monospace(fontSize), blockQuoteFont: Font.regular(fontSize), message: nil)
         
         self.toolbarNode = ASDisplayNode()
         self.toolbarSeparatorNode = ASDisplayNode()
@@ -120,7 +119,7 @@ final class TermsOfServiceControllerNode: ViewControllerTracingNode {
         self.leftActionNode.addTarget(self, action: #selector(self.leftActionPressed), forControlEvents: .touchUpInside)
         self.rightActionNode.addTarget(self, action: #selector(self.rightActionPressed), forControlEvents: .touchUpInside)
         
-        self.contentTextNode.linkHighlightColor = self.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.5)
+        self.contentTextNode.linkHighlightColor = self.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.2)
         self.contentTextNode.highlightAttributeAction = { attributes in
             if let _ = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.URL)] {
                 return NSAttributedString.Key(rawValue: TelegramTextAttributes.URL)
@@ -180,7 +179,7 @@ final class TermsOfServiceControllerNode: ViewControllerTracingNode {
                         UIPasteboard.general.string = url
                         
                         if let strongSelf = self {
-                            strongSelf.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .linkCopied(text: strongSelf.presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
+                            strongSelf.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .linkCopied(title: nil, text: strongSelf.presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
                         }
                     })
                 ]), ActionSheetItemGroup(items: [
@@ -198,6 +197,12 @@ final class TermsOfServiceControllerNode: ViewControllerTracingNode {
     }
     
     deinit {
+    }
+    
+    override func didLoad() {
+        super.didLoad()
+        
+        self.scrollNode.view.scrollsToTop = false
     }
     
     func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition) {
@@ -218,8 +223,10 @@ final class TermsOfServiceControllerNode: ViewControllerTracingNode {
         
         let leftActionSize = self.leftActionTextNode.updateLayout(CGSize(width: floor(layout.size.width / 2.0), height: CGFloat.greatestFiniteMagnitude))
         let rightActionSize = self.rightActionTextNode.updateLayout(CGSize(width: floor(layout.size.width / 2.0), height: CGFloat.greatestFiniteMagnitude))
-        let leftActionTextFrame = CGRect(origin: CGPoint(x: layout.safeInsets.left + 15.0, y: toolbarFrame.minY + floor((toolbarHeight - leftActionSize.height) / 2.0)), size: leftActionSize)
-        let rightActionTextFrame = CGRect(origin: CGPoint(x: layout.size.width - layout.safeInsets.left - 15.0 - rightActionSize.width, y: toolbarFrame.minY + floor((toolbarHeight - rightActionSize.height) / 2.0)), size: rightActionSize)
+        // The bottom toolbar spans iPhone Duo's side strip; it keeps clear only of a corner block at the bottom.
+        let toolbarSideInsets = layout.bottomEdgeSideInsets()
+        let leftActionTextFrame = CGRect(origin: CGPoint(x: toolbarSideInsets.left + 15.0, y: toolbarFrame.minY + floor((toolbarHeight - leftActionSize.height) / 2.0)), size: leftActionSize)
+        let rightActionTextFrame = CGRect(origin: CGPoint(x: layout.size.width - toolbarSideInsets.right - 15.0 - rightActionSize.width, y: toolbarFrame.minY + floor((toolbarHeight - rightActionSize.height) / 2.0)), size: rightActionSize)
         transition.updateFrame(node: self.leftActionTextNode, frame: leftActionTextFrame)
         transition.updateFrame(node: self.rightActionTextNode, frame: rightActionTextFrame)
         self.leftActionNode.frame = CGRect(origin: CGPoint(x: 0.0, y: toolbarFrame.minY), size: CGSize(width: leftActionTextFrame.maxX + 15.0, height: toolbarHeight))

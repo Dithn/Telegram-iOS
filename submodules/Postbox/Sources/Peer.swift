@@ -298,9 +298,20 @@ public protocol Peer: AnyObject, PostboxCoding {
     var id: PeerId { get }
     var indexName: PeerIndexNameRepresentation { get }
     var associatedPeerId: PeerId? { get }
+    var additionalAssociatedPeerId: PeerId? { get }
+    var associatedPeerOverridesIdentity: Bool { get }
+    var containerPeerId: PeerId? { get }
     var notificationSettingsPeerId: PeerId? { get }
+    var associatedMediaIds: [MediaId]? { get }
+    var timeoutAttribute: UInt32? { get }
     
     func isEqual(_ other: Peer) -> Bool
+}
+
+public extension Peer {
+    var additionalAssociatedPeerId: PeerId? { return nil }
+    var associatedPeerOverridesIdentity: Bool { return false }
+    var containerPeerId: PeerId? { return nil }
 }
 
 public func arePeersEqual(_ lhs: Peer?, _ rhs: Peer?) -> Bool {
@@ -353,6 +364,16 @@ public func arePeerDictionariesEqual(_ lhs: [PeerId: Peer], _ rhs: [PeerId: Peer
         }
     }
     return true
+}
+
+public struct PeerSummaryCounterData: Equatable {
+    public var tags: PeerSummaryCounterTags
+    public var usesThreadSummary: Bool
+    
+    public init(tags: PeerSummaryCounterTags, usesThreadSummary: Bool) {
+        self.tags = tags
+        self.usesThreadSummary = usesThreadSummary
+    }
 }
 
 public struct PeerSummaryCounterTags: OptionSet, Sequence, Hashable {

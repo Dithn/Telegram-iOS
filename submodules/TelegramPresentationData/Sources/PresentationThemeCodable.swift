@@ -1,6 +1,5 @@
 import Foundation
 import UIKit
-import Postbox
 import TelegramCore
 import TelegramUIPreferences
 
@@ -123,7 +122,7 @@ struct TelegramWallpaperStandardizedCodable: Codable {
                         }
                         
                         if let slug = slug {
-                            self.value = .file(TelegramWallpaper.File(id: 0, accessHash: 0, isCreator: false, isDefault: false, isPattern: !colors.isEmpty, isDark: false, slug: slug, file: TelegramMediaFile(fileId: MediaId(namespace: 0, id: 0), partialReference: nil, resource: WallpaperDataResource(slug: slug), previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: "", size: nil, attributes: []), settings: WallpaperSettings(blur: blur, motion: motion, colors: colors.map { $0.argb }, intensity: intensity, rotation: rotation)))
+                            self.value = .file(TelegramWallpaper.File(id: 0, accessHash: 0, isCreator: false, isDefault: false, isPattern: !colors.isEmpty, isDark: false, slug: slug, file: TelegramMediaFile(fileId: EngineMedia.Id(namespace: 0, id: 0), partialReference: nil, resource: WallpaperDataResource(slug: slug), previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: "", size: nil, attributes: [], alternativeRepresentations: []), settings: WallpaperSettings(blur: blur, motion: motion, colors: colors.map { $0.argb }, intensity: intensity, rotation: rotation)))
                         } else if colors.count > 1 {
                             self.value = .gradient(TelegramWallpaper.Gradient(id: nil, colors: colors.map { $0.argb }, settings: WallpaperSettings(blur: blur, motion: motion, rotation: rotation)))
                         } else {
@@ -813,7 +812,9 @@ extension PresentationThemeList.PaymentOption: Codable {
 extension PresentationThemeList: Codable {
     enum CodingKeys: String, CodingKey {
         case blocksBg
+        case modalBlocksBg
         case plainBg
+        case modalPlainBg
         case primaryText
         case secondaryText
         case disabledText
@@ -822,6 +823,7 @@ extension PresentationThemeList: Codable {
         case destructive
         case placeholderText
         case itemBlocksBg
+        case itemModalBlocksBg
         case itemHighlightedBg
         case blocksSeparator
         case plainSeparator
@@ -860,7 +862,9 @@ extension PresentationThemeList: Codable {
         
         self.init(
             blocksBackgroundColor: try decodeColor(values, .blocksBg),
+            modalBlocksBackgroundColor: try decodeColor(values, .modalBlocksBg, decoder: decoder, fallbackKey: "list.blocksBg"),
             plainBackgroundColor: try decodeColor(values, .plainBg),
+            modalPlainBackgroundColor: try decodeColor(values, .modalPlainBg, decoder: decoder, fallbackKey: "list.plainBg"),
             itemPrimaryTextColor: try decodeColor(values, .primaryText),
             itemSecondaryTextColor: try decodeColor(values, .secondaryText),
             itemDisabledTextColor: try decodeColor(values, .disabledText),
@@ -869,6 +873,7 @@ extension PresentationThemeList: Codable {
             itemDestructiveColor: try decodeColor(values, .destructive),
             itemPlaceholderTextColor: try decodeColor(values, .placeholderText),
             itemBlocksBackgroundColor: try decodeColor(values, .itemBlocksBg),
+            itemModalBlocksBackgroundColor: try decodeColor(values, .itemModalBlocksBg, decoder: decoder, fallbackKey: "list.itemBlocksBg"),
             itemHighlightedBackgroundColor: try decodeColor(values, .itemHighlightedBg),
             itemBlocksSeparatorColor: try decodeColor(values, .blocksSeparator),
             itemPlainSeparatorColor: try decodeColor(values, .plainSeparator),
@@ -960,6 +965,7 @@ extension PresentationThemeChatList: Codable {
         case itemBg
         case pinnedItemBg
         case itemHighlightedBg
+        case pinnedItemHighlightedBg
         case itemSelectedBg
         case title
         case secretTitle
@@ -989,45 +995,54 @@ extension PresentationThemeChatList: Codable {
         case pinnedArchiveAvatar
         case unpinnedArchiveAvatar
         case onlineDot
+        case storyUnseen
+        case storyUnseenPrivate
+        case storySeen
     }
     
     public convenience init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let codingPath = decoder.codingPath.map { $0.stringValue }.joined(separator: ".")
-        self.init(backgroundColor: try decodeColor(values, .bg),
-                  itemSeparatorColor: try decodeColor(values, .itemSeparator),
-                  itemBackgroundColor: try decodeColor(values, .itemBg),
-                  pinnedItemBackgroundColor: try decodeColor(values, .pinnedItemBg),
-                  itemHighlightedBackgroundColor: try decodeColor(values, .itemHighlightedBg),
-                  itemSelectedBackgroundColor: try decodeColor(values, .itemSelectedBg),
-                  titleColor: try decodeColor(values, .title),
-                  secretTitleColor: try decodeColor(values, .secretTitle),
-                  dateTextColor: try decodeColor(values, .dateText),
-                  authorNameColor: try decodeColor(values, .authorName),
-                  messageTextColor: try decodeColor(values, .messageText),
-                  messageHighlightedTextColor: try decodeColor(values, .messageHighlightedText),
-                  messageDraftTextColor: try decodeColor(values, .messageDraftText),
-                  checkmarkColor: try decodeColor(values, .checkmark),
-                  pendingIndicatorColor: try decodeColor(values, .pendingIndicator),
-                  failedFillColor: try decodeColor(values, .failedFill),
-                  failedForegroundColor: try decodeColor(values, .failedFg),
-                  muteIconColor: try decodeColor(values, .muteIcon),
-                  unreadBadgeActiveBackgroundColor: try decodeColor(values, .unreadBadgeActiveBg),
-                  unreadBadgeActiveTextColor: try decodeColor(values, .unreadBadgeActiveText),
-                  unreadBadgeInactiveBackgroundColor: try decodeColor(values, .unreadBadgeInactiveBg),
-                  unreadBadgeInactiveTextColor: try decodeColor(values, .unreadBadgeInactiveText),
-                  reactionBadgeActiveBackgroundColor: try decodeColor(values, .reactionBadgeActiveBg, fallbackKey: "\(codingPath).unreadBadgeActiveBg"),
-                  pinnedBadgeColor: try decodeColor(values, .pinnedBadge),
-                  pinnedSearchBarColor: try decodeColor(values, .pinnedSearchBar),
-                  regularSearchBarColor: try decodeColor(values, .regularSearchBar),
-                  sectionHeaderFillColor: try decodeColor(values, .sectionHeaderBg),
-                  sectionHeaderTextColor: try decodeColor(values, .sectionHeaderText),
-                  verifiedIconFillColor: try decodeColor(values, .verifiedIconBg),
-                  verifiedIconForegroundColor: try decodeColor(values, .verifiedIconFg),
-                  secretIconColor: try decodeColor(values, .secretIcon),
-                  pinnedArchiveAvatarColor: try values.decode(PresentationThemeArchiveAvatarColors.self, forKey: .pinnedArchiveAvatar),
-                  unpinnedArchiveAvatarColor: try values.decode(PresentationThemeArchiveAvatarColors.self, forKey: .unpinnedArchiveAvatar),
-                  onlineDotColor: try decodeColor(values, .onlineDot))
+        self.init(
+            backgroundColor: try decodeColor(values, .bg),
+            itemSeparatorColor: try decodeColor(values, .itemSeparator),
+            itemBackgroundColor: try decodeColor(values, .itemBg),
+            pinnedItemBackgroundColor: try decodeColor(values, .pinnedItemBg),
+            itemHighlightedBackgroundColor: try decodeColor(values, .itemHighlightedBg),
+            pinnedItemHighlightedBackgroundColor: try decodeColor(values, .pinnedItemHighlightedBg, fallbackKey: "\(codingPath).itemHighlightedBg"),
+            itemSelectedBackgroundColor: try decodeColor(values, .itemSelectedBg),
+            titleColor: try decodeColor(values, .title),
+            secretTitleColor: try decodeColor(values, .secretTitle),
+            dateTextColor: try decodeColor(values, .dateText),
+            authorNameColor: try decodeColor(values, .authorName),
+            messageTextColor: try decodeColor(values, .messageText),
+            messageHighlightedTextColor: try decodeColor(values, .messageHighlightedText),
+            messageDraftTextColor: try decodeColor(values, .messageDraftText),
+            checkmarkColor: try decodeColor(values, .checkmark),
+            pendingIndicatorColor: try decodeColor(values, .pendingIndicator),
+            failedFillColor: try decodeColor(values, .failedFill),
+            failedForegroundColor: try decodeColor(values, .failedFg),
+            muteIconColor: try decodeColor(values, .muteIcon),
+            unreadBadgeActiveBackgroundColor: try decodeColor(values, .unreadBadgeActiveBg),
+            unreadBadgeActiveTextColor: try decodeColor(values, .unreadBadgeActiveText),
+            unreadBadgeInactiveBackgroundColor: try decodeColor(values, .unreadBadgeInactiveBg),
+            unreadBadgeInactiveTextColor: try decodeColor(values, .unreadBadgeInactiveText),
+            reactionBadgeActiveBackgroundColor: try decodeColor(values, .reactionBadgeActiveBg, fallbackKey: "\(codingPath).unreadBadgeActiveBg"),
+            pinnedBadgeColor: try decodeColor(values, .pinnedBadge),
+            pinnedSearchBarColor: try decodeColor(values, .pinnedSearchBar),
+            regularSearchBarColor: try decodeColor(values, .regularSearchBar),
+            sectionHeaderFillColor: try decodeColor(values, .sectionHeaderBg),
+            sectionHeaderTextColor: try decodeColor(values, .sectionHeaderText),
+            verifiedIconFillColor: try decodeColor(values, .verifiedIconBg),
+            verifiedIconForegroundColor: try decodeColor(values, .verifiedIconFg),
+            secretIconColor: try decodeColor(values, .secretIcon),
+            pinnedArchiveAvatarColor: try values.decode(PresentationThemeArchiveAvatarColors.self, forKey: .pinnedArchiveAvatar),
+            unpinnedArchiveAvatarColor: try values.decode(PresentationThemeArchiveAvatarColors.self, forKey: .unpinnedArchiveAvatar),
+            onlineDotColor: try decodeColor(values, .onlineDot),
+            storyUnseenColors: (try? values.decode(PresentationThemeGradientColors.self, forKey: .storyUnseen)) ?? PresentationThemeGradientColors(topColor: UIColor(rgb: 0x34C76F), bottomColor: UIColor(rgb: 0x3DA1FD)),
+            storyUnseenPrivateColors: (try? values.decode(PresentationThemeGradientColors.self, forKey: .storyUnseenPrivate)) ?? PresentationThemeGradientColors(topColor: UIColor(rgb: 0x7CD636), bottomColor: UIColor(rgb: 0x26B470)),
+            storySeenColors: (try? values.decode(PresentationThemeGradientColors.self, forKey: .storySeen)) ?? PresentationThemeGradientColors(topColor: UIColor(rgb: 0xD8D8E1), bottomColor: UIColor(rgb: 0xD8D8E1))
+        )
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -1037,6 +1052,7 @@ extension PresentationThemeChatList: Codable {
         try encodeColor(&values, self.itemBackgroundColor, .itemBg)
         try encodeColor(&values, self.pinnedItemBackgroundColor, .pinnedItemBg)
         try encodeColor(&values, self.itemHighlightedBackgroundColor, .itemHighlightedBg)
+        try encodeColor(&values, self.pinnedItemHighlightedBackgroundColor, .pinnedItemHighlightedBg)
         try encodeColor(&values, self.itemSelectedBackgroundColor, .itemSelectedBg)
         try encodeColor(&values, self.titleColor, .title)
         try encodeColor(&values, self.secretTitleColor, .secretTitle)
@@ -1066,6 +1082,9 @@ extension PresentationThemeChatList: Codable {
         try values.encode(self.pinnedArchiveAvatarColor, forKey: .pinnedArchiveAvatar)
         try values.encode(self.unpinnedArchiveAvatarColor, forKey: .unpinnedArchiveAvatar)
         try encodeColor(&values, self.onlineDotColor, .onlineDot)
+        try values.encode(self.storyUnseenColors, forKey: .storyUnseen)
+        try values.encode(self.storyUnseenPrivateColors, forKey: .storyUnseenPrivate)
+        try values.encode(self.storySeenColors, forKey: .storySeen)
     }
 }
 
@@ -1103,6 +1122,8 @@ extension PresentationThemeBubbleColorComponents: Codable {
         case bgList
         case reactionInactiveBg
         case reactionInactiveFg
+        case reactionInactiveMediaPlaceholder
+        case reactionActiveMediaPlaceholder
         case reactionActiveBg
         case reactionActiveFg
         case __workaroundNonexistingKey
@@ -1141,6 +1162,20 @@ extension PresentationThemeBubbleColorComponents: Codable {
             reactionInactiveBackground = (try decodeColor(values, .__workaroundNonexistingKey, fallbackKey: "\(fallbackKeyPrefix).accentControl")).withMultipliedAlpha(0.1)
         }
         
+        let reactionInactiveMediaPlaceholder: UIColor
+        if let color = try? decodeColor(values, .reactionInactiveMediaPlaceholder) {
+            reactionInactiveMediaPlaceholder = color
+        } else {
+            reactionInactiveMediaPlaceholder = (try decodeColor(values, .__workaroundNonexistingKey, fallbackKey: "\(fallbackKeyPrefix).accentControl")).withMultipliedAlpha(0.1)
+        }
+        
+        let reactionActiveMediaPlaceholder: UIColor
+        if let color = try? decodeColor(values, .reactionActiveMediaPlaceholder) {
+            reactionActiveMediaPlaceholder = color
+        } else {
+            reactionActiveMediaPlaceholder = (try decodeColor(values, .__workaroundNonexistingKey, fallbackKey: "\(fallbackKeyPrefix).accentControl")).withMultipliedAlpha(0.1)
+        }
+        
         let reactionInactiveForeground: UIColor
         if let color = try? decodeColor(values, .reactionInactiveFg) {
             reactionInactiveForeground = color
@@ -1170,7 +1205,13 @@ extension PresentationThemeBubbleColorComponents: Codable {
             reactionInactiveBackground: reactionInactiveBackground,
             reactionInactiveForeground: reactionInactiveForeground,
             reactionActiveBackground: reactionActiveBackground,
-            reactionActiveForeground: reactionActiveForeground
+            reactionActiveForeground: reactionActiveForeground,
+            reactionStarsInactiveBackground: reactionInactiveBackground,
+            reactionStarsInactiveForeground: reactionInactiveForeground,
+            reactionStarsActiveBackground: reactionActiveBackground,
+            reactionStarsActiveForeground: reactionActiveForeground,
+            reactionInactiveMediaPlaceholder: reactionInactiveMediaPlaceholder,
+            reactionActiveMediaPlaceholder: reactionActiveMediaPlaceholder
         )
     }
     
@@ -1193,6 +1234,8 @@ extension PresentationThemeBubbleColorComponents: Codable {
         try encodeColor(&values, self.reactionInactiveForeground, .reactionInactiveFg)
         try encodeColor(&values, self.reactionActiveBackground, .reactionActiveBg)
         try encodeColor(&values, self.reactionActiveForeground, .reactionActiveFg)
+        try encodeColor(&values, self.reactionInactiveMediaPlaceholder, .reactionInactiveMediaPlaceholder)
+        try encodeColor(&values, self.reactionActiveMediaPlaceholder, .reactionActiveMediaPlaceholder)
     }
 }
 
@@ -1533,14 +1576,14 @@ extension PresentationThemeChatInputPanel: Codable {
         case panelBgNoWallpaper
         case panelSeparator
         case panelControlAccent
-        case panelControl
+        case panelControl = "panelControl_v2"
         case panelControlDisabled
         case panelControlDestructive
         case inputBg
         case inputStroke
-        case inputPlaceholder
-        case inputText
-        case inputControl
+        case inputPlaceholder = "inputPlaceholder_v2"
+        case inputText = "inputText_v2"
+        case inputControl = "inputControl_v2"
         case actionControlBg
         case actionControlFg
         case primaryText
@@ -1599,6 +1642,12 @@ extension PresentationThemeInputMediaPanel: Codable {
         case panelSeparator
         case panelIcon
         case panelHighlightedIconBg
+        case panelHighlightedIcon
+        case panelContentVibrantOverlay
+        case panelContentControlVibrantOverlay
+        case panelContentControlVibrantSelection
+        case panelContentControlOpaqueOverlay
+        case panelContentControlOpaqueSelection
         case stickersBg
         case stickersSectionText
         case stickersSearchBg
@@ -1606,20 +1655,59 @@ extension PresentationThemeInputMediaPanel: Codable {
         case stickersSearchPrimary
         case stickersSearchControl
         case gifsBg
+        case bg
+        case panelContentVibrantSearchOverlay
+        case panelContentVibrantSearchOverlaySelected
+        case panelContentVibrantSearchOverlayHighlight
+        case panelContentOpaqueSearchOverlay
+        case panelContentOpaqueSearchOverlaySelected
+        case panelContentOpaqueSearchOverlayHighlight
     }
     
     public convenience init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        
+        let backgroundColor: UIColor
+        if let value = try? decodeColor(values, .bg) {
+            backgroundColor = value
+        } else {
+            backgroundColor = try decodeColor(values, .gifsBg).withMultipliedAlpha(0.75)
+        }
+        
+        let panelHighlightedIconColor: UIColor
+        if let value = try? decodeColor(values, .panelHighlightedIcon) {
+            panelHighlightedIconColor = value
+        } else if let value = try? decodeColor(values, .panelHighlightedIcon, fallbackKey: "chat.inputPanel.inputText") {
+            let defaultColor = try decodeColor(values, .panelIcon)
+            panelHighlightedIconColor = defaultColor.mixedWith(value, alpha: 0.35)
+        } else {
+            panelHighlightedIconColor = try decodeColor(values, .panelIcon)
+        }
+        
+        let codingPath = decoder.codingPath.map { $0.stringValue }.joined(separator: ".")
+        
         self.init(panelSeparatorColor: try decodeColor(values, .panelSeparator),
                   panelIconColor: try decodeColor(values, .panelIcon),
                   panelHighlightedIconBackgroundColor: try decodeColor(values, .panelHighlightedIconBg),
+                  panelHighlightedIconColor: panelHighlightedIconColor,
+                  panelContentVibrantOverlayColor: try decodeColor(values, .panelContentVibrantOverlay, fallbackKey: "\(codingPath).stickersSectionText"),
+                  panelContentControlVibrantOverlayColor: try decodeColor(values, .panelContentControlVibrantOverlay, fallbackKey: "\(codingPath).stickersSectionText"),
+                  panelContentControlVibrantSelectionColor: try decodeColor(values, .panelContentControlVibrantSelection, fallbackKey: "\(codingPath).stickersSectionText"),
+                  panelContentControlOpaqueOverlayColor: try decodeColor(values, .panelContentControlOpaqueOverlay, fallbackKey: "\(codingPath).stickersSectionText"),
+                  panelContentControlOpaqueSelectionColor: try decodeColor(values, .panelContentControlOpaqueSelection, fallbackKey: "\(codingPath).stickersSectionText"),
+                  panelContentVibrantSearchOverlayColor: try decodeColor(values, .panelContentVibrantSearchOverlay, fallbackKey: "\(codingPath).stickersSectionText"),
+                  panelContentVibrantSearchOverlaySelectedColor: try decodeColor(values, .panelContentVibrantSearchOverlaySelected, fallbackKey: "\(codingPath).stickersSectionText"),
+                  panelContentVibrantSearchOverlayHighlightColor: try decodeColor(values, .panelContentVibrantSearchOverlayHighlight, fallbackKey: "\(codingPath).panelHighlightedIconBg"),
+                  panelContentOpaqueSearchOverlayColor: try decodeColor(values, .panelContentOpaqueSearchOverlay, fallbackKey: "\(codingPath).stickersSectionText"),
+                  panelContentOpaqueSearchOverlaySelectedColor: try decodeColor(values, .panelContentOpaqueSearchOverlaySelected, fallbackKey: "\(codingPath).stickersSectionText"),
+                  panelContentOpaqueSearchOverlayHighlightColor: try decodeColor(values, .panelContentOpaqueSearchOverlayHighlight, fallbackKey: "\(codingPath).panelHighlightedIconBg"),
                   stickersBackgroundColor: try decodeColor(values, .stickersBg),
                   stickersSectionTextColor: try decodeColor(values, .stickersSectionText),
                   stickersSearchBackgroundColor: try decodeColor(values, .stickersSearchBg),
                   stickersSearchPlaceholderColor: try decodeColor(values, .stickersSearchPlaceholder),
                   stickersSearchPrimaryColor: try decodeColor(values, .stickersSearchPrimary),
                   stickersSearchControlColor: try decodeColor(values, .stickersSearchControl),
-                  gifsBackgroundColor: try decodeColor(values, .gifsBg))
+                  gifsBackgroundColor: try decodeColor(values, .gifsBg), backgroundColor: backgroundColor)
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -1627,6 +1715,20 @@ extension PresentationThemeInputMediaPanel: Codable {
         try encodeColor(&values, self.panelSeparatorColor, .panelSeparator)
         try encodeColor(&values, self.panelIconColor, .panelIcon)
         try encodeColor(&values, self.panelHighlightedIconBackgroundColor, .panelHighlightedIconBg)
+        try encodeColor(&values, self.panelHighlightedIconColor, .panelHighlightedIcon)
+        try encodeColor(&values, self.panelContentVibrantOverlayColor, .panelContentVibrantOverlay)
+        try encodeColor(&values, self.panelContentControlVibrantOverlayColor, .panelContentControlVibrantOverlay)
+        try encodeColor(&values, self.panelContentControlVibrantSelectionColor, .panelContentControlVibrantSelection)
+        try encodeColor(&values, self.panelContentControlOpaqueOverlayColor, .panelContentControlOpaqueOverlay)
+        try encodeColor(&values, self.panelContentControlOpaqueSelectionColor, .panelContentControlOpaqueSelection)
+        
+        try encodeColor(&values, self.panelContentVibrantSearchOverlayColor, .panelContentVibrantSearchOverlay)
+        try encodeColor(&values, self.panelContentVibrantSearchOverlaySelectedColor, .panelContentVibrantSearchOverlaySelected)
+        try encodeColor(&values, self.panelContentVibrantSearchOverlayHighlightColor, .panelContentVibrantSearchOverlayHighlight)
+        try encodeColor(&values, self.panelContentOpaqueSearchOverlayColor, .panelContentOpaqueSearchOverlay)
+        try encodeColor(&values, self.panelContentOpaqueSearchOverlaySelectedColor, .panelContentOpaqueSearchOverlaySelected)
+        try encodeColor(&values, self.panelContentOpaqueSearchOverlayHighlightColor, .panelContentOpaqueSearchOverlayHighlight)
+        
         try encodeColor(&values, self.stickersBackgroundColor, .stickersBg)
         try encodeColor(&values, self.stickersSectionTextColor, .stickersSectionText)
         try encodeColor(&values, self.stickersSearchBackgroundColor, .stickersSearchBg)
@@ -1634,6 +1736,7 @@ extension PresentationThemeInputMediaPanel: Codable {
         try encodeColor(&values, self.stickersSearchPrimaryColor, .stickersSearchPrimary)
         try encodeColor(&values, self.stickersSearchControlColor, .stickersSearchControl)
         try encodeColor(&values, self.gifsBackgroundColor, .gifsBg)
+        try encodeColor(&values, self.backgroundColor, .bg)
     }
 }
 
@@ -1642,6 +1745,7 @@ extension PresentationThemeInputButtonPanel: Codable {
         case panelBg
         case panelSeparator
         case buttonBg
+        case buttonHighlight
         case buttonStroke
         case buttonHighlightedBg
         case buttonHighlightedStroke
@@ -1653,6 +1757,7 @@ extension PresentationThemeInputButtonPanel: Codable {
         self.init(panelSeparatorColor: try decodeColor(values, .panelSeparator),
                   panelBackgroundColor: try decodeColor(values, .panelBg),
                   buttonFillColor: try decodeColor(values, .buttonBg),
+                  buttonHighlightColor: try decodeColor(values, .buttonHighlight),
                   buttonStrokeColor: try decodeColor(values, .buttonStroke),
                   buttonHighlightedFillColor: try decodeColor(values, .buttonHighlightedBg),
                   buttonHighlightedStrokeColor: try decodeColor(values, .buttonHighlightedStroke),
@@ -1664,6 +1769,7 @@ extension PresentationThemeInputButtonPanel: Codable {
         try encodeColor(&values, self.panelBackgroundColor, .panelBg)
         try encodeColor(&values, self.panelSeparatorColor, .panelSeparator)
         try encodeColor(&values, self.buttonFillColor, .buttonBg)
+        try encodeColor(&values, self.buttonHighlightColor, .buttonHighlight)
         try encodeColor(&values, self.buttonStrokeColor, .buttonStroke)
         try encodeColor(&values, self.buttonHighlightedFillColor, .buttonHighlightedBg)
         try encodeColor(&values, self.buttonHighlightedStrokeColor, .buttonHighlightedStroke)
@@ -1926,7 +2032,7 @@ extension PresentationThemeName: Codable {
     }
 }
 
-extension PresentationBuiltinThemeReference: Codable {
+extension PresentationBuiltinThemeReference: @retroactive Codable {
     public init(from decoder: Decoder) throws {
         let values = try decoder.singleValueContainer()
         if let value = try? values.decode(String.self) {

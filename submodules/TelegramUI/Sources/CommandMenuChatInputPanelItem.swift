@@ -4,12 +4,15 @@ import AsyncDisplayKit
 import Display
 import TelegramCore
 import SwiftSignalKit
-import Postbox
 import TelegramPresentationData
 import TelegramUIPreferences
 import AccountContext
 
 final class CommandMenuChatInputPanelItem: ListViewItem {
+    var neighborDescriptor: AnyEquatable {
+        return AnyEquatable.noNeighborInfluence
+    }
+
     fileprivate let context: AccountContext
     fileprivate let theme: PresentationTheme
     fileprivate let fontSize: PresentationFontSize
@@ -26,12 +29,12 @@ final class CommandMenuChatInputPanelItem: ListViewItem {
         self.commandSelected = commandSelected
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         let configure = { () -> Void in
             let node = CommandMenuChatInputPanelItemNode()
             
             let nodeLayout = node.asyncLayout()
-            let (top, bottom) = (previousItem != nil, nextItem != nil)
+            let (top, bottom) = (neighbors.previous != nil, neighbors.next != nil)
             let (layout, apply) = nodeLayout(self, params, top, bottom)
             
             node.contentSize = layout.contentSize
@@ -52,13 +55,13 @@ final class CommandMenuChatInputPanelItem: ListViewItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? CommandMenuChatInputPanelItemNode {
                 let nodeLayout = nodeValue.asyncLayout()
                 
                 async {
-                    let (top, bottom) = (previousItem != nil, nextItem != nil)
+                    let (top, bottom) = (neighbors.previous != nil, neighbors.next != nil)
                     
                     let (layout, apply) = nodeLayout(self, params, top, bottom)
                     Queue.mainQueue().async {
@@ -118,6 +121,8 @@ final class CommandMenuChatInputPanelItemNode: ListViewItemNode {
     private let backgroundNode: ASDisplayNode
     private let highlightedBackgroundNode: ASDisplayNode
         
+    private let activateAreaNode: AccessibilityAreaNode
+    
     init() {
         self.textNode = TextNode()
         self.commandNode = TextNode()
@@ -139,7 +144,10 @@ final class CommandMenuChatInputPanelItemNode: ListViewItemNode {
         self.backgroundNode = ASDisplayNode()
         self.backgroundNode.clipsToBounds = true
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        self.activateAreaNode = AccessibilityAreaNode()
+        self.activateAreaNode.accessibilityTraits = [.button]
+        
+        super.init(layerBacked: false)
                 
         self.addSubnode(self.clippingNode)
         self.clippingNode.addSubnode(self.shadowNode)
@@ -148,6 +156,8 @@ final class CommandMenuChatInputPanelItemNode: ListViewItemNode {
         self.backgroundNode.addSubnode(self.textNode)
         self.backgroundNode.addSubnode(self.commandNode)
         self.backgroundNode.addSubnode(self.separatorNode)
+        
+        self.addSubnode(self.activateAreaNode)
     }
     
     override func didLoad() {
@@ -169,10 +179,10 @@ final class CommandMenuChatInputPanelItemNode: ListViewItemNode {
         }
     }
     
-    override func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, previousItem: ListViewItem?, nextItem: ListViewItem?) {
+    override func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, neighbors: ListViewItemNeighbors) {
         if let item = item as? CommandMenuChatInputPanelItem {
             let doLayout = self.asyncLayout()
-            let merged = (top: previousItem != nil, bottom: nextItem != nil)
+            let merged = (top: neighbors.previous != nil, bottom: neighbors.next != nil)
             let (layout, apply) = doLayout(item, params, merged.top, merged.bottom)
             self.contentSize = layout.contentSize
             self.insets = layout.insets
@@ -203,7 +213,7 @@ final class CommandMenuChatInputPanelItemNode: ListViewItemNode {
             
             let (textLayout, textApply) = makeTextLayout(TextNodeLayoutArguments(attributedString: textString, backgroundColor: nil, maximumNumberOfLines: 2, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - rightInset - 130.0, height: 100.0), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
-            let (commandLayout, commandApply) = makeCommandLayout(TextNodeLayoutArguments(attributedString: commandString, backgroundColor: nil, maximumNumberOfLines: 2, truncationType: .end, constrainedSize: CGSize(width: 120.0, height: 100.0), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let (commandLayout, commandApply) = makeCommandLayout(TextNodeLayoutArguments(attributedString: commandString, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - rightInset - textLayout.size.width - 16.0, height: 100.0), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
             let nodeLayout = ListViewItemNodeLayout(contentSize: CGSize(width: params.width, height: max(CommandMenuChatInputPanelItemNode.itemHeight, textLayout.size.height + 14.0)), insets: UIEdgeInsets())
                         
@@ -212,7 +222,6 @@ final class CommandMenuChatInputPanelItemNode: ListViewItemNode {
                     strongSelf.item = item
                     
                     strongSelf.separatorNode.backgroundColor = item.theme.list.itemPlainSeparatorColor
-                    strongSelf.backgroundNode.backgroundColor = item.theme.list.plainBackgroundColor
                     strongSelf.highlightedBackgroundNode.backgroundColor = item.theme.list.itemHighlightedBackgroundColor
                     
                     let _ = textApply()
@@ -226,6 +235,10 @@ final class CommandMenuChatInputPanelItemNode: ListViewItemNode {
                     strongSelf.separatorNode.frame = CGRect(origin: CGPoint(x: leftInset, y: nodeLayout.contentSize.height - UIScreenPixel), size: CGSize(width: params.width - leftInset, height: UIScreenPixel))
                     
                     strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: params.width, height: nodeLayout.size.height + UIScreenPixel))
+                    
+                    strongSelf.activateAreaNode.accessibilityLabel = textString.string
+                    strongSelf.activateAreaNode.accessibilityValue = commandString.string
+                    strongSelf.activateAreaNode.frame = CGRect(origin: .zero, size: nodeLayout.size)
                     
                     if !mergedTop {
                         strongSelf.shadowNode.isHidden = false
@@ -250,7 +263,7 @@ final class CommandMenuChatInputPanelItemNode: ListViewItemNode {
         if highlighted {
             self.highlightedBackgroundNode.alpha = 1.0
             if self.highlightedBackgroundNode.supernode == nil {
-                self.backgroundNode.insertSubnode(self.highlightedBackgroundNode, at: 0)
+                //self.backgroundNode.insertSubnode(self.highlightedBackgroundNode, at: 0)
             }
         } else {
             if self.highlightedBackgroundNode.supernode != nil {

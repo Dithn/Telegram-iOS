@@ -1,8 +1,8 @@
 import Foundation
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import TelegramUIPreferences
+import RangeSet
 
 public enum FetchManagerCategory: Int32 {
     case image
@@ -12,7 +12,7 @@ public enum FetchManagerCategory: Int32 {
 }
 
 public enum FetchManagerLocationKey: Comparable, Hashable {
-    case messageId(MessageId)
+    case messageId(EngineMessage.Id)
     case free
     
     public static func <(lhs: FetchManagerLocationKey, rhs: FetchManagerLocationKey) -> Bool {
@@ -85,8 +85,15 @@ public struct FetchManagerPriorityKey: Comparable {
     }
 }
 
-public enum FetchManagerLocation: Hashable {
-    case chat(PeerId)
+public enum FetchManagerLocation: Hashable, CustomStringConvertible {
+    case chat(EnginePeer.Id)
+    
+    public var description: String {
+        switch self {
+        case let .chat(peerId):
+            return "chat:\(peerId)"
+        }
+    }
 }
 
 public enum FetchManagerForegroundDirection {
@@ -96,8 +103,8 @@ public enum FetchManagerForegroundDirection {
 
 public enum FetchManagerPriority: Comparable {
     case userInitiated
-    case foregroundPrefetch(direction: FetchManagerForegroundDirection, localOrder: MessageIndex)
-    case backgroundPrefetch(locationOrder: HistoryPreloadIndex, localOrder: MessageIndex)
+    case foregroundPrefetch(direction: FetchManagerForegroundDirection, localOrder: EngineMessage.Index)
+    case backgroundPrefetch(locationOrder: HistoryPreloadIndex, localOrder: EngineMessage.Index)
     
     public static func <(lhs: FetchManagerPriority, rhs: FetchManagerPriority) -> Bool {
         switch lhs {
@@ -148,17 +155,15 @@ public enum FetchManagerPriority: Comparable {
     }
 }
 
-public let FetchCompleteRange = IndexSet(integersIn: 0 ..< Int(Int32.max) as Range<Int>)
-
 public protocol FetchManager {
     var queue: Queue { get }
     
-    func interactivelyFetched(category: FetchManagerCategory, location: FetchManagerLocation, locationKey: FetchManagerLocationKey, mediaReference: AnyMediaReference?, resourceReference: MediaResourceReference, ranges: IndexSet, statsCategory: MediaResourceStatsCategory, elevatedPriority: Bool, userInitiated: Bool, priority: FetchManagerPriority, storeToDownloadsPeerType: MediaAutoDownloadPeerType?) -> Signal<Void, NoError>
-    func cancelInteractiveFetches(category: FetchManagerCategory, location: FetchManagerLocation, locationKey: FetchManagerLocationKey, resource: MediaResource)
+    func interactivelyFetched(category: FetchManagerCategory, location: FetchManagerLocation, locationKey: FetchManagerLocationKey, mediaReference: AnyMediaReference?, resourceReference: MediaResourceReference, ranges: RangeSet<Int64>, statsCategory: MediaResourceStatsCategory, elevatedPriority: Bool, userInitiated: Bool, priority: FetchManagerPriority, storeToDownloadsPeerId: EnginePeer.Id?) -> Signal<Void, NoError>
+    func cancelInteractiveFetches(category: FetchManagerCategory, location: FetchManagerLocation, locationKey: FetchManagerLocationKey, resource: EngineRawMediaResource)
     func cancelInteractiveFetches(resourceId: String)
     func toggleInteractiveFetchPaused(resourceId: String, isPaused: Bool)
     func raisePriority(resourceId: String)
-    func fetchStatus(category: FetchManagerCategory, location: FetchManagerLocation, locationKey: FetchManagerLocationKey, resource: MediaResource) -> Signal<MediaResourceStatus, NoError>
+    func fetchStatus(category: FetchManagerCategory, location: FetchManagerLocation, locationKey: FetchManagerLocationKey, resource: EngineRawMediaResource) -> Signal<EngineMediaResourceStatus, NoError>
 }
 
 public protocol PrefetchManager {

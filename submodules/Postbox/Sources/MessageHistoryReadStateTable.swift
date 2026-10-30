@@ -243,13 +243,15 @@ final class MessageHistoryReadStateTable: Table {
                     
                     self.markReadStatesAsUpdated(peerId, namespaces: states.namespaces)
                     
-                    var updatedState = currentState.withAddedCount(Int32(-knownCount))
-                    if updatedState.count < 0 {
+                    var updatedCount = currentState.count - Int32(clamping: knownCount)
+                    if updatedCount < 0 {
+                        // More unread messages were deleted than the count knew about, so the
+                        // count is wrong and gets validated; until then it must read zero.
                         invalidate = true
-                        updatedState = currentState.withAddedCount(-updatedState.count)
+                        updatedCount = 0
                     }
                     
-                    states.namespaces[namespace] = updatedState
+                    states.namespaces[namespace] = currentState.withCount(updatedCount)
                     updated = true
                 } else {
                     invalidate = true
@@ -300,7 +302,7 @@ final class MessageHistoryReadStateTable: Table {
         return (nil, false)
     }
     
-    func applyIncomingMaxReadIndex(_ messageIndex: MessageIndex, topMessageIndex: MessageIndex?, incomingStatsInRange: (MessageIndex, MessageIndex) -> (count: Int, holes: Bool, readMesageIds: [MessageId])) -> (CombinedPeerReadState?, Bool, [MessageId]) {
+    func applyIncomingMaxReadIndex(_ messageIndex: MessageIndex, topMessageIndex: MessageIndex?, incomingStatsInRange: (MessageIndex, MessageIndex) -> (count: Int, holes: Bool, readMessageIds: [MessageId])) -> (CombinedPeerReadState?, Bool, [MessageId]) {
         if let states = self.get(messageIndex.id.peerId), let state = states.namespaces[messageIndex.id.namespace] {
             if traceReadStates {
                 print("[ReadStateTable] applyIncomingMaxReadIndex peerId: \(messageIndex.id.peerId), maxReadIndex: \(messageIndex) (before: \(states.namespaces))")
@@ -380,7 +382,7 @@ final class MessageHistoryReadStateTable: Table {
         return (nil, false, [])
     }
     
-    func applyInteractiveMaxReadIndex(postbox: PostboxImpl, messageIndex: MessageIndex, incomingStatsInRange: (MessageId.Namespace, MessageId.Id, MessageId.Id) -> (count: Int, holes: Bool), incomingIndexStatsInRange: (MessageIndex, MessageIndex) -> (count: Int, holes: Bool, readMesageIds: [MessageId]), topMessageId: (MessageId.Id, Bool)?, topMessageIndexByNamespace: (MessageId.Namespace) -> MessageIndex?) -> (combinedState: CombinedPeerReadState?, ApplyInteractiveMaxReadIdResult, readMesageIds: [MessageId]) {
+    func applyInteractiveMaxReadIndex(postbox: PostboxImpl, messageIndex: MessageIndex, incomingStatsInRange: (MessageId.Namespace, MessageId.Id, MessageId.Id) -> (count: Int, holes: Bool), incomingIndexStatsInRange: (MessageIndex, MessageIndex) -> (count: Int, holes: Bool, readMessageIds: [MessageId]), topMessageId: (MessageId.Id, Bool)?, topMessageIndexByNamespace: (MessageId.Namespace) -> MessageIndex?) -> (combinedState: CombinedPeerReadState?, ApplyInteractiveMaxReadIdResult, readMessageIds: [MessageId]) {
         if let states = self.get(messageIndex.id.peerId) {
             if let state = states.namespaces[messageIndex.id.namespace] {
                 switch state {

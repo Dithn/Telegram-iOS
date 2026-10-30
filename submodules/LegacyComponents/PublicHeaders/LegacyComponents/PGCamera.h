@@ -48,7 +48,7 @@ typedef enum
 @class PGCameraDeviceAngleSampler;
 @class TGCameraPreviewView;
 
-@interface PGCamera : NSObject
+@interface PGCamera : NSObject <AVCapturePhotoCaptureDelegate>
 
 @property (readonly, nonatomic) PGCameraCaptureSession *captureSession;
 @property (readonly, nonatomic) PGCameraDeviceAngleSampler *deviceAngleSampler;
@@ -98,6 +98,8 @@ typedef enum
 @property (nonatomic, readonly) NSTimeInterval videoRecordingDuration;
 
 @property (nonatomic, assign) bool autoStartVideoRecording;
+
+@property (nonatomic, strong) NSArray<NSNumber *> *zoomLevels;
 
 - (instancetype)initWithMode:(PGCameraMode)mode position:(PGCameraPosition)position;
 

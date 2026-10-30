@@ -21,8 +21,9 @@ enum ChatListFilterCategoryIcon {
     case archived
 }
 
-final class ChatListFilterPresetCategoryItem: ListViewItem, ItemListItem {
+final class ChatListFilterPresetCategoryItem: ListViewItem, ItemListItem, ItemListRevealOptionsStatefulItem {
     let presentationData: ItemListPresentationData
+    let systemStyle: ItemListSystemStyle
     let title: String
     let icon: ChatListFilterCategoryIcon
     let isRevealed: Bool
@@ -30,9 +31,14 @@ final class ChatListFilterPresetCategoryItem: ListViewItem, ItemListItem {
     let sectionId: ItemListSectionId
     let updatedRevealedOptions: (Bool) -> Void
     let remove: () -> Void
+
+    var hasActiveRevealOptions: Bool {
+        return self.isRevealed
+    }
     
     init(
         presentationData: ItemListPresentationData,
+        systemStyle: ItemListSystemStyle,
         title: String,
         icon: ChatListFilterCategoryIcon,
         isRevealed: Bool,
@@ -41,6 +47,7 @@ final class ChatListFilterPresetCategoryItem: ListViewItem, ItemListItem {
         remove: @escaping () -> Void
     ) {
         self.presentationData = presentationData
+        self.systemStyle = systemStyle
         self.title = title
         self.icon = icon
         self.isRevealed = isRevealed
@@ -49,10 +56,10 @@ final class ChatListFilterPresetCategoryItem: ListViewItem, ItemListItem {
         self.remove = remove
     }
     
-    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = ChatListFilterPresetCategoryItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem), false)
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)), false)
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -65,7 +72,7 @@ final class ChatListFilterPresetCategoryItem: ListViewItem, ItemListItem {
         }
     }
     
-    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? ChatListFilterPresetCategoryItemNode {
                 let makeLayout = nodeValue.asyncLayout()
@@ -76,7 +83,7 @@ final class ChatListFilterPresetCategoryItem: ListViewItem, ItemListItem {
                 }
                 
                 async {
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem), false)
+                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)), false)
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply(false, animated)
@@ -107,6 +114,7 @@ class ChatListFilterPresetCategoryItemNode: ItemListRevealOptionsItemNode, ItemL
     
     private var item: ChatListFilterPresetCategoryItem?
     private var layoutParams: ListViewItemLayoutParams?
+    private var isHighlighted = false
     
     private var editableControlNode: ItemListEditableControlNode?
     
@@ -145,7 +153,7 @@ class ChatListFilterPresetCategoryItemNode: ItemListRevealOptionsItemNode, ItemL
         self.highlightedBackgroundNode = ASDisplayNode()
         self.highlightedBackgroundNode.isLayerBacked = true
         
-        super.init(layerBacked: false, dynamicBounce: false, rotated: false, seeThrough: false)
+        super.init(layerBacked: false, rotated: false, seeThrough: false)
         
         self.isAccessibilityElement = true
         
@@ -162,7 +170,7 @@ class ChatListFilterPresetCategoryItemNode: ItemListRevealOptionsItemNode, ItemL
         
         let currentItem = self.item
         
-        return { item, params, neighbors, headerAtTop in
+        return { [weak self] item, params, neighbors, headerAtTop in
             var updatedTheme: PresentationTheme?
             
             let titleFont = Font.medium(item.presentationData.fontSize.itemListBaseFontSize)
@@ -174,7 +182,7 @@ class ChatListFilterPresetCategoryItemNode: ItemListRevealOptionsItemNode, ItemL
             var titleAttributedString: NSAttributedString?
             
             let peerRevealOptions: [ItemListRevealOption]
-            peerRevealOptions = [ItemListRevealOption(key: 0, title: item.presentationData.strings.Common_Delete, icon: .none, color: item.presentationData.theme.list.itemDisclosureActions.destructive.fillColor, textColor: item.presentationData.theme.list.itemDisclosureActions.destructive.foregroundColor)]
+            peerRevealOptions = [ItemListRevealOption(key: 0, title: item.presentationData.strings.Common_Delete, icon: .none, color: item.presentationData.theme.list.itemDisclosureActions.destructive.fillColor, iconColor: item.presentationData.theme.list.itemDisclosureActions.destructive.foregroundColor, textColor: item.presentationData.theme.list.itemSecondaryTextColor, isDestructive: true)]
             
             let rightInset: CGFloat = params.rightInset
             
@@ -185,11 +193,14 @@ class ChatListFilterPresetCategoryItemNode: ItemListRevealOptionsItemNode, ItemL
             titleAttributedString = NSAttributedString(string: item.title, font: titleFont, textColor: titleColor)
 
             let leftInset: CGFloat
-            let verticalInset: CGFloat
+            var verticalInset: CGFloat = 14.0
             let verticalOffset: CGFloat
             let avatarSize: CGFloat
             
-            verticalInset = 14.0
+            if case .glass = item.systemStyle {
+                verticalInset += 4.0
+            }
+            
             verticalOffset = 0.0
             avatarSize = 40.0
             leftInset = 65.0 + params.leftInset
@@ -208,11 +219,12 @@ class ChatListFilterPresetCategoryItemNode: ItemListRevealOptionsItemNode, ItemL
             
             let contentSize = CGSize(width: params.width, height: max(minHeight, rawHeight))
             let separatorHeight = UIScreenPixel
+            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
             
             let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
             let layoutSize = layout.size
             
-            let hadAvatarImage = self.avatarNode.image != nil
+            let hadAvatarImage = self?.avatarNode.image != nil
             
             return (layout, { [weak self] synchronousLoad, animated in
                 if let strongSelf = self {
@@ -235,30 +247,30 @@ class ChatListFilterPresetCategoryItemNode: ItemListRevealOptionsItemNode, ItemL
                         switch item.icon {
                         case .contacts:
                             color = .blue
-                            imageName = "Chat/Context Menu/User"
+                            imageName = "Chat List/Filters/Contact"
                         case .nonContacts:
                             color = .yellow
-                            imageName = "Chat/Context Menu/UnknownUser"
+                            imageName = "Chat List/Filters/User"
                         case .groups:
                             color = .green
-                            imageName = "Chat/Context Menu/Groups"
+                            imageName = "Chat List/Filters/Group"
                         case .channels:
                             color = .red
-                            imageName = "Chat/Context Menu/Channels"
+                            imageName = "Chat List/Filters/Channel"
                         case .bots:
                             color = .violet
-                            imageName = "Chat/Context Menu/Bots"
+                            imageName = "Chat List/Filters/Bot"
                         case .muted:
                             color = .red
-                            imageName = "Chat/Context Menu/Muted"
+                            imageName = "Chat List/Filters/Muted"
                         case .read:
                             color = .blue
-                            imageName = "Chat/Context Menu/Message"
+                            imageName = "Chat List/Filters/Read"
                         case .archived:
                             color = .yellow
-                            imageName = "Chat/Context Menu/Archive"
+                            imageName = "Chat List/Filters/Archive"
                         }
-                        updatedAvatarImage = generateAvatarImage(size: CGSize(width: avatarSize, height: avatarSize), icon: generateTintedImage(image: UIImage(bundleImageName: imageName), color: .white), color: color)
+                        updatedAvatarImage = generateAvatarImage(size: CGSize(width: avatarSize, height: avatarSize), icon: generateTintedImage(image: UIImage(bundleImageName: imageName), color: .white), cornerRadius: 12.0, color: color)
                     }
                     
                     let revealOffset = strongSelf.revealOffset
@@ -319,33 +331,36 @@ class ChatListFilterPresetCategoryItemNode: ItemListRevealOptionsItemNode, ItemL
                     let hasCorners = itemListHasRoundedBlockLayout(params)
                     var hasTopCorners = false
                     var hasBottomCorners = false
+                    let topStripeIsHidden: Bool
                     switch neighbors.top {
                     case .sameSection(false):
-                        strongSelf.topStripeNode.isHidden = true
+                        topStripeIsHidden = true
                     default:
                         hasTopCorners = true
-                        strongSelf.topStripeNode.isHidden = hasCorners
+                        topStripeIsHidden = hasCorners
                     }
                     let bottomStripeInset: CGFloat
                     let bottomStripeOffset: CGFloat
+                    let bottomStripeIsHidden: Bool
                     switch neighbors.bottom {
                     case .sameSection(false):
                         bottomStripeInset = leftInset + editingOffset
                         bottomStripeOffset = -separatorHeight
-                        strongSelf.bottomStripeNode.isHidden = false
+                        bottomStripeIsHidden = false
                     default:
                         bottomStripeInset = 0.0
                         bottomStripeOffset = 0.0
                         hasBottomCorners = true
-                        strongSelf.bottomStripeNode.isHidden = hasCorners
+                        bottomStripeIsHidden = hasCorners
                     }
+                    strongSelf.updateRevealOptionsSeparatorNodes(top: strongSelf.topStripeNode, bottom: strongSelf.bottomStripeNode, topIsHidden: topStripeIsHidden, bottomIsHidden: bottomStripeIsHidden, topHiddenByPreviousRevealOptions: neighbors.topHasActiveRevealOptions, bottomHiddenByNextRevealOptions: neighbors.bottomHasActiveRevealOptions)
                     
-                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                     
                     strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
-                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                     transition.updateFrame(node: strongSelf.topStripeNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight)))
-                    transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: layoutSize.width - bottomStripeInset, height: separatorHeight)))
+                    transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: layoutSize.width - bottomStripeInset - params.rightInset - separatorRightInset, height: separatorHeight)))
                     
                     transition.updateFrame(node: strongSelf.titleNode, frame: CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: verticalInset + verticalOffset), size: titleLayout.size))
                     
@@ -355,10 +370,9 @@ class ChatListFilterPresetCategoryItemNode: ItemListRevealOptionsItemNode, ItemL
                         strongSelf.avatarNode.image = updatedAvatarImage
                     }
                     
-                    strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: layout.contentSize.height + UIScreenPixel + UIScreenPixel))
+                    strongSelf.updateRevealOptionsHighlightedBackgroundFrame(strongSelf.highlightedBackgroundNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: layout.contentSize.height + UIScreenPixel + UIScreenPixel)), transition: transition, aboveNodes: [strongSelf.bottomStripeNode, strongSelf.topStripeNode, strongSelf.backgroundNode])
                     
                     strongSelf.backgroundNode.isHidden = false
-                    strongSelf.highlightedBackgroundNode.isHidden = true
                     
                     strongSelf.updateLayout(size: layout.contentSize, leftInset: params.leftInset, rightInset: params.rightInset)
                     
@@ -372,42 +386,11 @@ class ChatListFilterPresetCategoryItemNode: ItemListRevealOptionsItemNode, ItemL
     override func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) {
         super.setHighlighted(highlighted, at: point, animated: animated)
         
-        if highlighted {
-            self.highlightedBackgroundNode.alpha = 1.0
-            if self.highlightedBackgroundNode.supernode == nil {
-                var anchorNode: ASDisplayNode?
-                if self.bottomStripeNode.supernode != nil {
-                    anchorNode = self.bottomStripeNode
-                } else if self.topStripeNode.supernode != nil {
-                    anchorNode = self.topStripeNode
-                } else if self.backgroundNode.supernode != nil {
-                    anchorNode = self.backgroundNode
-                }
-                if let anchorNode = anchorNode {
-                    self.insertSubnode(self.highlightedBackgroundNode, aboveSubnode: anchorNode)
-                } else {
-                    self.addSubnode(self.highlightedBackgroundNode)
-                }
-            }
-        } else {
-            if self.highlightedBackgroundNode.supernode != nil {
-                if animated {
-                    self.highlightedBackgroundNode.layer.animateAlpha(from: self.highlightedBackgroundNode.alpha, to: 0.0, duration: 0.4, completion: { [weak self] completed in
-                        if let strongSelf = self {
-                            if completed {
-                                strongSelf.highlightedBackgroundNode.removeFromSupernode()
-                            }
-                        }
-                        })
-                    self.highlightedBackgroundNode.alpha = 0.0
-                } else {
-                    self.highlightedBackgroundNode.removeFromSupernode()
-                }
-            }
-        }
+        self.isHighlighted = highlighted
+        self.updateRevealOptionsHighlightedBackgroundNode(self.highlightedBackgroundNode, isHighlighted: self.isHighlighted, transition: (animated && !highlighted) ? .animated(duration: 0.3, curve: .easeInOut) : .immediate, aboveNodes: [self.bottomStripeNode, self.topStripeNode, self.backgroundNode])
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
@@ -438,6 +421,12 @@ class ChatListFilterPresetCategoryItemNode: ItemListRevealOptionsItemNode, ItemL
         transition.updateFrame(node: self.titleNode, frame: CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: self.titleNode.frame.minY), size: self.titleNode.bounds.size))
         
         transition.updateFrame(node: self.avatarNode, frame: CGRect(origin: CGPoint(x: revealOffset + editingOffset + params.leftInset + 15.0, y: self.avatarNode.frame.minY), size: self.avatarNode.bounds.size))
+    }
+
+    override func revealOptionsActiveStateUpdated(isActive: Bool, transition: ContainedViewLayoutTransition) {
+        super.revealOptionsActiveStateUpdated(isActive: isActive, transition: transition)
+
+        self.updateRevealOptionsHighlightedBackgroundNode(self.highlightedBackgroundNode, isHighlighted: self.isHighlighted, transition: transition, aboveNodes: [self.bottomStripeNode, self.topStripeNode, self.backgroundNode])
     }
     
     override func revealOptionsInteractivelyOpened() {

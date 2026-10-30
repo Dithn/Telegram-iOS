@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
@@ -19,12 +18,14 @@ private enum CreatePasswordField {
 }
 
 private final class CreatePasswordControllerArguments {
+    let context: AccountContext
     let updateFieldText: (CreatePasswordField, String) -> Void
     let selectNextInputItem: (CreatePasswordEntryTag) -> Void
     let save: () -> Void
     let cancelEmailConfirmation: () -> Void
     
-    init(updateFieldText: @escaping (CreatePasswordField, String) -> Void, selectNextInputItem: @escaping (CreatePasswordEntryTag) -> Void, save: @escaping () -> Void, cancelEmailConfirmation: @escaping () -> Void) {
+    init(context: AccountContext, updateFieldText: @escaping (CreatePasswordField, String) -> Void, selectNextInputItem: @escaping (CreatePasswordEntryTag) -> Void, save: @escaping () -> Void, cancelEmailConfirmation: @escaping () -> Void) {
+        self.context = context
         self.updateFieldText = updateFieldText
         self.selectNextInputItem = selectNextInputItem
         self.save = save
@@ -123,13 +124,13 @@ private enum CreatePasswordEntry: ItemListNodeEntry, Equatable {
             case let .passwordHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
             case let .password(_, _, text, value):
-                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(), text: value, placeholder: text, type: .password, returnKeyType: .next, spacing: 0.0, tag: CreatePasswordEntryTag.password, sectionId: self.section, textUpdated: { updatedText in
+                return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(), text: value, placeholder: text, type: .password, returnKeyType: .next, spacing: 0.0, tag: CreatePasswordEntryTag.password, sectionId: self.section, textUpdated: { updatedText in
                     arguments.updateFieldText(.password, updatedText)
                 }, action: {
                     arguments.selectNextInputItem(CreatePasswordEntryTag.password)
                 })
             case let .passwordConfirmation(_, _, text, value):
-                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(), text: value, placeholder: text, type: .password, returnKeyType: .next, spacing: 0.0, tag: CreatePasswordEntryTag.passwordConfirmation, sectionId: self.section, textUpdated: { updatedText in
+                return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(), text: value, placeholder: text, type: .password, returnKeyType: .next, spacing: 0.0, tag: CreatePasswordEntryTag.passwordConfirmation, sectionId: self.section, textUpdated: { updatedText in
                     arguments.updateFieldText(.passwordConfirmation, updatedText)
                 }, action: {
                     arguments.selectNextInputItem(CreatePasswordEntryTag.passwordConfirmation)
@@ -139,7 +140,7 @@ private enum CreatePasswordEntry: ItemListNodeEntry, Equatable {
             case let .hintHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
             case let .hint(_, _, text, value, last):
-                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(), text: value, placeholder: text, type: .regular(capitalization: true, autocorrection: false), returnKeyType: last ? .done : .next, spacing: 0.0, tag: CreatePasswordEntryTag.hint, sectionId: self.section, textUpdated: { updatedText in
+                return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(), text: value, placeholder: text, type: .regular(capitalization: true, autocorrection: false), returnKeyType: last ? .done : .next, spacing: 0.0, tag: CreatePasswordEntryTag.hint, sectionId: self.section, textUpdated: { updatedText in
                     arguments.updateFieldText(.hint, updatedText)
                 }, action: {
                     if last {
@@ -153,7 +154,7 @@ private enum CreatePasswordEntry: ItemListNodeEntry, Equatable {
             case let .emailHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
             case let .email(_, _, text, value):
-                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(), text: value, placeholder: text, type: .email, returnKeyType: .done, spacing: 0.0, tag: CreatePasswordEntryTag.email, sectionId: self.section, textUpdated: { updatedText in
+                return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(), text: value, placeholder: text, type: .email, returnKeyType: .done, spacing: 0.0, tag: CreatePasswordEntryTag.email, sectionId: self.section, textUpdated: { updatedText in
                     arguments.updateFieldText(.email, updatedText)
                 }, action: {
                     arguments.save()
@@ -163,7 +164,7 @@ private enum CreatePasswordEntry: ItemListNodeEntry, Equatable {
             case let .emailConfirmation(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
             case let .emailCancel(_, text, enabled):
-                return ItemListActionItem(presentationData: presentationData, title: text, kind: enabled ? .generic : .disabled, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: enabled ? .generic : .disabled, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                     arguments.cancelEmailConfirmation()
                 })
         }
@@ -312,7 +313,7 @@ func createPasswordController(context: AccountContext, createPasswordContext: Cr
                 }
                 
                 if emailAlert {
-                    presentControllerImpl?(textAlertController(context: context, title: nil, text: presentationData.strings.TwoStepAuth_EmailSkipAlert, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .destructiveAction, title: presentationData.strings.TwoStepAuth_EmailSkip, action: {
+                    presentControllerImpl?(textAlertController(context: context, title: nil, text: presentationData.strings.TwoStepAuth_EmailSkipAlert, actions: [TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .destructiveAction, title: presentationData.strings.TwoStepAuth_EmailSkip, action: {
                         saveImpl()
                     })]), nil)
                 } else {
@@ -322,7 +323,7 @@ func createPasswordController(context: AccountContext, createPasswordContext: Cr
         }
     }
     
-    let arguments = CreatePasswordControllerArguments(updateFieldText: { field, updatedText in
+    let arguments = CreatePasswordControllerArguments(context: context, updateFieldText: { field, updatedText in
         updateState { state in
             var state = state
             switch field {
@@ -376,7 +377,7 @@ func createPasswordController(context: AccountContext, createPasswordContext: Cr
     let signal = combineLatest(context.sharedContext.presentationData, statePromise.get())
     |> deliverOnMainQueue
     |> map { presentationData, state -> (ItemListControllerState, (ItemListNodeState, Any)) in
-        let leftNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Cancel), style: .regular, enabled: true, action: {
+        let leftNavigationButton = ItemListNavigationButton(content: .icon(.close), style: .regular, enabled: true, action: {
             dismissImpl?()
         })
         var rightNavigationButton: ItemListNavigationButton?
@@ -385,7 +386,7 @@ func createPasswordController(context: AccountContext, createPasswordContext: Cr
         } else {
             switch state.state {
                 case .setup:
-                    rightNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Done), style: .bold, enabled: !state.passwordText.isEmpty, action: {
+                    rightNavigationButton = ItemListNavigationButton(content: .icon(.done), style: .bold, enabled: !state.passwordText.isEmpty, action: {
                         saveImpl()
                     })
                 case .pendingVerification:

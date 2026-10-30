@@ -2,6 +2,9 @@
 
 #import "PGPhotoProcessPass.h"
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 @interface PGPhotoGaussianBlurFilter ()
 {
     GPUImageFramebuffer *_secondOutputFramebuffer;
@@ -53,8 +56,9 @@
             sumOfWeights += 2.0 * standardGaussianWeights[currentGaussianWeightIndex];
     }
     
-    for (NSUInteger currentGaussianWeightIndex = 0; currentGaussianWeightIndex < blurRadius + 1; currentGaussianWeightIndex++)
+    for (NSUInteger currentGaussianWeightIndex = 0; currentGaussianWeightIndex < blurRadius + 1; currentGaussianWeightIndex++) {
         standardGaussianWeights[currentGaussianWeightIndex] = standardGaussianWeights[currentGaussianWeightIndex] / sumOfWeights;
+    }
     
     NSUInteger numberOfOptimizedOffsets = MIN(blurRadius / 2 + (blurRadius % 2), 7U);
     GLfloat *optimizedGaussianOffsets = calloc(numberOfOptimizedOffsets, sizeof(GLfloat));
@@ -495,3 +499,5 @@
 }
 
 @end
+
+#pragma clang diagnostic pop

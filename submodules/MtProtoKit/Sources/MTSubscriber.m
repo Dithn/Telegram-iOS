@@ -1,6 +1,6 @@
 #import <MtProtoKit/MTSubscriber.h>
 
-#import <libkern/OSAtomic.h>
+#import <os/lock.h>
 
 @interface MTSubscriberBlocks : NSObject {
 @public
@@ -28,7 +28,7 @@
 @interface MTSubscriber ()
 {
 @protected
-    OSSpinLock _lock;
+    os_unfair_lock _lock;
     bool _terminated;
     id<MTDisposable> _disposable;
     MTSubscriberBlocks *_blocks;
@@ -51,13 +51,13 @@
 - (void)_assignDisposable:(id<MTDisposable>)disposable
 {
     bool dispose = false;
-    OSSpinLockLock(&_lock);
+    os_unfair_lock_lock(&_lock);
     if (_terminated) {
         dispose = true;
     } else {
         _disposable = disposable;
     }
-    OSSpinLockUnlock(&_lock);
+    os_unfair_lock_unlock(&_lock);
     
     if (dispose) {
         [disposable dispose];
@@ -66,8 +66,9 @@
 
 - (void)_markTerminatedWithoutDisposal
 {
-    OSSpinLockLock(&_lock);
+    os_unfair_lock_lock(&_lock);
     MTSubscriberBlocks *blocks = nil;
+    id<MTDisposable> disposable = _disposable;
     if (!_terminated)
     {
         blocks = _blocks;
@@ -75,10 +76,12 @@
         
         _terminated = true;
     }
-    OSSpinLockUnlock(&_lock);
+    os_unfair_lock_unlock(&_lock);
     
     if (blocks) {
         blocks = nil;
+    }
+    if (disposable) {
     }
 }
 
@@ -86,11 +89,11 @@
 {
     MTSubscriberBlocks *blocks = nil;
     
-    OSSpinLockLock(&_lock);
+    os_unfair_lock_lock(&_lock);
     if (!_terminated) {
         blocks = _blocks;
     }
-    OSSpinLockUnlock(&_lock);
+    os_unfair_lock_unlock(&_lock);
     
     if (blocks && blocks->_next) {
         blocks->_next(next);
@@ -100,9 +103,10 @@
 - (void)putError:(id)error
 {
     bool shouldDispose = false;
+    id<MTDisposable> disposable = nil;
     MTSubscriberBlocks *blocks = nil;
     
-    OSSpinLockLock(&_lock);
+    os_unfair_lock_lock(&_lock);
     if (!_terminated)
     {
         blocks = _blocks;
@@ -111,22 +115,26 @@
         shouldDispose = true;
         _terminated = true;
     }
-    OSSpinLockUnlock(&_lock);
+    disposable = _disposable;
+    _disposable = nil;
+    os_unfair_lock_unlock(&_lock);
     
     if (blocks && blocks->_error) {
         blocks->_error(error);
     }
     
-    if (shouldDispose)
-        [self->_disposable dispose];
+    if (shouldDispose) {
+        [disposable dispose];
+    }
 }
 
 - (void)putCompletion
 {
     bool shouldDispose = false;
+    id<MTDisposable> disposable = nil;
     MTSubscriberBlocks *blocks = nil;
     
-    OSSpinLockLock(&_lock);
+    os_unfair_lock_lock(&_lock);
     if (!_terminated)
     {
         blocks = _blocks;
@@ -135,18 +143,30 @@
         shouldDispose = true;
         _terminated = true;
     }
-    OSSpinLockUnlock(&_lock);
+    disposable = _disposable;
+    _disposable = nil;
+    os_unfair_lock_unlock(&_lock);
     
     if (blocks && blocks->_completed)
         blocks->_completed();
     
-    if (shouldDispose)
-        [self->_disposable dispose];
+    if (shouldDispose) {
+        [disposable dispose];
+    }
 }
 
 - (void)dispose
 {
-    [self->_disposable dispose];
+    id<MTDisposable> disposable = nil;
+    
+    os_unfair_lock_lock(&_lock);
+    disposable = _disposable;
+    _disposable = nil;
+    os_unfair_lock_unlock(&_lock);
+    
+    if (disposable) {
+        [disposable dispose];
+    }
 }
 
 @end

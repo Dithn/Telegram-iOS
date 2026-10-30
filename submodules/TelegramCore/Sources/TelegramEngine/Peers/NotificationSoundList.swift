@@ -1,7 +1,7 @@
 import Foundation
 import SwiftSignalKit
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 public struct NotificationSoundSettings: Equatable {
@@ -104,7 +104,7 @@ public final class NotificationSoundList: Equatable, Codable {
 
 private extension NotificationSoundList.NotificationSound {
     convenience init?(apiDocument: Api.Document) {
-        guard let file = telegramMediaFileFromApiDocument(apiDocument) else {
+        guard let file = telegramMediaFileFromApiDocument(apiDocument, altDocuments: []) else {
             return nil
         }
         self.init(file: file)
@@ -135,7 +135,7 @@ public func _internal_cachedNotificationSoundList(transaction: Transaction) -> N
 
 func _internal_setCachedNotificationSoundList(transaction: Transaction, notificationSoundList: NotificationSoundList) {
     if let entry = CodableEntry(notificationSoundList) {
-        transaction.putItemCacheEntry(id: _internal_cachedNotificationSoundListCacheKey(), entry: entry, collectionSpec: ItemCacheCollectionSpec(lowWaterItemCount: 10, highWaterItemCount: 10))
+        transaction.putItemCacheEntry(id: _internal_cachedNotificationSoundListCacheKey(), entry: entry)
     }
 }
 
@@ -152,7 +152,7 @@ public func ensureDownloadedNotificationSoundList(postbox: Postbox) -> Signal<Ne
             
             for resource in resources {
                 signals.append(
-                    fetchedMediaResource(mediaBox: postbox.mediaBox, reference: .soundList(resource: resource))
+                    fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: .other, userContentType: .file, reference: .soundList(resource: resource))
                     |> ignoreValues
                     |> `catch` { _ -> Signal<Never, NoError> in
                         return .complete()
@@ -180,7 +180,8 @@ func requestNotificationSoundList(network: Network, hash: Int64) -> Signal<Notif
         }
         
         switch result {
-        case let .savedRingtones(hash, ringtones):
+        case let .savedRingtones(savedRingtonesData):
+            let (hash, ringtones) = (savedRingtonesData.hash, savedRingtonesData.ringtones)
             let notificationSoundList = NotificationSoundList(
                 hash: hash,
                 sounds: ringtones.compactMap(NotificationSoundList.NotificationSound.init(apiDocument:))
@@ -207,7 +208,8 @@ private func pollNotificationSoundList(postbox: Postbox, network: Network) -> Si
                         return .complete()
                     }
                     switch result {
-                    case let .savedRingtones(hash, ringtones):
+                    case let .savedRingtones(savedRingtonesData):
+                        let (hash, ringtones) = (savedRingtonesData.hash, savedRingtonesData.ringtones)
                         let notificationSoundList = NotificationSoundList(
                             hash: hash,
                             sounds: ringtones.compactMap(NotificationSoundList.NotificationSound.init(apiDocument:))
@@ -228,7 +230,7 @@ private func pollNotificationSoundList(postbox: Postbox, network: Network) -> Si
                         
                         for resource in resources {
                             signals.append(
-                                fetchedMediaResource(mediaBox: postbox.mediaBox, reference: .soundList(resource: resource))
+                                fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: .other, userContentType: .file, reference: .soundList(resource: resource))
                                 |> ignoreValues
                                 |> `catch` { _ -> Signal<Never, NoError> in
                                     return .complete()
@@ -268,10 +270,11 @@ func _internal_saveNotificationSound(account: Account, file: FileMediaReference,
     guard let resource = file.media.resource as? CloudDocumentMediaResource else {
         return .fail(.generic)
     }
-    return account.network.request(Api.functions.account.saveRingtone(id: .inputDocument(id: resource.fileId, accessHash: resource.accessHash, fileReference: Buffer(data: resource.fileReference)), unsave: unsave ? .boolTrue : .boolFalse))
+    let accountPeerId = account.peerId
+    return account.network.request(Api.functions.account.saveRingtone(id: .inputDocument(.init(id: resource.fileId, accessHash: resource.accessHash, fileReference: Buffer(data: resource.fileReference))), unsave: unsave ? .boolTrue : .boolFalse))
     |> `catch` { error -> Signal<Api.account.SavedRingtone, MTRpcError> in
         if error.errorDescription == "FILE_REFERENCE_EXPIRED" {
-            return revalidateMediaResourceReference(postbox: account.postbox, network: account.network, revalidationContext: account.mediaReferenceRevalidationContext, info: TelegramCloudMediaResourceFetchInfo(reference: file.abstract.resourceReference(file.media.resource), preferBackgroundReferenceRevalidation: false, continueInBackground: false), resource: file.media.resource)
+            return revalidateMediaResourceReference(accountPeerId: accountPeerId, postbox: account.postbox, network: account.network, revalidationContext: account.mediaReferenceRevalidationContext, info: TelegramCloudMediaResourceFetchInfo(reference: file.abstract.resourceReference(file.media.resource), preferBackgroundReferenceRevalidation: false, continueInBackground: false), resource: file.media.resource)
             |> mapError { _ -> MTRpcError in
                 return MTRpcError(errorCode: 500, errorDescription: "Internal")
             }
@@ -279,8 +282,8 @@ func _internal_saveNotificationSound(account: Account, file: FileMediaReference,
                 guard let resource = result.updatedResource as? CloudDocumentMediaResource else {
                     return .fail(MTRpcError(errorCode: 500, errorDescription: "Internal"))
                 }
-                
-                return account.network.request(Api.functions.account.saveRingtone(id: .inputDocument(id: resource.fileId, accessHash: resource.accessHash, fileReference: Buffer(data: resource.fileReference)), unsave: unsave ? .boolTrue : .boolFalse))
+
+                return account.network.request(Api.functions.account.saveRingtone(id: .inputDocument(.init(id: resource.fileId, accessHash: resource.accessHash, fileReference: Buffer(data: resource.fileReference))), unsave: unsave ? .boolTrue : .boolFalse))
             }
         } else {
             return .fail(error)
@@ -300,7 +303,7 @@ public enum UploadNotificationSoundError {
 }
 
 func _internal_uploadNotificationSound(account: Account, title: String, data: Data) -> Signal<NotificationSoundList.NotificationSound, UploadNotificationSoundError> {
-    return multipartUpload(network: account.network, postbox: account.postbox, source: .data(data), encrypt: false, tag: nil, hintFileSize: data.count, hintFileIsLarge: false, forceNoBigParts: true, useLargerParts: false, increaseParallelParts: false, useMultiplexedRequests: false, useCompression: false)
+    return multipartUpload(network: account.network, postbox: account.postbox, source: .data(data), encrypt: false, tag: nil, hintFileSize: Int64(data.count), hintFileIsLarge: false, forceNoBigParts: true, useLargerParts: false, increaseParallelParts: false, useMultiplexedRequests: false, useCompression: false)
     |> mapError { _ -> UploadNotificationSoundError in
         return .generic
     }
@@ -312,7 +315,7 @@ func _internal_uploadNotificationSound(account: Account, title: String, data: Da
                 return .generic
             }
             |> mapToSignal { result -> Signal<NotificationSoundList.NotificationSound, UploadNotificationSoundError> in
-                guard let file = telegramMediaFileFromApiDocument(result) else {
+                guard let file = telegramMediaFileFromApiDocument(result, altDocuments: []) else {
                     return .fail(.generic)
                 }
                 return account.postbox.transaction { transaction -> NotificationSoundList.NotificationSound in
@@ -353,7 +356,7 @@ func _internal_deleteNotificationSound(account: Account, fileId: Int64) -> Signa
             return .fail(.generic)
         }
         
-        return account.network.request(Api.functions.account.saveRingtone(id: .inputDocument(id: resource.fileId, accessHash: resource.accessHash, fileReference: Buffer(data: resource.fileReference)), unsave: .boolTrue))
+        return account.network.request(Api.functions.account.saveRingtone(id: .inputDocument(.init(id: resource.fileId, accessHash: resource.accessHash, fileReference: Buffer(data: resource.fileReference))), unsave: .boolTrue))
         |> mapError { _ -> DeleteNotificationSoundError in
             return .generic
         }

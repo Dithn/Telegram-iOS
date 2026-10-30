@@ -1,163 +1,324 @@
 import Foundation
 import Postbox
-import TelegramApi
+internal import TelegramApi
 
 extension ReactionsMessageAttribute {
     func withUpdatedResults(_ reactions: Api.MessageReactions) -> ReactionsMessageAttribute {
         switch reactions {
-        case let .messageReactions(flags, results, recentReactions):
+        case let .messageReactions(messageReactionsData):
+            let (flags, results, recentReactions, topReactors) = (messageReactionsData.flags, messageReactionsData.results, messageReactionsData.recentReactions, messageReactionsData.topReactors)
             let min = (flags & (1 << 0)) != 0
             let canViewList = (flags & (1 << 2)) != 0
-            var reactions = results.map { result -> MessageReaction in
+            let isTags = (flags & (1 << 3)) != 0
+            var reactions = results.compactMap { result -> MessageReaction? in
                 switch result {
-                case let .reactionCount(flags, reaction, count):
-                    return MessageReaction(value: reaction, count: count, isSelected: (flags & (1 << 0)) != 0)
+                case let .reactionCount(reactionCountData):
+                    let (_, chosenOrder, reaction, count) = (reactionCountData.flags, reactionCountData.chosenOrder, reactionCountData.reaction, reactionCountData.count)
+                    if let reaction = MessageReaction.Reaction(apiReaction: reaction) {
+                        return MessageReaction(value: reaction, count: count, chosenOrder: chosenOrder.flatMap(Int.init))
+                    } else {
+                        return nil
+                    }
                 }
             }
             let parsedRecentReactions: [ReactionsMessageAttribute.RecentPeer]
             if let recentReactions = recentReactions {
-                parsedRecentReactions = recentReactions.map { recentReaction -> ReactionsMessageAttribute.RecentPeer in
+                parsedRecentReactions = recentReactions.compactMap { recentReaction -> ReactionsMessageAttribute.RecentPeer? in
                     switch recentReaction {
-                    case let .messagePeerReaction(flags, peerId, reaction):
+                    case let .messagePeerReaction(messagePeerReactionData):
+                        let (flags, peerId, date, reaction) = (messagePeerReactionData.flags, messagePeerReactionData.peerId, messagePeerReactionData.date, messagePeerReactionData.reaction)
                         let isLarge = (flags & (1 << 0)) != 0
                         let isUnseen = (flags & (1 << 1)) != 0
-                        return ReactionsMessageAttribute.RecentPeer(value: reaction, isLarge: isLarge, isUnseen: isUnseen, peerId: peerId.peerId)
+                        let isMy = (flags & (1 << 2)) != 0
+                        if let reaction = MessageReaction.Reaction(apiReaction: reaction) {
+                            return ReactionsMessageAttribute.RecentPeer(value: reaction, isLarge: isLarge, isUnseen: isUnseen, isMy: isMy, peerId: peerId.peerId, timestamp: date)
+                        } else {
+                            return nil
+                        }
                     }
                 }
             } else {
                 parsedRecentReactions = []
             }
-            
+
             if min {
-                var currentSelectedReaction: String?
+                var currentSelectedReactions: [MessageReaction.Reaction: Int] = [:]
                 for reaction in self.reactions {
-                    if reaction.isSelected {
-                        currentSelectedReaction = reaction.value
+                    if let chosenOrder = reaction.chosenOrder {
+                        currentSelectedReactions[reaction.value] = chosenOrder
                         break
                     }
                 }
-                if let currentSelectedReaction = currentSelectedReaction {
+                if !currentSelectedReactions.isEmpty {
                     for i in 0 ..< reactions.count {
-                        if reactions[i].value == currentSelectedReaction {
-                            reactions[i].isSelected = true
+                        if let chosenOrder = currentSelectedReactions[reactions[i].value] {
+                            reactions[i].chosenOrder = chosenOrder
                         }
                     }
                 }
             }
-            return ReactionsMessageAttribute(canViewList: canViewList, reactions: reactions, recentPeers: parsedRecentReactions)
+            
+            var topPeers: [ReactionsMessageAttribute.TopPeer] = []
+            if let topReactors {
+                for item in topReactors {
+                    switch item {
+                    case let .messageReactor(messageReactorData):
+                        let (flags, peerId, count) = (messageReactorData.flags, messageReactorData.peerId, messageReactorData.count)
+                        topPeers.append(ReactionsMessageAttribute.TopPeer(
+                            peerId: peerId?.peerId,
+                            count: count,
+                            isTop: (flags & (1 << 0)) != 0,
+                            isMy: (flags & (1 << 1)) != 0,
+                            isAnonymous: (flags & (1 << 2)) != 0
+                        ))
+                    }
+                }
+            }
+
+            return ReactionsMessageAttribute(canViewList: canViewList, isTags: isTags, reactions: reactions, recentPeers: parsedRecentReactions, topPeers: topPeers)
         }
     }
 }
 
-public func mergedMessageReactionsAndPeers(message: Message) -> (reactions: [MessageReaction], peers: [(String, EnginePeer)]) {
-    guard let attribute = mergedMessageReactions(attributes: message.attributes) else {
+public func mergedMessageReactionsAndPeers(accountPeerId: EnginePeer.Id, accountPeer: EnginePeer?, message: Message) -> (reactions: [MessageReaction], peers: [(MessageReaction.Reaction, EnginePeer)]) {
+    guard let attribute = mergedMessageReactions(attributes: message.attributes, isTags: message.areReactionsTags(accountPeerId: accountPeerId)) else {
         return ([], [])
     }
     
-    var recentPeers = attribute.recentPeers.compactMap { recentPeer -> (String, EnginePeer)? in
-        if let peer = message.peers[recentPeer.peerId] {
-            return (recentPeer.value, EnginePeer(peer))
-        } else {
-            return nil
+    var recentPeers: [(MessageReaction.Reaction, EnginePeer)] = []
+    
+    if message.id.peerId.namespace == Namespaces.Peer.CloudUser {
+        for reaction in attribute.reactions {
+            var selfCount: Int32 = 0
+            if reaction.isSelected {
+                selfCount += 1
+                if let accountPeer = accountPeer {
+                    recentPeers.append((reaction.value, accountPeer))
+                }
+            }
+            if reaction.count >= selfCount + 1 {
+                if let peer = message.peers[message.id.peerId] {
+                    recentPeers.append((reaction.value, EnginePeer(peer)))
+                }
+            }
+        }
+    } else {
+        recentPeers = attribute.recentPeers.compactMap { recentPeer -> (MessageReaction.Reaction, EnginePeer)? in
+            if let peer = message.peers[recentPeer.peerId] {
+                return (recentPeer.value, EnginePeer(peer))
+            } else {
+                return nil
+            }
+        }
+        if let channel = message.peers[message.id.peerId] as? TelegramChannel, case .broadcast = channel.info {
+            recentPeers.removeAll()
         }
     }
-    if let channel = message.peers[message.id.peerId] as? TelegramChannel, case .broadcast = channel.info {
-        recentPeers.removeAll()
-    }
     
-    return (attribute.reactions, recentPeers)
+    let reactions = attribute.reactions
+    
+    return (reactions, recentPeers)
 }
 
-public func mergedMessageReactions(attributes: [MessageAttribute]) -> ReactionsMessageAttribute? {
+private func mergeReactions(reactions: [MessageReaction], recentPeers: [ReactionsMessageAttribute.RecentPeer], pending: [PendingReactionsMessageAttribute.PendingReaction], accountPeerId: PeerId) -> ([MessageReaction], [ReactionsMessageAttribute.RecentPeer]) {
+    var result = reactions
+    var recentPeers = recentPeers
+    
+    var pendingIndex: Int = Int(Int32.max - 100)
+    for pendingReaction in pending {
+        if let index = result.firstIndex(where: { $0.value == pendingReaction.value }) {
+            var merged = result[index]
+            if merged.chosenOrder == nil {
+                merged.chosenOrder = pendingIndex
+                pendingIndex += 1
+                merged.count += 1
+            }
+            result[index] = merged
+        } else {
+            result.append(MessageReaction(value: pendingReaction.value, count: 1, chosenOrder: pendingIndex))
+            pendingIndex += 1
+        }
+        
+        let pendingReactionSendAsPeerId = pendingReaction.sendAsPeerId ?? accountPeerId
+        
+        if let index = recentPeers.firstIndex(where: {
+            $0.value == pendingReaction.value && ($0.peerId == pendingReactionSendAsPeerId || $0.isMy)
+        }) {
+            recentPeers.remove(at: index)
+        }
+        recentPeers.append(ReactionsMessageAttribute.RecentPeer(value: pendingReaction.value, isLarge: false, isUnseen: false, isMy: true, peerId: pendingReactionSendAsPeerId, timestamp: Int32(CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970)))
+    }
+    
+    for i in (0 ..< result.count).reversed() {
+        if result[i].chosenOrder != nil {
+            if !pending.contains(where: { $0.value == result[i].value }), result[i].value != .stars {
+                if let index = recentPeers.firstIndex(where: { $0.value == result[i].value && ($0.peerId == accountPeerId || $0.isMy) }) {
+                    recentPeers.remove(at: index)
+                }
+                
+                if result[i].count <= 1 {
+                    result.remove(at: i)
+                } else {
+                    result[i].count -= 1
+                    result[i].chosenOrder = nil
+                }
+            }
+        }
+    }
+    
+    if recentPeers.count > 3 {
+        recentPeers.removeFirst(recentPeers.count - 3)
+    }
+    
+    return (result, recentPeers)
+}
+
+public func mergedMessageReactions(attributes: [MessageAttribute], isTags: Bool) -> ReactionsMessageAttribute? {
     var current: ReactionsMessageAttribute?
     var pending: PendingReactionsMessageAttribute?
+    var pendingStars: PendingStarsReactionsMessageAttribute?
     for attribute in attributes {
         if let attribute = attribute as? ReactionsMessageAttribute {
             current = attribute
         } else if let attribute = attribute as? PendingReactionsMessageAttribute {
             pending = attribute
+        } else if let attribute = attribute as? PendingStarsReactionsMessageAttribute {
+            pendingStars = attribute
         }
     }
     
-    if let pending = pending {
+    let result: ReactionsMessageAttribute?
+    if let pending = pending, let accountPeerId = pending.accountPeerId {
         var reactions = current?.reactions ?? []
         var recentPeers = current?.recentPeers ?? []
-        if let value = pending.value {
-            var found = false
-            for i in 0 ..< reactions.count {
-                if reactions[i].value == value {
-                    found = true
-                    if !reactions[i].isSelected {
-                        reactions[i].isSelected = true
-                        reactions[i].count += 1
-                    }
-                }
-            }
-            if !found {
-                reactions.append(MessageReaction(value: value, count: 1, isSelected: true))
-            }
-        }
-        if let accountPeerId = pending.accountPeerId {
-            for i in 0 ..< recentPeers.count {
-                if recentPeers[i].peerId == accountPeerId {
-                    recentPeers.remove(at: i)
-                    break
-                }
-            }
-            if let value = pending.value {
-                recentPeers.append(ReactionsMessageAttribute.RecentPeer(value: value, isLarge: false, isUnseen: false, peerId: accountPeerId))
-            }
-        }
-        for i in (0 ..< reactions.count).reversed() {
-            if reactions[i].isSelected, pending.value != reactions[i].value {
-                if reactions[i].count == 1 {
-                    reactions.remove(at: i)
-                } else {
-                    reactions[i].isSelected = false
-                    reactions[i].count -= 1
-                }
-            }
-        }
+        
+        let (updatedReactions, updatedRecentPeers) = mergeReactions(reactions: reactions, recentPeers: recentPeers, pending: pending.reactions, accountPeerId: accountPeerId)
+        reactions = updatedReactions
+        recentPeers = updatedRecentPeers
+        
         if !reactions.isEmpty {
-            return ReactionsMessageAttribute(canViewList: current?.canViewList ?? false, reactions: reactions, recentPeers: recentPeers)
+            result = ReactionsMessageAttribute(canViewList: current?.canViewList ?? false, isTags: current?.isTags ?? isTags, reactions: reactions, recentPeers: recentPeers, topPeers: current?.topPeers ?? [])
         } else {
-            return nil
+            result = nil
         }
-    } else if let current = current {
-        return current
+    } else if let current {
+        result = current
     } else {
-        return nil
+        result = nil
+    }
+    
+    if let pendingStars {
+        if let result {
+            var reactions = result.reactions
+            var updatedCount: Int32 = pendingStars.count
+            if let index = reactions.firstIndex(where: { $0.value == .stars }) {
+                updatedCount += reactions[index].count
+                reactions.remove(at: index)
+            }
+            var topPeers = result.topPeers
+            if let index = topPeers.firstIndex(where: { $0.isMy }) {
+                topPeers[index].count += pendingStars.count
+            } else {
+                let isAnonymous: Bool
+                let topPeerId: PeerId?
+                switch pendingStars.privacy {
+                case .anonymous:
+                    isAnonymous = true
+                    topPeerId = pendingStars.accountPeerId
+                case .default:
+                    isAnonymous = false
+                    topPeerId = pendingStars.accountPeerId
+                case let .peer(peerId):
+                    isAnonymous = false
+                    topPeerId = peerId
+                }
+                
+                topPeers.append(ReactionsMessageAttribute.TopPeer(peerId: topPeerId, count: pendingStars.count, isTop: false, isMy: true, isAnonymous: isAnonymous))
+            }
+            reactions.insert(MessageReaction(value: .stars, count: updatedCount, chosenOrder: -1), at: 0)
+            return ReactionsMessageAttribute(canViewList: current?.canViewList ?? false, isTags: current?.isTags ?? isTags, reactions: reactions, recentPeers: result.recentPeers, topPeers: topPeers)
+        } else {
+            let isAnonymous: Bool
+            let topPeerId: PeerId?
+            switch pendingStars.privacy {
+            case .anonymous:
+                isAnonymous = true
+                topPeerId = pendingStars.accountPeerId
+            case .default:
+                isAnonymous = false
+                topPeerId = pendingStars.accountPeerId
+            case let .peer(peerId):
+                isAnonymous = false
+                topPeerId = peerId
+            }
+            
+            return ReactionsMessageAttribute(canViewList: current?.canViewList ?? false, isTags: current?.isTags ?? isTags, reactions: [MessageReaction(value: .stars, count: pendingStars.count, chosenOrder: -1)], recentPeers: [], topPeers: [ReactionsMessageAttribute.TopPeer(peerId: topPeerId, count: pendingStars.count, isTop: false, isMy: true, isAnonymous: isAnonymous)])
+        }
+    } else {
+        return result
     }
 }
 
 extension ReactionsMessageAttribute {
     convenience init(apiReactions: Api.MessageReactions) {
         switch apiReactions {
-        case let .messageReactions(flags, results, recentReactions):
+        case let .messageReactions(messageReactionsData):
+            let (flags, results, recentReactions, topReactors) = (messageReactionsData.flags, messageReactionsData.results, messageReactionsData.recentReactions, messageReactionsData.topReactors)
             let canViewList = (flags & (1 << 2)) != 0
+            let isTags = (flags & (1 << 3)) != 0
             let parsedRecentReactions: [ReactionsMessageAttribute.RecentPeer]
             if let recentReactions = recentReactions {
-                parsedRecentReactions = recentReactions.map { recentReaction -> ReactionsMessageAttribute.RecentPeer in
+                parsedRecentReactions = recentReactions.compactMap { recentReaction -> ReactionsMessageAttribute.RecentPeer? in
                     switch recentReaction {
-                    case let .messagePeerReaction(flags, peerId, reaction):
+                    case let .messagePeerReaction(messagePeerReactionData):
+                        let (flags, peerId, date, reaction) = (messagePeerReactionData.flags, messagePeerReactionData.peerId, messagePeerReactionData.date, messagePeerReactionData.reaction)
                         let isLarge = (flags & (1 << 0)) != 0
                         let isUnseen = (flags & (1 << 1)) != 0
-                        return ReactionsMessageAttribute.RecentPeer(value: reaction, isLarge: isLarge, isUnseen: isUnseen, peerId: peerId.peerId)
+                        let isMy = (flags & (1 << 2)) != 0
+                        if let reaction = MessageReaction.Reaction(apiReaction: reaction) {
+                            return ReactionsMessageAttribute.RecentPeer(value: reaction, isLarge: isLarge, isUnseen: isUnseen, isMy: isMy, peerId: peerId.peerId, timestamp: date)
+                        } else {
+                            return nil
+                        }
                     }
                 }
             } else {
                 parsedRecentReactions = []
             }
-            
+
+            var topPeers: [ReactionsMessageAttribute.TopPeer] = []
+            if let topReactors {
+                for item in topReactors {
+                    switch item {
+                    case let .messageReactor(messageReactorData):
+                        let (flags, peerId, count) = (messageReactorData.flags, messageReactorData.peerId, messageReactorData.count)
+                        topPeers.append(ReactionsMessageAttribute.TopPeer(
+                            peerId: peerId?.peerId,
+                            count: count,
+                            isTop: (flags & (1 << 0)) != 0,
+                            isMy: (flags & (1 << 1)) != 0,
+                            isAnonymous: (flags & (1 << 2)) != 0
+                        ))
+                    }
+                }
+            }
+
             self.init(
                 canViewList: canViewList,
-                reactions: results.map { result in
+                isTags: isTags,
+                reactions: results.compactMap { result -> MessageReaction? in
                     switch result {
-                    case let .reactionCount(flags, reaction, count):
-                        return MessageReaction(value: reaction, count: count, isSelected: (flags & (1 << 0)) != 0)
+                    case let .reactionCount(reactionCountData):
+                        let (_, chosenOrder, reaction, count) = (reactionCountData.flags, reactionCountData.chosenOrder, reactionCountData.reaction, reactionCountData.count)
+                        if let reaction = MessageReaction.Reaction(apiReaction: reaction) {
+                            return MessageReaction(value: reaction, count: count, chosenOrder: chosenOrder.flatMap(Int.init))
+                        } else {
+                            return nil
+                        }
                     }
                 },
-                recentPeers: parsedRecentReactions
+                recentPeers: parsedRecentReactions,
+                topPeers: topPeers
             )
         }
     }

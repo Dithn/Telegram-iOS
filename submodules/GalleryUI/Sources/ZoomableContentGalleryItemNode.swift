@@ -3,7 +3,7 @@ import UIKit
 import Display
 import AsyncDisplayKit
 
-open class ZoomableContentGalleryItemNode: GalleryItemNode, UIScrollViewDelegate {
+open class ZoomableContentGalleryItemNode: GalleryItemNode, ASScrollViewDelegate {
     public let scrollNode: ASScrollNode
     
     private var containerLayout: ContainerViewLayout?
@@ -34,7 +34,7 @@ open class ZoomableContentGalleryItemNode: GalleryItemNode, UIScrollViewDelegate
     
         super.init()
         
-        self.scrollNode.view.delegate = self
+        self.scrollNode.view.delegate = self.wrappedScrollViewDelegate
         self.scrollNode.view.showsVerticalScrollIndicator = false
         self.scrollNode.view.showsHorizontalScrollIndicator = false
         self.scrollNode.view.clipsToBounds = false
@@ -59,6 +59,14 @@ open class ZoomableContentGalleryItemNode: GalleryItemNode, UIScrollViewDelegate
         self.addSubnode(self.scrollNode)
     }
     
+    open func contentTapAction() -> Bool {
+        return false
+    }
+    
+    open func contentDoubleTapAction(location: CGPoint) -> Bool {
+        return false
+    }
+    
     @objc open func contentTap(_ recognizer: TapLongTapOrDoubleTapGestureRecognizer) {
         if recognizer.state == .ended {
             if let (gesture, location) = recognizer.lastRecognizedGestureAndLocation {
@@ -67,8 +75,15 @@ open class ZoomableContentGalleryItemNode: GalleryItemNode, UIScrollViewDelegate
                 } else {
                     switch gesture {
                         case .tap:
+                            if self.contentTapAction() {
+                                return
+                            }
                             self.toggleControlsVisibility()
                         case .doubleTap:
+                            if self.contentDoubleTapAction(location: pointInNode) {
+                                return
+                            }
+                        
                             if let contentView = self.zoomableContent?.1.view, self.scrollNode.view.zoomScale.isLessThanOrEqualTo(self.scrollNode.view.minimumZoomScale) {
                                 let pointInView = self.scrollNode.view.convert(location, to: contentView)
                                 

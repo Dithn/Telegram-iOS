@@ -24,7 +24,10 @@ swift_library(
         "//submodules/WebPBinding:WebPBinding",
         "//submodules/AppBundle:AppBundle",
         "//submodules/MusicAlbumArtResources:MusicAlbumArtResources",
-        "//submodules/Svg:Svg",
+        "//submodules/Svg/LegacyImpl",
+        "//submodules/Utils/RangeSet:RangeSet",
+        "//submodules/ImageCompression",
+        "//submodules/PassRenderer:PassRenderer",
     ],
     visibility = [
         "//visibility:public",

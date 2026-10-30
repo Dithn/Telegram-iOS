@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 private func _internal_updateInvitationRequest(account: Account, peerId: PeerId, userId: PeerId, approve: Bool) -> Signal<Never, NoError> {
@@ -44,7 +44,7 @@ func _internal_revokePersistentPeerExportedInvitation(account: Account, peerId: 
         if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
             let flags: Int32 = (1 << 2)
             if let _ = peer as? TelegramChannel {
-                return account.network.request(Api.functions.messages.exportChatInvite(flags: flags, peer: inputPeer, expireDate: nil, usageLimit: nil, title: nil))
+                return account.network.request(Api.functions.messages.exportChatInvite(flags: flags, peer: inputPeer, expireDate: nil, usageLimit: nil, title: nil, subscriptionPricing: nil))
                 |> retryRequest
                 |> mapToSignal { result -> Signal<ExportedInvitation?, NoError> in
                     return account.postbox.transaction { transaction -> ExportedInvitation? in
@@ -61,7 +61,7 @@ func _internal_revokePersistentPeerExportedInvitation(account: Account, peerId: 
                     }
                 }
             } else if let _ = peer as? TelegramGroup {
-                return account.network.request(Api.functions.messages.exportChatInvite(flags: flags, peer: inputPeer, expireDate: nil, usageLimit: nil, title: nil))
+                return account.network.request(Api.functions.messages.exportChatInvite(flags: flags, peer: inputPeer, expireDate: nil, usageLimit: nil, title: nil, subscriptionPricing: nil))
                 |> retryRequest
                 |> mapToSignal { result -> Signal<ExportedInvitation?, NoError> in
                     return account.postbox.transaction { transaction -> ExportedInvitation? in
@@ -90,7 +90,7 @@ public enum CreatePeerExportedInvitationError {
     case generic
 }
 
-func _internal_createPeerExportedInvitation(account: Account, peerId: PeerId, title: String?, expireDate: Int32?, usageLimit: Int32?, requestNeeded: Bool?) -> Signal<ExportedInvitation?, CreatePeerExportedInvitationError> {
+func _internal_createPeerExportedInvitation(account: Account, peerId: PeerId, title: String?, expireDate: Int32?, usageLimit: Int32?, requestNeeded: Bool?, subscriptionPricing: StarsSubscriptionPricing?) -> Signal<ExportedInvitation?, CreatePeerExportedInvitationError> {
     return account.postbox.transaction { transaction -> Signal<ExportedInvitation?, CreatePeerExportedInvitationError> in
         if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
             var flags: Int32 = 0
@@ -106,7 +106,10 @@ func _internal_createPeerExportedInvitation(account: Account, peerId: PeerId, ti
             if let _ = title {
                 flags |= (1 << 4)
             }
-            return account.network.request(Api.functions.messages.exportChatInvite(flags: flags, peer: inputPeer, expireDate: expireDate, usageLimit: usageLimit, title: title))
+            if let _ = subscriptionPricing {
+                flags |= (1 << 5)
+            }
+            return account.network.request(Api.functions.messages.exportChatInvite(flags: flags, peer: inputPeer, expireDate: expireDate, usageLimit: usageLimit, title: title, subscriptionPricing: subscriptionPricing?.apiStarsSubscriptionPricing))
             |> mapError { _ in return CreatePeerExportedInvitationError.generic }
             |> map { result -> ExportedInvitation? in
                 return ExportedInvitation(apiExportedInvite: result)
@@ -124,6 +127,7 @@ public enum EditPeerExportedInvitationError {
 }
 
 func _internal_editPeerExportedInvitation(account: Account, peerId: PeerId, link: String, title: String?, expireDate: Int32?, usageLimit: Int32?, requestNeeded: Bool?) -> Signal<ExportedInvitation?, EditPeerExportedInvitationError> {
+    let accountPeerId = account.peerId
     return account.postbox.transaction { transaction -> Signal<ExportedInvitation?, EditPeerExportedInvitationError> in
         if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
             var flags: Int32 = 0
@@ -143,15 +147,9 @@ func _internal_editPeerExportedInvitation(account: Account, peerId: PeerId, link
             |> mapError { _ in return EditPeerExportedInvitationError.generic }
             |> mapToSignal { result -> Signal<ExportedInvitation?, EditPeerExportedInvitationError> in
                 return account.postbox.transaction { transaction in
-                    if case let .exportedChatInvite(invite, users) = result {
-                        var peers: [Peer] = []
-                        for user in users {
-                            let telegramUser = TelegramUser(user: user)
-                            peers.append(telegramUser)
-                        }
-                        updatePeers(transaction: transaction, peers: peers, update: { _, updated -> Peer in
-                            return updated
-                        })
+                    if case let .exportedChatInvite(exportedChatInviteData) = result {
+                        let (invite, users) = (exportedChatInviteData.invite, exportedChatInviteData.users)
+                        updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: AccumulatedPeers(users: users))
                         return ExportedInvitation(apiExportedInvite: invite)
                     } else {
                         return nil
@@ -176,6 +174,7 @@ public enum RevokeExportedInvitationResult {
 }
 
 func _internal_revokePeerExportedInvitation(account: Account, peerId: PeerId, link: String) -> Signal<RevokeExportedInvitationResult?, RevokePeerExportedInvitationError> {
+    let accountPeerId = account.peerId
     return account.postbox.transaction { transaction -> Signal<RevokeExportedInvitationResult?, RevokePeerExportedInvitationError> in
         if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
             let flags: Int32 = (1 << 2)
@@ -183,25 +182,13 @@ func _internal_revokePeerExportedInvitation(account: Account, peerId: PeerId, li
             |> mapError { _ in return RevokePeerExportedInvitationError.generic }
             |> mapToSignal { result -> Signal<RevokeExportedInvitationResult?, RevokePeerExportedInvitationError> in
                 return account.postbox.transaction { transaction in
-                    if case let .exportedChatInvite(invite, users) = result {
-                        var peers: [Peer] = []
-                        for user in users {
-                            let telegramUser = TelegramUser(user: user)
-                            peers.append(telegramUser)
-                        }
-                        updatePeers(transaction: transaction, peers: peers, update: { _, updated -> Peer in
-                            return updated
-                        })
+                    if case let .exportedChatInvite(exportedChatInviteData) = result {
+                        let (invite, users) = (exportedChatInviteData.invite, exportedChatInviteData.users)
+                        updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: AccumulatedPeers(users: users))
                         return .update(ExportedInvitation(apiExportedInvite: invite))
-                    } else if case let .exportedChatInviteReplaced(invite, newInvite, users) = result {
-                        var peers: [Peer] = []
-                        for user in users {
-                            let telegramUser = TelegramUser(user: user)
-                            peers.append(telegramUser)
-                        }
-                        updatePeers(transaction: transaction, peers: peers, update: { _, updated -> Peer in
-                            return updated
-                        })
+                    } else if case let .exportedChatInviteReplaced(exportedChatInviteReplacedData) = result {
+                        let (invite, newInvite, users) = (exportedChatInviteReplacedData.invite, exportedChatInviteReplacedData.newInvite, exportedChatInviteReplacedData.users)
+                        updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: AccumulatedPeers(users: users))
                         
                         let previous = ExportedInvitation(apiExportedInvite: invite)
                         let new = ExportedInvitation(apiExportedInvite: newInvite)
@@ -242,6 +229,7 @@ public struct ExportedInvitations : Equatable {
 }
 
 func _internal_peerExportedInvitations(account: Account, peerId: PeerId, revoked: Bool, adminId: PeerId? = nil, offsetLink: ExportedInvitation? = nil) -> Signal<ExportedInvitations?, NoError> {
+    let accountPeerId = account.peerId
     return account.postbox.transaction { transaction -> Signal<ExportedInvitations?, NoError> in
         if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer), let adminPeer = transaction.getPeer(adminId ?? account.peerId), let adminId = apiInputUser(adminPeer) {
             var flags: Int32 = 0
@@ -258,17 +246,10 @@ func _internal_peerExportedInvitations(account: Account, peerId: PeerId, revoked
             }
             |> mapToSignal { result -> Signal<ExportedInvitations?, NoError> in
                 return account.postbox.transaction { transaction -> ExportedInvitations? in
-                    if let result = result, case let .exportedChatInvites(count, apiInvites, users) = result {
-                        var peers: [Peer] = []
-                        var peersMap: [PeerId: Peer] = [:]
-                        for user in users {
-                            let telegramUser = TelegramUser(user: user)
-                            peers.append(telegramUser)
-                            peersMap[telegramUser.id] = telegramUser
-                        }
-                        updatePeers(transaction: transaction, peers: peers, update: { _, updated -> Peer in
-                            return updated
-                        })
+                    if let result = result, case let .exportedChatInvites(exportedChatInvitesData) = result {
+                        let (count, apiInvites, users) = (exportedChatInvitesData.count, exportedChatInvitesData.invites, exportedChatInvitesData.users)
+                        let parsedPeers = AccumulatedPeers(transaction: transaction, chats: [], users: users)
+                        updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: parsedPeers)
                         
                         let invites = apiInvites.map { ExportedInvitation(apiExportedInvite: $0) }
                         return ExportedInvitations(list: invites, totalCount: count)
@@ -316,8 +297,6 @@ func _internal_deleteAllRevokedPeerExportedInvitations(account: Account, peerId:
     }
     |> switchToLatest
 }
-
-private let cachedPeerExportedInvitationsCollectionSpec = ItemCacheCollectionSpec(lowWaterItemCount: 10, highWaterItemCount: 20)
 
 public struct PeerExportedInvitationsState: Equatable {
     public var invitations: [ExportedInvitation]
@@ -449,6 +428,7 @@ private final class PeerExportedInvitationsContextImpl {
         }
         self.isLoadingMore = true
         let account = self.account
+        let accountPeerId = account.peerId
         let peerId = self.peerId
         let adminId = self.adminId
         let revoked = self.revoked
@@ -489,18 +469,13 @@ private final class PeerExportedInvitationsContextImpl {
                             return ([], 0)
                         }
                         switch result {
-                        case let .exportedChatInvites(count, invites, users):
-                            var peers: [Peer] = []
-                            for apiUser in users {
-                                peers.append(TelegramUser(user: apiUser))
-                            }
-                            updatePeers(transaction: transaction, peers: peers, update: { _, updated in
-                                return updated
-                            })
+                        case let .exportedChatInvites(exportedChatInvitesData):
+                            let (count, invites, users) = (exportedChatInvitesData.count, exportedChatInvitesData.invites, exportedChatInvitesData.users)
+                            updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: AccumulatedPeers(users: users))
                             let invitations: [ExportedInvitation] = invites.compactMap { ExportedInvitation(apiExportedInvite: $0) }
                             if populateCache {
                                 if let entry = CodableEntry(CachedPeerExportedInvitations(invitations: invitations, canLoadMore: count >= 50, count: count)) {
-                                    transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedPeerExportedInvitations, key: CachedPeerExportedInvitations.key(peerId: peerId, revoked: revoked)), entry: entry, collectionSpec: cachedPeerExportedInvitationsCollectionSpec)
+                                    transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedPeerExportedInvitations, key: CachedPeerExportedInvitations.key(peerId: peerId, revoked: revoked)), entry: entry)
                                 }
                             }
                             return (invitations, count)
@@ -590,7 +565,7 @@ private final class PeerExportedInvitationsContextImpl {
         let count = self.count
         self.updateDisposable.set(self.account.postbox.transaction({ transaction in
             if let entry = CodableEntry(CachedPeerExportedInvitations(invitations: invitations, canLoadMore: canLoadMore, count: count)) {
-                transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedPeerExportedInvitations, key: CachedPeerExportedInvitations.key(peerId: peerId, revoked: revoked)), entry: entry, collectionSpec: cachedPeerExportedInvitationsCollectionSpec)
+                transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedPeerExportedInvitations, key: CachedPeerExportedInvitations.key(peerId: peerId, revoked: revoked)), entry: entry)
             }
         }).start())
     }
@@ -660,16 +635,21 @@ public final class PeerExportedInvitationsContext {
     }
 }
 
-
-
-private let cachedPeerInvitationImportersCollectionSpec = ItemCacheCollectionSpec(lowWaterItemCount: 10, highWaterItemCount: 20)
-
 public struct PeerInvitationImportersState: Equatable {
     public struct Importer: Equatable {
         public var peer: RenderedPeer
         public var date: Int32
         public var about: String?
         public var approvedBy: PeerId?
+        public var joinedViaFolderLink: Bool
+        
+        public init(peer: RenderedPeer, date: Int32, about: String? = nil, approvedBy: PeerId? = nil, joinedViaFolderLink: Bool) {
+            self.peer = peer
+            self.date = date
+            self.about = about
+            self.approvedBy = approvedBy
+            self.joinedViaFolderLink = joinedViaFolderLink
+        }
     }
     public var importers: [Importer]
     public var isLoadingMore: Bool
@@ -714,6 +694,7 @@ final class CachedPeerInvitationImporters: Codable {
     let peerIds: [PeerId]
     let dates: [PeerId: Int32]
     let abouts: [PeerId: String]
+    let joinedViaFolderLink: [PeerId: Bool]
     let count: Int32
     
     static func key(peerId: PeerId, link: String, requested: Bool) -> ValueBoxKey {
@@ -733,13 +714,17 @@ final class CachedPeerInvitationImporters: Codable {
                 $0[$1.peer.peerId] = about
             }
         }
+        self.joinedViaFolderLink = importers.reduce(into: [PeerId: Bool]()) {
+            $0[$1.peer.peerId] = $1.joinedViaFolderLink
+        }
         self.count = count
     }
     
-    init(peerIds: [PeerId], dates: [PeerId: Int32], abouts: [PeerId: String], count: Int32) {
+    init(peerIds: [PeerId], dates: [PeerId: Int32], abouts: [PeerId: String], joinedViaFolderLink: [PeerId: Bool], count: Int32) {
         self.peerIds = peerIds
         self.dates = dates
         self.abouts = abouts
+        self.joinedViaFolderLink = joinedViaFolderLink
         self.count = count
     }
     
@@ -757,6 +742,16 @@ final class CachedPeerInvitationImporters: Codable {
             dates[peerId] = Int32(clamping: date)
         }
         self.dates = dates
+        
+        var joinedViaFolderLink: [PeerId: Bool] = [:]
+        let joinedViaFolderLinkArray = try container.decode([Int64].self, forKey: "joinedViaFolderLink")
+        for index in stride(from: 0, to: joinedViaFolderLinkArray.endIndex, by: 2) {
+            let userId = datesArray[index]
+            let value = datesArray[index + 1]
+            let peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))
+            joinedViaFolderLink[peerId] = value != 0
+        }
+        self.joinedViaFolderLink = joinedViaFolderLink
         
         var abouts: [PeerId: String] = [:]
         let aboutsArray = try container.decodeIfPresent([DictionaryPair].self, forKey: "abouts")
@@ -782,6 +777,13 @@ final class CachedPeerInvitationImporters: Codable {
             dates.append(Int64(date))
         }
         try container.encode(dates, forKey: "dates")
+        
+        var joinedViaFolderLink: [Int64] = []
+        for (peerId, value) in self.joinedViaFolderLink {
+            joinedViaFolderLink.append(peerId.id._internalGetInt64Value())
+            joinedViaFolderLink.append(Int64(value ? 1 : 0))
+        }
+        try container.encode(joinedViaFolderLink, forKey: "joinedViaFolderLink")
         
         var abouts: [DictionaryPair] = []
         for (peerId, about) in self.abouts {
@@ -831,7 +833,7 @@ private final class PeerInvitationImportersContextImpl {
         
         var link: String?
         var count: Int32 = 0
-        if let invite = invite, case let .link(inviteLink, _, _, _, _, _, _, _, _, _, inviteCount, _) = invite {
+        if let invite = invite, case let .link(inviteLink, _, _, _, _, _, _, _, _, _, inviteCount, _, _) = invite {
             link = inviteLink
             if let inviteCount = inviteCount {
                 count = inviteCount
@@ -853,7 +855,7 @@ private final class PeerInvitationImportersContextImpl {
                 var result: [PeerInvitationImportersState.Importer] = []
                 for peerId in cachedResult.peerIds {
                     if let peer = transaction.getPeer(peerId), let date = cachedResult.dates[peerId] {
-                        result.append(PeerInvitationImportersState.Importer(peer: RenderedPeer(peer: peer), date: date, about: cachedResult.abouts[peerId]))
+                        result.append(PeerInvitationImportersState.Importer(peer: RenderedPeer(peer: peer), date: date, about: cachedResult.abouts[peerId], joinedViaFolderLink: cachedResult.joinedViaFolderLink[peerId] ?? false))
                     } else {
                         return nil
                     }
@@ -899,6 +901,7 @@ private final class PeerInvitationImportersContextImpl {
         }
         self.isLoadingMore = true
         let account = self.account
+        let accountPeerId = account.peerId
         let peerId = self.peerId
         let link = self.link
         let populateCache = self.populateCache
@@ -950,34 +953,32 @@ private final class PeerInvitationImportersContextImpl {
                             return ([], 0)
                         }
                         switch result {
-                        case let .chatInviteImporters(count, importers, users):
-                            var peers: [Peer] = []
-                            for apiUser in users {
-                                peers.append(TelegramUser(user: apiUser))
-                            }
-                            updatePeers(transaction: transaction, peers: peers, update: { _, updated in
-                                return updated
-                            })
+                        case let .chatInviteImporters(chatInviteImportersData):
+                            let (count, importers, users) = (chatInviteImportersData.count, chatInviteImportersData.importers, chatInviteImportersData.users)
+                            updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: AccumulatedPeers(users: users))
                             var resultImporters: [PeerInvitationImportersState.Importer] = []
                             for importer in importers {
                                 let peerId: PeerId
                                 let date: Int32
                                 let about: String?
                                 let approvedBy: PeerId?
+                                let joinedViaFolderLink: Bool
                                 switch importer {
-                                    case let .chatInviteImporter(_, userId, dateValue, aboutValue, approvedByValue):
+                                    case let .chatInviteImporter(chatInviteImporterData):
+                                        let (flags, userId, dateValue, aboutValue, approvedByValue) = (chatInviteImporterData.flags, chatInviteImporterData.userId, chatInviteImporterData.date, chatInviteImporterData.about, chatInviteImporterData.approvedBy)
+                                        joinedViaFolderLink = (flags & (1 << 3)) != 0
                                         peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))
                                         date = dateValue
                                         about = aboutValue
                                         approvedBy = approvedByValue.flatMap { PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value($0)) }
                                 }
                                 if let peer = transaction.getPeer(peerId) {
-                                    resultImporters.append(PeerInvitationImportersState.Importer(peer: RenderedPeer(peer: peer), date: date, about: about, approvedBy: approvedBy))
+                                    resultImporters.append(PeerInvitationImportersState.Importer(peer: RenderedPeer(peer: peer), date: date, about: about, approvedBy: approvedBy, joinedViaFolderLink: joinedViaFolderLink))
                                 }
                             }
                             if populateCache && query == nil {
                                 if let entry = CodableEntry(CachedPeerInvitationImporters(importers: resultImporters, count: count)) {
-                                    transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedPeerInvitationImporters, key: CachedPeerInvitationImporters.key(peerId: peerId, link: link ?? "requests", requested: self.requested)), entry: entry, collectionSpec: cachedPeerInvitationImportersCollectionSpec)
+                                    transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedPeerInvitationImporters, key: CachedPeerInvitationImporters.key(peerId: peerId, link: link ?? "requests", requested: self.requested)), entry: entry)
                                 }
                             }
                             return (resultImporters, count)
@@ -1031,7 +1032,7 @@ private final class PeerInvitationImportersContextImpl {
             self.updateDisposables.add(self.account.postbox.transaction({ transaction in
                 let peer = transaction.getPeer(self.peerId)
                 if let peer = peer as? TelegramGroup {
-                    updatePeers(transaction: transaction, peers: [peer], update: { current, _ in
+                    updatePeersCustom(transaction: transaction, peers: [peer], update: { current, _ in
                         var updated = current
                         if let current = current as? TelegramGroup {
                             updated = current.updateParticipantCount(current.participantCount + 1)
@@ -1073,7 +1074,7 @@ private final class PeerInvitationImportersContextImpl {
         let link = self.link
         self.updateDisposables.add(self.account.postbox.transaction({ transaction in
             if let entry = CodableEntry(CachedPeerInvitationImporters(importers: resultImporters, count: count)) {
-                transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedPeerInvitationImporters, key: CachedPeerInvitationImporters.key(peerId: peerId, link: link ?? "requests", requested: self.requested)), entry: entry, collectionSpec: cachedPeerInvitationImportersCollectionSpec)
+                transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedPeerInvitationImporters, key: CachedPeerInvitationImporters.key(peerId: peerId, link: link ?? "requests", requested: self.requested)), entry: entry)
             }
         }).start())
     }
@@ -1148,6 +1149,7 @@ public struct ExportedInvitationCreator : Equatable {
 }
 
 func _internal_peerExportedInvitationsCreators(account: Account, peerId: PeerId) -> Signal<[ExportedInvitationCreator], NoError> {
+    let accountPeerId = account.peerId
     return account.postbox.transaction { transaction -> Signal<[ExportedInvitationCreator], NoError> in
         if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
             var isCreator = false
@@ -1166,29 +1168,24 @@ func _internal_peerExportedInvitationsCreators(account: Account, peerId: PeerId)
                 }
                 |> mapToSignal { result -> Signal<[ExportedInvitationCreator], NoError> in
                     return account.postbox.transaction { transaction -> [ExportedInvitationCreator] in
-                        if let result = result, case let .chatAdminsWithInvites(admins, users) = result {
+                        if let result = result, case let .chatAdminsWithInvites(chatAdminsWithInvitesData) = result {
+                            let (admins, users) = (chatAdminsWithInvitesData.admins, chatAdminsWithInvitesData.users)
                             var creators: [ExportedInvitationCreator] = []
-                            var peers: [Peer] = []
-                            var peersMap: [PeerId: Peer] = [:]
-                            for user in users {
-                                let telegramUser = TelegramUser(user: user)
-                                peers.append(telegramUser)
-                                peersMap[telegramUser.id] = telegramUser
-                            }
+                            
+                            let parsedPeers = AccumulatedPeers(transaction: transaction, chats: [], users: users)
                             
                             for admin in admins {
                                 switch admin {
-                                case let .chatAdminWithInvites(adminId, invitesCount, revokedInvitesCount):
+                                case let .chatAdminWithInvites(chatAdminWithInvitesData):
+                                    let (adminId, invitesCount, revokedInvitesCount) = (chatAdminWithInvitesData.adminId, chatAdminWithInvitesData.invitesCount, chatAdminWithInvitesData.revokedInvitesCount)
                                     let peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(adminId))
-                                    if let peer = peersMap[peerId], peerId != account.peerId {
+                                    if let peer = parsedPeers.get(peerId), peerId != account.peerId {
                                         creators.append(ExportedInvitationCreator(peer: RenderedPeer(peer: peer), count: invitesCount, revokedCount: revokedInvitesCount))
                                     }
                                 }
                             }
                             
-                            updatePeers(transaction: transaction, peers: peers, update: { _, updated -> Peer in
-                                return updated
-                            })
+                            updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: parsedPeers)
                             
                             return creators
                         } else {

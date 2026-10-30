@@ -54,7 +54,7 @@ public final class DeviceLocationManager: NSObject {
         
         self.manager.delegate = self
         self.manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
-        self.manager.distanceFilter = 5.0
+        self.manager.distanceFilter = kCLDistanceFilterNone
         self.manager.activityType = .other
         self.manager.pausesLocationUpdatesAutomatically = false
         self.manager.headingFilter = 2.0
@@ -104,19 +104,19 @@ public final class DeviceLocationManager: NSObject {
             self.currentTopMode = topMode
             if let topMode = topMode {
                 self.log?("setting mode \(topMode)")
+                switch topMode {
+                case .preciseForeground:
+                    self.manager.allowsBackgroundLocationUpdates = false
+                case .preciseAlways:
+                    self.manager.allowsBackgroundLocationUpdates = true
+                }
+                
                 if previousTopMode == nil {
                     if !self.requestedAuthorization {
                         self.requestedAuthorization = true
                         self.manager.requestAlwaysAuthorization()
                     }
-                    
-                    switch topMode {
-                    case .preciseForeground:
-                        self.manager.allowsBackgroundLocationUpdates = false
-                    case .preciseAlways:
-                        self.manager.allowsBackgroundLocationUpdates = true
-                    }
-                    
+
                     self.manager.startUpdatingLocation()
                     self.manager.startUpdatingHeading()
                 }

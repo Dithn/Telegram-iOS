@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import TelegramCore
-import Postbox
 import Display
 import TelegramPresentationData
 import TelegramUIPreferences
@@ -100,21 +99,21 @@ private let tableCellInsets = UIEdgeInsets(top: 14.0, left: 12.0, bottom: 14.0, 
 private let tableBorderWidth: CGFloat = 1.0
 private let tableCornerRadius: CGFloat = 5.0
 
-final class InstantPageTableItem: InstantPageScrollableItem {
-    var frame: CGRect
+public final class InstantPageTableItem: InstantPageScrollableItem {
+    public var frame: CGRect
     let totalWidth: CGFloat
-    let horizontalInset: CGFloat
-    let medias: [InstantPageMedia] = []
-    let wantsNode: Bool = true
-    let separatesTiles: Bool = false
+    public let horizontalInset: CGFloat
+    public let medias: [InstantPageMedia] = []
+    public let wantsNode: Bool = true
+    public let separatesTiles: Bool = false
     
     let theme: InstantPageTheme
     
-    let isRTL: Bool
+    public let isRTL: Bool
     fileprivate let cells: [InstantPageTableCellItem]
     private let borderWidth: CGFloat
     
-    let anchors: [String: (CGFloat, Bool)]
+    public let anchors: [String: (CGFloat, Bool)]
     
     fileprivate init(frame: CGRect, totalWidth: CGFloat, horizontalInset: CGFloat, borderWidth: CGFloat, theme: InstantPageTheme, cells: [InstantPageTableCellItem], rtl: Bool) {
         self.frame = frame
@@ -140,72 +139,84 @@ final class InstantPageTableItem: InstantPageScrollableItem {
         self.anchors = anchors
     }
     
-    var contentSize: CGSize {
+    public var contentSize: CGSize {
         return CGSize(width: self.totalWidth, height: self.frame.height)
     }
     
-    func drawInTile(context: CGContext) {
+    public func drawInTile(context: CGContext) {
+        let hasBorder = self.borderWidth > 0.0
+
+        if hasBorder {
+            context.setStrokeColor(self.theme.tableBorderColor.cgColor)
+            context.setLineWidth(self.borderWidth)
+        }
+        context.setFillColor(self.theme.tableHeaderColor.cgColor)
+
+        let borderPath = CGMutablePath()
+
         for cell in self.cells {
-            if cell.cell.text == nil {
-                continue
-            }
             context.saveGState()
             context.translateBy(x: cell.frame.minX, y: cell.frame.minY)
-            
-            let hasBorder = self.borderWidth > 0.0
+
             let bounds = CGRect(origin: CGPoint(), size: cell.frame.size)
             var path: UIBezierPath?
             if !cell.adjacentSides.isEmpty {
                 path = UIBezierPath(roundedRect: bounds, byRoundingCorners: cell.adjacentSides.uiRectCorner, cornerRadii: CGSize(width: tableCornerRadius, height: tableCornerRadius))
             }
-            if cell.filled {
-                context.setFillColor(self.theme.tableHeaderColor.cgColor)
-            }
-            if self.borderWidth > 0.0 {
-                context.setStrokeColor(self.theme.tableBorderColor.cgColor)
-                context.setLineWidth(borderWidth)
-            }
-            if let path = path {
-                context.addPath(path.cgPath)
-                var drawMode: CGPathDrawingMode?
-                switch (cell.filled, hasBorder) {
-                    case (true, false):
-                        drawMode = .fill
-                    case (true, true):
-                        drawMode = .fillStroke
-                    case (false, true):
-                        drawMode = .stroke
-                    default:
-                        break
-                }
-                if let drawMode = drawMode {
-                    context.drawPath(using: drawMode)
-                }
-            } else {
-                if cell.filled {
+
+            if cell.filled && cell.cell.text != nil {
+                if let path = path {
+                    context.addPath(path.cgPath)
+                    context.fillPath()
+                } else {
                     context.fill(bounds)
                 }
-                if hasBorder {
-                    context.stroke(bounds)
-                }
             }
+
             if let textItem = cell.textItem {
                 textItem.drawInTile(context: context)
             }
+
             context.restoreGState()
+
+            if hasBorder {
+                if !cell.adjacentSides.contains(.top) {
+                    borderPath.move(to: CGPoint(x: cell.frame.minX, y: cell.frame.minY))
+                    borderPath.addLine(to: CGPoint(x: cell.frame.maxX, y: cell.frame.minY))
+                }
+                if !cell.adjacentSides.contains(.left) {
+                    borderPath.move(to: CGPoint(x: cell.frame.minX, y: cell.frame.minY))
+                    borderPath.addLine(to: CGPoint(x: cell.frame.minX, y: cell.frame.maxY))
+                }
+            }
+        }
+
+        if hasBorder && self.totalWidth > 0.0 {
+            let outerRect = CGRect(
+                x: self.borderWidth / 2.0,
+                y: self.borderWidth / 2.0,
+                width: self.totalWidth - self.borderWidth,
+                height: self.frame.height - self.borderWidth
+            )
+            borderPath.addPath(UIBezierPath(roundedRect: outerRect, cornerRadius: tableCornerRadius).cgPath)
+        }
+
+        if hasBorder {
+            context.addPath(borderPath)
+            context.strokePath()
         }
     }
     
-    func matchesAnchor(_ anchor: String) -> Bool {
+    public func matchesAnchor(_ anchor: String) -> Bool {
         return false
     }
     
-    func node(context: AccountContext, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, theme: InstantPageTheme, sourcePeerType: MediaAutoDownloadPeerType, openMedia: @escaping (InstantPageMedia) -> Void, longPressMedia: @escaping (InstantPageMedia) -> Void, activatePinchPreview: ((PinchSourceContainerNode) -> Void)?, pinchPreviewFinished: ((InstantPageNode) -> Void)?, openPeer: @escaping (PeerId) -> Void, openUrl: @escaping (InstantPageUrlItem) -> Void, updateWebEmbedHeight: @escaping (CGFloat) -> Void, updateDetailsExpanded: @escaping (Bool) -> Void, currentExpandedDetails: [Int : Bool]?) -> InstantPageNode? {
+    public func node(context: AccountContext, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, theme: InstantPageTheme, sourceLocation: InstantPageSourceLocation, openMedia: @escaping (InstantPageMedia) -> Void, longPressMedia: @escaping (InstantPageMedia) -> Void, activatePinchPreview: ((PinchSourceContainerNode) -> Void)?, pinchPreviewFinished: ((InstantPageNode) -> Void)?, openPeer: @escaping (EnginePeer) -> Void, openUrl: @escaping (InstantPageUrlItem) -> Void, updateWebEmbedHeight: @escaping (CGFloat) -> Void, updateDetailsExpanded: @escaping (Bool) -> Void, currentExpandedDetails: [Int : Bool]?, getPreloadedResource: @escaping (String) -> Data?) -> InstantPageNode? {
         var additionalNodes: [InstantPageNode] = []
         for cell in self.cells {
             for item in cell.additionalItems {
                 if item.wantsNode {
-                    if let node = item.node(context: context, strings: strings, nameDisplayOrder: nameDisplayOrder, theme: theme, sourcePeerType: sourcePeerType, openMedia: { _ in }, longPressMedia: { _ in }, activatePinchPreview: nil, pinchPreviewFinished: nil, openPeer: { _ in }, openUrl: { _ in}, updateWebEmbedHeight: { _ in }, updateDetailsExpanded: { _ in }, currentExpandedDetails: nil) {
+                    if let node = item.node(context: context, strings: strings, nameDisplayOrder: nameDisplayOrder, theme: theme, sourceLocation: sourceLocation, openMedia: { _ in }, longPressMedia: { _ in }, activatePinchPreview: nil, pinchPreviewFinished: nil, openPeer: { _ in }, openUrl: { _ in}, updateWebEmbedHeight: { _ in }, updateDetailsExpanded: { _ in }, currentExpandedDetails: nil, getPreloadedResource: getPreloadedResource) {
                         node.frame = item.frame.offsetBy(dx: cell.frame.minX, dy: cell.frame.minY)
                         additionalNodes.append(node)
                     }
@@ -215,22 +226,22 @@ final class InstantPageTableItem: InstantPageScrollableItem {
         return InstantPageScrollableNode(item: self, additionalNodes: additionalNodes)
     }
     
-    func matchesNode(_ node: InstantPageNode) -> Bool {
+    public func matchesNode(_ node: InstantPageNode) -> Bool {
         if let node = node as? InstantPageScrollableNode {
             return node.item === self
         }
         return false
     }
     
-    func distanceThresholdGroup() -> Int? {
+    public func distanceThresholdGroup() -> Int? {
         return nil
     }
     
-    func distanceThresholdWithGroupCount(_ count: Int) -> CGFloat {
+    public func distanceThresholdWithGroupCount(_ count: Int) -> CGFloat {
         return 0.0
     }
     
-    func linkSelectionRects(at point: CGPoint) -> [CGRect] {
+    public func linkSelectionRects(at point: CGPoint) -> [CGRect] {
         for cell in self.cells {
             if let item = cell.textItem, item.selectable, item.frame.insetBy(dx: -tableCellInsets.left, dy: -tableCellInsets.top).contains(point.offsetBy(dx: -cell.frame.minX - self.horizontalInset, dy: -cell.frame.minY)) {
                 let rects = item.linkSelectionRects(at: point.offsetBy(dx: -cell.frame.minX - self.horizontalInset - item.frame.minX, dy: -cell.frame.minY - item.frame.minY))
@@ -240,7 +251,7 @@ final class InstantPageTableItem: InstantPageScrollableItem {
         return []
     }
     
-    func textItemAtLocation(_ location: CGPoint) -> (InstantPageTextItem, CGPoint)? {
+    public func textItemAtLocation(_ location: CGPoint) -> (InstantPageTextItem, CGPoint)? {
         for cell in self.cells {
             if let item = cell.textItem, item.selectable, item.frame.insetBy(dx: -tableCellInsets.left, dy: -tableCellInsets.top).contains(location.offsetBy(dx: -cell.frame.minX - self.horizontalInset, dy: -cell.frame.minY)) {
                 return (item, cell.frame.origin.offsetBy(dx: self.horizontalInset, dy: 0.0))
@@ -277,7 +288,7 @@ private func offestForVerticalAlignment(_ verticalAlignment: TableVerticalAlignm
     }
 }
 
-func layoutTableItem(rtl: Bool, rows: [InstantPageTableRow], styleStack: InstantPageTextStyleStack, theme: InstantPageTheme, bordered: Bool, striped: Bool, boundingWidth: CGFloat, horizontalInset: CGFloat, media: [MediaId: Media], webpage: TelegramMediaWebpage) -> InstantPageTableItem {
+func layoutTableItem(rtl: Bool, rows: [InstantPageTableRow], styleStack: InstantPageTextStyleStack, theme: InstantPageTheme, bordered: Bool, striped: Bool, boundingWidth: CGFloat, horizontalInset: CGFloat, media: [EngineMedia.Id: EngineMedia], webpage: TelegramMediaWebpage) -> InstantPageTableItem {
     if rows.count == 0 {
         return InstantPageTableItem(frame: CGRect(), totalWidth: 0.0, horizontalInset: 0.0,  borderWidth: 0.0, theme: theme, cells: [], rtl: rtl)
     }

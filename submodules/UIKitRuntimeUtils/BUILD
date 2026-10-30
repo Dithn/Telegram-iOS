@@ -1,4 +1,6 @@
 
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
 objc_library(
     name = "UIKitRuntimeUtils",
     enable_modules = True,
@@ -13,15 +15,16 @@ objc_library(
         "Source/UIKitRuntimeUtils/*.h",
     ]),
     includes = [
-      #"Source",
+      "Source",
     ],
     deps = [
-      "//submodules/AsyncDisplayKit:AsyncDisplayKit",
-      "//submodules/ObjCRuntimeUtils:ObjCRuntimeUtils",
+      "//submodules/AsyncDisplayKit",
+      "//submodules/ObjCRuntimeUtils",
     ],
     sdk_frameworks = [
       "Foundation",
       "UIKit",
+      "WebKit",
     ],
     visibility = [
         "//visibility:public",

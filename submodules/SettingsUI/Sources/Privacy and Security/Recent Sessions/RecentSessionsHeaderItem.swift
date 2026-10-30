@@ -1,4 +1,5 @@
 import Foundation
+import LottieSettings
 import UIKit
 import Display
 import AsyncDisplayKit
@@ -12,6 +13,9 @@ import AccountContext
 import Markdown
 import TextFormat
 import SolidRoundedButtonNode
+import ComponentFlow
+import ButtonComponent
+import BundleIconComponent
 
 class RecentSessionsHeaderItem: ListViewItem, ItemListItem {
     let context: AccountContext
@@ -32,10 +36,10 @@ class RecentSessionsHeaderItem: ListViewItem, ItemListItem {
         self.linkAction = linkAction
     }
     
-    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
-            let node = RecentSessionsHeaderItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let node = RecentSessionsHeaderItemNode(lottieSettings: self.context.lottieRenderingSettings)
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -48,7 +52,7 @@ class RecentSessionsHeaderItem: ListViewItem, ItemListItem {
         }
     }
     
-    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             guard let nodeValue = node() as? RecentSessionsHeaderItemNode else {
                 assertionFailure()
@@ -58,7 +62,7 @@ class RecentSessionsHeaderItem: ListViewItem, ItemListItem {
             let makeLayout = nodeValue.asyncLayout()
             
             async {
-                let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+                let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
                 Queue.mainQueue().async {
                     completion(layout, { _ in
                         apply()
@@ -69,30 +73,34 @@ class RecentSessionsHeaderItem: ListViewItem, ItemListItem {
     }
 }
 
-private let titleFont = Font.regular(13.0)
+private let titleFont = Font.regular(14.0)
 
 class RecentSessionsHeaderItemNode: ListViewItemNode {
     private let titleNode: TextNode
     private var animationNode: AnimatedStickerNode
     private let buttonNode: SolidRoundedButtonNode
+    private let button = ComponentView<Empty>()
     
     private var item: RecentSessionsHeaderItem?
     
-    init() {
+    private let lottieSettings: LottieRenderingSettings
+
+    init(lottieSettings: LottieRenderingSettings) {
+        self.lottieSettings = lottieSettings
         self.titleNode = TextNode()
         self.titleNode.isUserInteractionEnabled = true
         self.titleNode.contentMode = .left
         self.titleNode.contentsScale = UIScreen.main.scale
         
-        self.animationNode = AnimatedStickerNode()
+        self.animationNode = DefaultAnimatedStickerNodeImpl(lottieSettings: lottieSettings)
         
         self.buttonNode = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(backgroundColor: .black, foregroundColor: .white), fontSize: 16.0, height: 50.0, cornerRadius: 11.0)
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
         
         self.addSubnode(self.titleNode)
         self.addSubnode(self.animationNode)
-        self.addSubnode(self.buttonNode)
+        //self.addSubnode(self.buttonNode)
     }
     
     override public func didLoad() {
@@ -115,21 +123,20 @@ class RecentSessionsHeaderItemNode: ListViewItemNode {
         let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
         let currentItem = self.item
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             var updatedTheme: PresentationTheme?
             
-            let leftInset: CGFloat = 32.0 + params.leftInset
             let topInset: CGFloat = 124.0
             
             if currentItem?.theme !== item.theme {
                 updatedTheme = item.theme
             }
             
-            let attributedText = parseMarkdownIntoAttributedString(item.text, attributes: MarkdownAttributes(body: MarkdownAttributeSet(font: titleFont, textColor: item.theme.list.freeTextColor), bold: MarkdownAttributeSet(font: titleFont, textColor: item.theme.list.freeTextColor), link: MarkdownAttributeSet(font: titleFont, textColor: item.theme.list.itemAccentColor), linkAttribute: { contents in
+            let attributedText = parseMarkdownIntoAttributedString(item.text, attributes: MarkdownAttributes(body: MarkdownAttributeSet(font: titleFont, textColor: item.theme.list.itemPrimaryTextColor), bold: MarkdownAttributeSet(font: titleFont, textColor: item.theme.list.itemPrimaryTextColor), link: MarkdownAttributeSet(font: titleFont, textColor: item.theme.list.itemAccentColor), linkAttribute: { contents in
                 return (TelegramTextAttributes.URL, contents)
             }))
                 
-            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: attributedText, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - params.rightInset - leftInset * 2.0, height: CGFloat.greatestFiniteMagnitude), alignment: .center, cutout: nil, insets: UIEdgeInsets()))
+            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: attributedText, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - params.leftInset - params.rightInset - min(params.leftInset, params.rightInset) - 64.0, height: CGFloat.greatestFiniteMagnitude), alignment: .center, lineSpacing: 0.2, cutout: nil, insets: UIEdgeInsets()))
             
             let contentSize = CGSize(width: params.width, height: topInset + titleLayout.size.height + 69.0)
             let insets = itemListNeighborsGroupedInsets(neighbors, params)
@@ -143,7 +150,7 @@ class RecentSessionsHeaderItemNode: ListViewItemNode {
                         strongSelf.animationNode.setup(source: AnimatedStickerNodeLocalFileSource(name: item.animationName), width: 256, height: 256, playbackMode: .still(.start), mode: .direct(cachePathPrefix: nil))
                         strongSelf.animationNode.visibility = true
                         Queue.mainQueue().after(0.3) {
-                            strongSelf.animationNode.play()
+                            strongSelf.animationNode.play(firstFrame: false, fromIndex: nil)
                         }
                     }
                     strongSelf.item = item
@@ -154,26 +161,60 @@ class RecentSessionsHeaderItemNode: ListViewItemNode {
                         strongSelf.buttonNode.updateTheme(SolidRoundedButtonTheme(theme: item.theme))
                     }
                     
-                    let inset = max(16.0, params.leftInset)
-                    let buttonWidth = min(375, contentSize.width - inset - inset)
-                    let buttonHeight = strongSelf.buttonNode.updateLayout(width: buttonWidth, transition: .immediate)
-                    let buttonFrame = CGRect(x: floorToScreenPixels((params.width - buttonWidth) / 2.0), y: contentSize.height - buttonHeight + 4.0, width: buttonWidth, height: buttonHeight)
+                    let buttonSideInset: CGFloat = 16.0
+                    let buttonWidth = min(375, contentSize.width - buttonSideInset * 2.0 - abs(params.leftInset - params.rightInset))
+                    let buttonHeight = 52.0
+                    let buttonFrame = CGRect(x: params.leftInset + floorToScreenPixels((params.width - params.leftInset - params.rightInset - buttonWidth) / 2.0), y: contentSize.height - buttonHeight + 4.0, width: buttonWidth, height: buttonHeight)
                     strongSelf.buttonNode.frame = buttonFrame
+                    
+                    let _ = strongSelf.button.update(
+                        transition: .immediate,
+                        component: AnyComponent(ButtonComponent(
+                            background: ButtonComponent.Background(
+                                style: .glass,
+                                color: item.theme.list.itemCheckColors.fillColor,
+                                foreground: item.theme.list.itemCheckColors.foregroundColor,
+                                pressedColor: item.theme.list.itemCheckColors.fillColor.withMultipliedAlpha(0.9)
+                            ),
+                            content: AnyComponentWithIdentity(
+                                id: "button",
+                                component: AnyComponent(
+                                    HStack([
+                                        AnyComponentWithIdentity(id: "icon", component: AnyComponent(BundleIconComponent(name: "Settings/QrButtonIcon", tintColor: item.theme.list.itemCheckColors.foregroundColor))),
+                                        AnyComponentWithIdentity(id: "label", component: AnyComponent(
+                                            Text(text: item.context.sharedContext.currentPresentationData.with { $0 }.strings.AuthSessions_LinkDesktopDevice, font: Font.semibold(17.0), color: item.theme.list.itemCheckColors.foregroundColor)
+                                        ))
+                                    ], spacing: 6.0)
+                                )
+                            ),
+                            action: {
+                                item.buttonAction()
+                            }
+                        )),
+                        environment: {},
+                        containerSize: CGSize(width: buttonWidth, height: buttonHeight)
+                    )
+                    if let buttonView = strongSelf.button.view {
+                        if buttonView.superview == nil {
+                            strongSelf.view.addSubview(buttonView)
+                        }
+                        buttonView.frame = buttonFrame
+                    }
                     
                     strongSelf.accessibilityLabel = attributedText.string
                                         
                     let iconSize = CGSize(width: 128.0, height: 128.0)
-                    strongSelf.animationNode.frame = CGRect(origin: CGPoint(x: floor((layout.size.width - iconSize.width) / 2.0), y: -10.0), size: iconSize)
+                    strongSelf.animationNode.frame = CGRect(origin: CGPoint(x: params.leftInset + floor((layout.size.width - params.leftInset - params.rightInset - iconSize.width) / 2.0), y: -10.0), size: iconSize)
                     strongSelf.animationNode.updateLayout(size: iconSize)
                     
                     let _ = titleApply()
-                    strongSelf.titleNode.frame = CGRect(origin: CGPoint(x: floor((layout.size.width - titleLayout.size.width) / 2.0), y: topInset + 8.0), size: titleLayout.size)
+                    strongSelf.titleNode.frame = CGRect(origin: CGPoint(x: params.leftInset + floor((layout.size.width - params.leftInset - params.rightInset - titleLayout.size.width) / 2.0), y: topInset + 8.0), size: titleLayout.size)
                 }
             })
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     

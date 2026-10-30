@@ -4,6 +4,9 @@
 
 #import "LegacyComponentsInternal.h"
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 NSString *const PGPhotoFilterDefinitionsShaderString = PGShaderString
 (
  precision highp float;
@@ -98,7 +101,6 @@ NSString *const PGPhotoFilterMainShaderString = PGShaderString
     
     GLubyte *imageData = NULL;
     CFDataRef dataFromImageDataProvider = NULL;
-    GLenum format = GL_BGRA;
     
     if (!redrawNeeded)
     {
@@ -136,10 +138,6 @@ NSString *const PGPhotoFilterMainShaderString = PGShaderString
                         alphaInfo != kCGImageAlphaNoneSkipLast)
                     {
                         redrawNeeded = true;
-                    } else
-                    {
-                        /* Can access directly using GL_RGBA pixel format */
-                        format = GL_RGBA;
                     }
                 }
             }
@@ -152,7 +150,7 @@ NSString *const PGPhotoFilterMainShaderString = PGShaderString
         
         CGColorSpaceRef genericRGBColorspace = CGColorSpaceCreateDeviceRGB();
         
-        CGContextRef imageContext = CGBitmapContextCreate(imageData, (size_t)imageSize.width, (size_t)imageSize.height, 8, (size_t)imageSize.width * 4, genericRGBColorspace,  kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
+        CGContextRef imageContext = CGBitmapContextCreate(imageData, (size_t)imageSize.width, (size_t)imageSize.height, 8, (size_t)imageSize.width * 4, genericRGBColorspace,  ((uint32_t)kCGBitmapByteOrder32Little) | ((uint32_t)kCGImageAlphaPremultipliedFirst));
         
         CGSize imageDrawSize = CGSizeMake(imageSize.width, imageSize.height);
         if (image.imageOrientation == UIImageOrientationLeft || image.imageOrientation == UIImageOrientationRight)
@@ -427,3 +425,5 @@ NSString *const PGPhotoFilterMainShaderString = PGShaderString
 }
 
 @end
+
+#pragma clang diagnostic pop

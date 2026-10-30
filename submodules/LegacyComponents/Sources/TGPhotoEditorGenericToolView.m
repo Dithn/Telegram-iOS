@@ -3,9 +3,9 @@
 #import "LegacyComponentsInternal.h"
 
 #import <LegacyComponents/UIControl+HitTestEdgeInsets.h>
-#import "TGPhotoEditorInterfaceAssets.h"
+#import <LegacyComponents/TGPhotoEditorInterfaceAssets.h>
 
-#import "TGPhotoEditorSliderView.h"
+#import <LegacyComponents/TGPhotoEditorSliderView.h>
 
 @interface TGPhotoEditorGenericToolView ()
 {
@@ -45,6 +45,7 @@
         _explicit = explicit;
         
         _sliderView = [[TGPhotoEditorSliderView alloc] initWithFrame:CGRectZero];
+        _sliderView.enablePanHandling = true;
         if (editorItem.segmented)
             _sliderView.positionsCount = (NSInteger)editorItem.maximumValue + 1;
         _sliderView.minimumValue = editorItem.minimumValue;

@@ -80,9 +80,9 @@ private func venueIconData(engine: TelegramEngine, resource: VenueIconResource) 
 private let randomColors = [UIColor(rgb: 0xe56cd5), UIColor(rgb: 0xf89440), UIColor(rgb: 0x9986ff), UIColor(rgb: 0x44b3f5), UIColor(rgb: 0x6dc139), UIColor(rgb: 0xff5d5a), UIColor(rgb: 0xf87aad), UIColor(rgb: 0x6e82b3), UIColor(rgb: 0xf5ba21)]
 
 private let venueColors: [String: UIColor] = [
-    "building/medical": UIColor(rgb: 0x43b3f4),
-    "building/gym": UIColor(rgb: 0x43b3f4),
-    "arts_entertainment": UIColor(rgb: 0xe56dd6),
+    "building/medical": UIColor(rgb: 0x43b3f4), // light blue?
+    "building/gym": UIColor(rgb: 0x43b3f4), // light blue?
+    "arts_entertainment": UIColor(rgb: 0xaf52de), // purple
     "travel/bedandbreakfast": UIColor(rgb: 0x9987ff),
     "travel/hotel": UIColor(rgb: 0x9987ff),
     "travel/hostel": UIColor(rgb: 0x9987ff),
@@ -90,11 +90,11 @@ private let venueColors: [String: UIColor] = [
     "building": UIColor(rgb: 0x6e81b2),
     "education": UIColor(rgb: 0xa57348),
     "event": UIColor(rgb: 0x959595),
-    "food": UIColor(rgb: 0xf7943f),
-    "education/cafeteria": UIColor(rgb: 0xf7943f),
-    "nightlife": UIColor(rgb: 0xe56dd6),
-    "travel/hotel_bar": UIColor(rgb: 0xe56dd6),
-    "parks_outdoors": UIColor(rgb: 0x6cc039),
+    "food": UIColor(rgb: 0xff9500), // orange
+    "education/cafeteria": UIColor(rgb: 0xff9500), // orange
+    "nightlife": UIColor(rgb: 0xaf52de), // purple
+    "travel/hotel_bar": UIColor(rgb: 0xaf52de), // purple
+    "parks_outdoors": UIColor(rgb: 0x6cc138), // green
     "shops": UIColor(rgb: 0xffb300),
     "travel": UIColor(rgb: 0x1c9fff),
     "work": UIColor(rgb: 0xad7854),
@@ -134,12 +134,14 @@ public struct VenueIconArguments: TransformImageCustomArguments {
     }
 }
 
-public func venueIcon(engine: TelegramEngine, type: String, background: Bool) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError> {
-    let isBuiltinIcon = ["", "home", "work"].contains(type)
+public func venueIcon(engine: TelegramEngine, type: String, flag: String? = nil, background: Bool) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError> {
+    let isBuiltinIcon = ["", "home", "work"].contains(type) || flag != nil
     let data: Signal<Data?, NoError> = isBuiltinIcon ? .single(nil) : venueIconData(engine: engine, resource: VenueIconResource(type: type))
     return data |> map { data in
         return { arguments in
-            let context = DrawingContext(size: arguments.drawingSize, clear: true)
+            guard let context = DrawingContext(size: arguments.drawingSize, clear: true) else {
+                return nil
+            }
             
             var iconImage: UIImage?
             if let data = data, let image = UIImage(data: data) {
@@ -148,7 +150,7 @@ public func venueIcon(engine: TelegramEngine, type: String, background: Bool) ->
             
             let backgroundColor: UIColor
             let foregroundColor: UIColor
-            if type.isEmpty, let customArguments = arguments.custom as? VenueIconArguments {
+            if type.isEmpty || type == "building/default", let customArguments = arguments.custom as? VenueIconArguments {
                 backgroundColor = customArguments.defaultBackgroundColor
                 foregroundColor = customArguments.defaultForegroundColor
             } else {
@@ -162,7 +164,18 @@ public func venueIcon(engine: TelegramEngine, type: String, background: Bool) ->
                     c.fillEllipse(in: CGRect(origin: CGPoint(), size: arguments.drawingRect.size))
                 }
                 let boundsSize = CGSize(width: arguments.drawingRect.size.width - 4.0 * 2.0, height: arguments.drawingRect.size.height - 4.0 * 2.0)
-                if let image = iconImage, let cgImage = generateTintedImage(image: image, color: foregroundColor)?.cgImage {
+                if let flag {
+                    let attributedString = NSAttributedString(string: flag, attributes: [NSAttributedString.Key.font: Font.regular(22.0), NSAttributedString.Key.foregroundColor: UIColor.white])
+                    
+                    let line = CTLineCreateWithAttributedString(attributedString)
+                    let lineBounds = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+                    
+                    let bounds = CGRect(origin: .zero, size: boundsSize)
+                    let lineOrigin = CGPoint(x: floorToScreenPixels((bounds.size.width - lineBounds.size.width) / 2.0), y: floorToScreenPixels((bounds.size.height - lineBounds.size.height) / 2.0))
+                    
+                    c.translateBy(x: lineOrigin.x + 3.0, y: lineOrigin.y + 7.0)
+                    CTLineDraw(line, c)
+                } else if let image = iconImage, let cgImage = generateTintedImage(image: image, color: foregroundColor)?.cgImage {
                     let fittedSize = image.size.aspectFitted(boundsSize)
                     c.draw(cgImage, in: CGRect(origin: CGPoint(x: floor((arguments.drawingRect.width - fittedSize.width) / 2.0), y: floor((arguments.drawingRect.height - fittedSize.height) / 2.0)), size: fittedSize))
                 } else if isBuiltinIcon {

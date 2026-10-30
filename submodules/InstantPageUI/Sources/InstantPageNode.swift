@@ -2,9 +2,14 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import Display
+import TelegramCore
 import TelegramPresentationData
 
-protocol InstantPageNode: ASDisplayNode {    
+public protocol InstantPageExternalMediaDimensionsNode: AnyObject {
+    var updateExternalMediaDimensions: ((EngineMedia.Id, PixelDimensions) -> Void)? { get set }
+}
+
+public protocol InstantPageNode: ASDisplayNode {    
     func updateIsVisible(_ isVisible: Bool)
     
     func transitionNode(media: InstantPageMedia) -> (ASDisplayNode, CGRect, () -> (UIView?, UIView?))?

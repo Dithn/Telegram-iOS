@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
@@ -17,12 +16,12 @@ import ItemListPeerItem
 private final class ChannelBlacklistControllerArguments {
     let context: AccountContext
     
-    let setPeerIdWithRevealedOptions: (PeerId?, PeerId?) -> Void
+    let setPeerIdWithRevealedOptions: (EnginePeer.Id?, EnginePeer.Id?) -> Void
     let addPeer: () -> Void
-    let removePeer: (PeerId) -> Void
+    let removePeer: (EnginePeer.Id) -> Void
     let openPeer: (RenderedChannelParticipant) -> Void
     
-    init(context: AccountContext, setPeerIdWithRevealedOptions: @escaping (PeerId?, PeerId?) -> Void, addPeer: @escaping  () -> Void, removePeer: @escaping (PeerId) -> Void, openPeer: @escaping (RenderedChannelParticipant) -> Void) {
+    init(context: AccountContext, setPeerIdWithRevealedOptions: @escaping (EnginePeer.Id?, EnginePeer.Id?) -> Void, addPeer: @escaping  () -> Void, removePeer: @escaping (EnginePeer.Id) -> Void, openPeer: @escaping (RenderedChannelParticipant) -> Void) {
         self.context = context
         self.addPeer = addPeer
         self.setPeerIdWithRevealedOptions = setPeerIdWithRevealedOptions
@@ -38,7 +37,7 @@ private enum ChannelBlacklistSection: Int32 {
 
 private enum ChannelBlacklistEntryStableId: Hashable {
     case index(Int)
-    case peer(PeerId)
+    case peer(EnginePeer.Id)
 }
 
 private enum ChannelBlacklistEntry: ItemListNodeEntry {
@@ -151,7 +150,7 @@ private enum ChannelBlacklistEntry: ItemListNodeEntry {
         let arguments = arguments as! ChannelBlacklistControllerArguments
         switch self {
             case let .add(_, text):
-                return ItemListActionItem(presentationData: presentationData, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                     arguments.addPeer()
                 })
             case let .addInfo(_, text):
@@ -161,14 +160,14 @@ private enum ChannelBlacklistEntry: ItemListNodeEntry {
             case let .peerItem(_, strings, dateTimeFormat, nameDisplayOrder, _, participant, editing, enabled):
                 var text: ItemListPeerItemText = .none
                 switch participant.participant {
-                    case let .member(_, _, _, banInfo, _):
+                    case let .member(_, _, _, banInfo, _, _):
                         if let banInfo = banInfo, let peer = participant.peers[banInfo.restrictedBy] {
-                            text = .text(strings.Channel_Management_RemovedBy(EnginePeer(peer).displayTitle(strings: strings, displayOrder: nameDisplayOrder)).string, .secondary)
+                            text = .text(strings.Channel_Management_RemovedBy(peer.displayTitle(strings: strings, displayOrder: nameDisplayOrder)).string, .secondary)
                         }
                     default:
                         break
                 }
-                return ItemListPeerItem(presentationData: presentationData, dateTimeFormat: dateTimeFormat, nameDisplayOrder: nameDisplayOrder, context: arguments.context, peer: EnginePeer(participant.peer), presence: nil, text: text, label: .none, editing: editing, switchValue: nil, enabled: enabled, selectable: true, sectionId: self.section, action: {
+                return ItemListPeerItem(presentationData: presentationData, systemStyle: .glass, dateTimeFormat: dateTimeFormat, nameDisplayOrder: nameDisplayOrder, context: arguments.context, peer: participant.peer, presence: nil, text: text, label: .none, editing: editing, switchValue: nil, enabled: enabled, selectable: true, sectionId: self.section, action: {
                     arguments.openPeer(participant)
                 }, setPeerIdWithRevealedOptions: { previousId, id in
                     arguments.setPeerIdWithRevealedOptions(previousId, id)
@@ -182,8 +181,8 @@ private enum ChannelBlacklistEntry: ItemListNodeEntry {
 private struct ChannelBlacklistControllerState: Equatable {
     let referenceTimestamp: Int32
     let editing: Bool
-    let peerIdWithRevealedOptions: PeerId?
-    let removingPeerId: PeerId?
+    let peerIdWithRevealedOptions: EnginePeer.Id?
+    let removingPeerId: EnginePeer.Id?
     let searchingMembers: Bool
 
     init(referenceTimestamp: Int32) {
@@ -194,7 +193,7 @@ private struct ChannelBlacklistControllerState: Equatable {
         self.searchingMembers = false
     }
     
-    init(referenceTimestamp: Int32, editing: Bool, peerIdWithRevealedOptions: PeerId?, removingPeerId: PeerId?, searchingMembers: Bool) {
+    init(referenceTimestamp: Int32, editing: Bool, peerIdWithRevealedOptions: EnginePeer.Id?, removingPeerId: EnginePeer.Id?, searchingMembers: Bool) {
         self.referenceTimestamp = referenceTimestamp
         self.editing = editing
         self.peerIdWithRevealedOptions = peerIdWithRevealedOptions
@@ -231,32 +230,47 @@ private struct ChannelBlacklistControllerState: Equatable {
     }
     
     
-    func withUpdatedPeerIdWithRevealedOptions(_ peerIdWithRevealedOptions: PeerId?) -> ChannelBlacklistControllerState {
+    func withUpdatedPeerIdWithRevealedOptions(_ peerIdWithRevealedOptions: EnginePeer.Id?) -> ChannelBlacklistControllerState {
         return ChannelBlacklistControllerState(referenceTimestamp: self.referenceTimestamp, editing: self.editing, peerIdWithRevealedOptions: peerIdWithRevealedOptions, removingPeerId: self.removingPeerId, searchingMembers: self.searchingMembers)
     }
     
-    func withUpdatedRemovingPeerId(_ removingPeerId: PeerId?) -> ChannelBlacklistControllerState {
+    func withUpdatedRemovingPeerId(_ removingPeerId: EnginePeer.Id?) -> ChannelBlacklistControllerState {
         return ChannelBlacklistControllerState(referenceTimestamp: self.referenceTimestamp, editing: self.editing, peerIdWithRevealedOptions: self.peerIdWithRevealedOptions, removingPeerId: removingPeerId, searchingMembers: self.searchingMembers)
     }
 }
 
-private func channelBlacklistControllerEntries(presentationData: PresentationData, view: PeerView, state: ChannelBlacklistControllerState, participants: [RenderedChannelParticipant]?) -> [ChannelBlacklistEntry] {
+private func channelBlacklistControllerEntries(presentationData: PresentationData, peer: EnginePeer?, state: ChannelBlacklistControllerState, participants: [RenderedChannelParticipant]?) -> [ChannelBlacklistEntry] {
     var entries: [ChannelBlacklistEntry] = []
     
-    if let channel = view.peers[view.peerId] as? TelegramChannel, let participants = participants {
-        entries.append(.add(presentationData.theme, presentationData.strings.GroupRemoved_Remove))
-        
-        let isGroup: Bool
+    
+    var isGroup = false
+    if case let .channel(channel) = peer {
         if case .group = channel.info {
             isGroup = true
         } else {
             isGroup = false
         }
-        entries.append(.addInfo(presentationData.theme, isGroup ? presentationData.strings.GroupRemoved_RemoveInfo : presentationData.strings.ChannelRemoved_RemoveInfo))
+    }
+    let isCommunity: Bool
+    if case .community = peer {
+        isCommunity = true
+    } else {
+        isCommunity = false
+    }
+    
+    if let participants = participants {
+        entries.append(.add(presentationData.theme, isCommunity ? presentationData.strings.Community_Blacklist_RemoveUser : presentationData.strings.GroupRemoved_Remove))
+        let infoText: String
+        if isCommunity {
+            infoText = presentationData.strings.Community_Blacklist_Info
+        } else {
+            infoText = isGroup ? presentationData.strings.GroupRemoved_RemoveInfo : presentationData.strings.ChannelRemoved_RemoveInfo
+        }
+        entries.append(.addInfo(presentationData.theme, infoText))
         
         var index: Int32 = 0
         if !participants.isEmpty {
-            entries.append(.bannedHeader(presentationData.theme, presentationData.strings.GroupRemoved_UsersSectionTitle))
+            entries.append(.bannedHeader(presentationData.theme, isCommunity ? presentationData.strings.Community_Blacklist_UsersSectionTitle : presentationData.strings.GroupRemoved_UsersSectionTitle))
         }
         for participant in participants {
             entries.append(.peerItem(presentationData.theme, presentationData.strings, presentationData.dateTimeFormat, presentationData.nameDisplayOrder, index, participant, ItemListPeerItemEditing(editable: true, editing: state.editing, revealed: participant.peer.id == state.peerIdWithRevealedOptions), state.removingPeerId != participant.peer.id))
@@ -267,7 +281,7 @@ private func channelBlacklistControllerEntries(presentationData: PresentationDat
     return entries
 }
 
-public func channelBlacklistController(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, peerId: PeerId) -> ViewController {
+public func channelBlacklistController(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, peerId: EnginePeer.Id) -> ViewController {
     let statePromise = ValuePromise(ChannelBlacklistControllerState(referenceTimestamp: Int32(Date().timeIntervalSince1970)), ignoreRepeated: true)
     let stateValue = Atomic(value: ChannelBlacklistControllerState(referenceTimestamp: Int32(Date().timeIntervalSince1970)))
     let updateState: ((ChannelBlacklistControllerState) -> ChannelBlacklistControllerState) -> Void = { f in
@@ -287,8 +301,8 @@ public func channelBlacklistController(context: AccountContext, updatedPresentat
     let removePeerDisposable = MetaDisposable()
     actionsDisposable.add(removePeerDisposable)
     
-    let peerView = Promise<PeerView>()
-    peerView.set(context.account.viewTracker.peerView(peerId))
+    actionsDisposable.add(context.engine.peers.keepPeerUpdated(id: peerId, forceUpdate: false).start())
+    
     let blacklistPromise = Promise<[RenderedChannelParticipant]?>(nil)
     
     let arguments = ChannelBlacklistControllerArguments(context: context, setPeerIdWithRevealedOptions: { peerId, fromPeerId in
@@ -301,22 +315,29 @@ public func channelBlacklistController(context: AccountContext, updatedPresentat
         }
     }, addPeer: {
         var dismissController: (() -> Void)?
-        let controller = ChannelMembersSearchController(context: context, updatedPresentationData: updatedPresentationData, peerId: peerId, mode: .ban, openPeer: { peer, participant in
+        let controller = ChannelMembersSearchControllerImpl(params: ChannelMembersSearchControllerParams(context: context, updatedPresentationData: updatedPresentationData, peerId: peerId, mode: .ban, openPeer: { peer, participant in
             if let participant = participant {
                 let presentationData = context.sharedContext.currentPresentationData.with { $0 }
                 switch participant.participant {
                     case .creator:
                         return
-                    case let .member(_, _, adminInfo, _, _):
+                    case let .member(_, _, adminInfo, _, _, _):
                         if let adminInfo = adminInfo, adminInfo.promotedBy != context.account.peerId {
                             presentControllerImpl?(textAlertController(context: context, updatedPresentationData: updatedPresentationData, title: nil, text: presentationData.strings.Channel_Members_AddBannedErrorAdmin, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
                             return
                         }
                 }
             }
-            let _ = (context.account.postbox.loadedPeerWithId(peerId)
+            let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+            |> mapToSignal { peer -> Signal<EnginePeer, NoError> in
+                if let peer {
+                    return .single(peer)
+                } else {
+                    return .never()
+                }
+            }
             |> deliverOnMainQueue).start(next: { channel in
-                guard let _ = channel as? TelegramChannel else {
+                guard case .channel = channel else {
                     return
                 }
                 
@@ -330,7 +351,7 @@ public func channelBlacklistController(context: AccountContext, updatedPresentat
                         dismissController?()
                     }))
             })
-        })
+        }))
         dismissController = { [weak controller] in
             controller?.dismiss()
         }
@@ -347,29 +368,30 @@ public func channelBlacklistController(context: AccountContext, updatedPresentat
             }
         }))
     }, openPeer: { participant in
-        let _ = (peerView.get()
-        |> take(1)
-        |> deliverOnMainQueue).start(next: { peerView in
-            guard let channel = peerView.peers[peerId] as? TelegramChannel else {
+        let _ = (context.engine.data.get(
+            TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
+        )
+        |> deliverOnMainQueue).start(next: { peer in
+            guard case let .channel(channel) = peer else {
                 return
             }
             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
             let actionSheet = ActionSheetController(presentationData: presentationData)
             var items: [ActionSheetItem] = []
-            if !EnginePeer(participant.peer).displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder).isEmpty {
-                items.append(ActionSheetTextItem(title: EnginePeer(participant.peer).displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)))
+            if !participant.peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder).isEmpty {
+                items.append(ActionSheetTextItem(title: participant.peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)))
             }
             let viewInfoTitle: String
-            if participant.peer is TelegramChannel {
+            if case .channel = participant.peer {
                 viewInfoTitle = presentationData.strings.GroupRemoved_ViewChannelInfo
             } else {
                 viewInfoTitle = presentationData.strings.GroupRemoved_ViewUserInfo
             }
             items.append(ActionSheetButtonItem(title: viewInfoTitle, action: { [weak actionSheet] in
                 actionSheet?.dismissAnimated()
-                if participant.peer is TelegramChannel {
+                if case .channel = participant.peer {
                     if let navigationController = getNavigationControllerImpl?() {
-                        context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(id: participant.peer.id)))
+                        context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(participant.peer)))
                     }
                 } else if let infoController = context.sharedContext.makePeerInfoController(context: context, updatedPresentationData: nil, peer: participant.peer, mode: .generic, avatarInitiallyExpanded: false, fromChat: false, requestsContext: nil) {
                     pushControllerImpl?(infoController)
@@ -408,7 +430,7 @@ public func channelBlacklistController(context: AccountContext, updatedPresentat
                     return $0.withUpdatedRemovingPeerId(memberId)
                 }
                 
-                removePeerDisposable.set((context.peerChannelMemberCategoriesContextsManager.updateMemberBannedRights(engine: context.engine, peerId: peerId, memberId: memberId, bannedRights: nil)  |> deliverOnMainQueue).start(error: { _ in
+                removePeerDisposable.set((context.peerChannelMemberCategoriesContextsManager.updateMemberBannedRights(engine: context.engine, peerId: peerId, memberId: memberId, bannedRights: nil) |> deliverOnMainQueue).start(error: { _ in
                 }, completed: {
                     updateState {
                         return $0.withUpdatedRemovingPeerId(nil)
@@ -424,7 +446,7 @@ public func channelBlacklistController(context: AccountContext, updatedPresentat
         })
     })
     
-    let (listDisposable, loadMoreControl) = context.peerChannelMemberCategoriesContextsManager.banned(engine: context.engine, postbox: context.account.postbox, network: context.account.network, accountPeerId: context.account.peerId, peerId: peerId, updated: { listState in
+    let (listDisposable, loadMoreControl) = context.peerChannelMemberCategoriesContextsManager.banned(engine: context.engine, accountPeerId: context.account.peerId, peerId: peerId, updated: { listState in
         if case .loading(true) = listState.loadingState, listState.list.isEmpty {
             blacklistPromise.set(.single(nil))
         } else {
@@ -435,15 +457,19 @@ public func channelBlacklistController(context: AccountContext, updatedPresentat
     
     let previousParticipantsValue = Atomic<[RenderedChannelParticipant]?>(value: nil)
     
+    let peer = context.engine.data.get(
+        TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
+    )
+    
     let presentationData = updatedPresentationData?.signal ?? context.sharedContext.presentationData
-    let signal = combineLatest(queue: .mainQueue(), presentationData, statePromise.get(), peerView.get(), blacklistPromise.get())
+    let signal = combineLatest(queue: .mainQueue(), presentationData, statePromise.get(), peer, blacklistPromise.get())
     |> deliverOnMainQueue
-    |> map { presentationData, state, view, participants -> (ItemListControllerState, (ItemListNodeState, Any)) in
+    |> map { presentationData, state, peer, participants -> (ItemListControllerState, (ItemListNodeState, Any)) in
         var rightNavigationButton: ItemListNavigationButton?
         var secondaryRightNavigationButton: ItemListNavigationButton?
         if let participants = participants, !participants.isEmpty {
             if state.editing {
-                rightNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Done), style: .bold, enabled: true, action: {
+                rightNavigationButton = ItemListNavigationButton(content: .icon(.done), style: .bold, enabled: true, staysInRow: true, action: {
                     updateState { state in
                         return state.withUpdatedEditing(false)
                     }
@@ -497,8 +523,14 @@ public func channelBlacklistController(context: AccountContext, updatedPresentat
             })
         }
         
-        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.GroupRemoved_Title), leftNavigationButton: nil, rightNavigationButton: rightNavigationButton, secondaryRightNavigationButton: secondaryRightNavigationButton, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back), animateChanges: true)
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: channelBlacklistControllerEntries(presentationData: presentationData, view: view, state: state, participants: participants), style: .blocks, emptyStateItem: emptyStateItem, searchItem: searchItem, animateChanges: previous != nil && participants != nil && previous!.count >= participants!.count)
+        let title: String
+        if case .community = peer {
+            title = presentationData.strings.Community_Blacklist_Title
+        } else {
+            title = presentationData.strings.GroupRemoved_Title
+        }
+        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(title), leftNavigationButton: nil, rightNavigationButton: rightNavigationButton, secondaryRightNavigationButton: secondaryRightNavigationButton, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back), animateChanges: true)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: channelBlacklistControllerEntries(presentationData: presentationData, peer: peer, state: state, participants: participants), style: .blocks, emptyStateItem: emptyStateItem, searchItem: searchItem, animateChanges: previous != nil && participants != nil && previous!.count >= participants!.count)
         
         return (controllerState, (listState, arguments))
     }

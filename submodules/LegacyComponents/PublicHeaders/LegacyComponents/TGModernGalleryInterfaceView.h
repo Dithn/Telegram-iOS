@@ -9,6 +9,7 @@
 - (void)setController:(UIViewController *(^)(void))closePressed;
 - (void)setClosePressed:(void (^)())closePressed;
 - (void)setScrollViewOffsetRequested:(void (^)(CGFloat offset))scrollViewOffsetRequested;
+- (void)setGesturesEnabled:(void (^)(bool enabled))setGesturesEnabled;
 
 - (void)itemFocused:(id<TGModernGalleryItem>)item itemView:(TGModernGalleryItemView *)itemView;
 
@@ -37,5 +38,8 @@
 - (bool)shouldAutorotate;
 
 - (void)willRotateToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation duration:(NSTimeInterval)duration;
+
+- (bool)canBeginEditingCaption;
+- (void)beginEditingCaption;
 
 @end

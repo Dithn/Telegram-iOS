@@ -1,5 +1,5 @@
 import Foundation
-import TelegramApi
+internal import TelegramApi
 import Postbox
 import SwiftSignalKit
 
@@ -14,7 +14,7 @@ private func copyOrMoveResourceData(from fromResource: MediaResource, to toResou
     }
 }
 
-func applyMediaResourceChanges(from: Media, to: Media, postbox: Postbox, force: Bool) {
+func applyMediaResourceChanges(from: Media, to: Media, postbox: Postbox, force: Bool, skipPreviews: Bool = false) {
     if let fromImage = from as? TelegramMediaImage, let toImage = to as? TelegramMediaImage {
         let fromSmallestRepresentation = smallestImageRepresentation(fromImage.representations)
         if let fromSmallestRepresentation = fromSmallestRepresentation, let toSmallestRepresentation = smallestImageRepresentation(toImage.representations) {
@@ -26,28 +26,175 @@ func applyMediaResourceChanges(from: Media, to: Media, postbox: Postbox, force: 
             }
         }
         if let fromLargestRepresentation = largestImageRepresentation(fromImage.representations), let toLargestRepresentation = largestImageRepresentation(toImage.representations) {
-            copyOrMoveResourceData(from: fromLargestRepresentation.resource, to: toLargestRepresentation.resource, mediaBox: postbox.mediaBox)
+            if fromLargestRepresentation.resource is CloudPeerPhotoSizeMediaResource {
+            } else {
+                copyOrMoveResourceData(from: fromLargestRepresentation.resource, to: toLargestRepresentation.resource, mediaBox: postbox.mediaBox)
+            }
+        }
+        if let fromVideo = fromImage.video, let toVideo = toImage.video {
+            applyMediaResourceChanges(from: fromVideo, to: toVideo, postbox: postbox, force: true)
         }
     } else if let fromFile = from as? TelegramMediaFile, let toFile = to as? TelegramMediaFile {
-        if let fromPreview = smallestImageRepresentation(fromFile.previewRepresentations), let toPreview = smallestImageRepresentation(toFile.previewRepresentations) {
-            copyOrMoveResourceData(from: fromPreview.resource, to: toPreview.resource, mediaBox: postbox.mediaBox)
+        if !skipPreviews {
+            if let fromPreview = smallestImageRepresentation(fromFile.previewRepresentations), let toPreview = smallestImageRepresentation(toFile.previewRepresentations) {
+                copyOrMoveResourceData(from: fromPreview.resource, to: toPreview.resource, mediaBox: postbox.mediaBox)
+            }
+            if let fromVideoThumbnail = fromFile.videoThumbnails.first, let toVideoThumbnail = toFile.videoThumbnails.first, fromVideoThumbnail.resource.id != toVideoThumbnail.resource.id {
+                copyOrMoveResourceData(from: fromVideoThumbnail.resource, to: toVideoThumbnail.resource, mediaBox: postbox.mediaBox)
+            }
         }
-        if let fromVideoThumbnail = fromFile.videoThumbnails.first, let toVideoThumbnail = toFile.videoThumbnails.first, fromVideoThumbnail.resource.id != toVideoThumbnail.resource.id {
-            copyOrMoveResourceData(from: fromVideoThumbnail.resource, to: toVideoThumbnail.resource, mediaBox: postbox.mediaBox)
+        let videoFirstFrameFromPath = postbox.mediaBox.cachedRepresentationCompletePath(fromFile.resource.id, keepDuration: .general, representationId: "first-frame")
+        let videoFirstFrameToPath = postbox.mediaBox.cachedRepresentationCompletePath(toFile.resource.id, keepDuration: .general, representationId: "first-frame")
+        if FileManager.default.fileExists(atPath: videoFirstFrameFromPath) {
+            let _ = try? FileManager.default.copyItem(atPath: videoFirstFrameFromPath, toPath: videoFirstFrameToPath)
         }
+        
         if (force || fromFile.size == toFile.size || fromFile.resource.size == toFile.resource.size) && fromFile.mimeType == toFile.mimeType {
             copyOrMoveResourceData(from: fromFile.resource, to: toFile.resource, mediaBox: postbox.mediaBox)
+        }
+    } else if let fromPaidContent = from as? TelegramMediaPaidContent, let toPaidContent = to as? TelegramMediaPaidContent {
+        for (fromMedia, toMedia) in zip(fromPaidContent.extendedMedia, toPaidContent.extendedMedia) {
+            if case let .full(fullFromMedia) = fromMedia, case let .full(fullToMedia) = toMedia {
+                applyMediaResourceChanges(from: fullFromMedia, to: fullToMedia, postbox: postbox, force: force)
+            }
         }
     }
 }
 
-func applyUpdateMessage(postbox: Postbox, stateManager: AccountStateManager, message: Message, result: Api.Updates, accountPeerId: PeerId) -> Signal<Void, NoError> {
+func applyMediaResourceChanges(from: InstantPageBlock, fromMedia: [MediaId: Media], to: InstantPageBlock, toMedia: [MediaId: Media], postbox: Postbox, force: Bool, skipPreviews: Bool) {
+    switch from {
+    case .unsupported, .title, .subtitle, .authorDate, .header, .subheader, .heading, .formula, .paragraph, .preformatted, .footer, .divider, .anchor, .pullQuote, .webEmbed, .channelBanner, .kicker, .thinking, .table, .relatedArticles, .map, .buttonRow:
+        // .buttonRow carries no media, so it joins the no-op group.
+        break
+    case let .list(lhsItems, _):
+        guard case let .list(rhsItems, _) = to else {
+            return
+        }
+        if lhsItems.count != rhsItems.count {
+            return
+        }
+        outer: for i in 0 ..< lhsItems.count {
+            switch lhsItems[i] {
+            case .unknown, .text:
+                break
+            case let .blocks(lhsItemBlocks, _, _):
+                if case let .blocks(rhsItemBlocks, _, _) = rhsItems[i] {
+                    applyMediaResourceChanges(from: lhsItemBlocks, fromMedia: fromMedia, to: rhsItemBlocks, toMedia: toMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+                } else {
+                    break outer
+                }
+            }
+        }
+    case let .blockQuote(lhsBlocks, _, _):
+        guard case let .blockQuote(rhsBlocks, _, _) = to else {
+            return
+        }
+        applyMediaResourceChanges(from: lhsBlocks, fromMedia: fromMedia, to: rhsBlocks, toMedia: toMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+    case let .image(lhsId, _, _, _, _):
+        guard case let .image(rhsId, _, _, _, _) = to else {
+            return
+        }
+        if let lhsMedia = fromMedia[lhsId], let rhsMedia = toMedia[rhsId] {
+            applyMediaResourceChanges(from: lhsMedia, to: rhsMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+        }
+    case let .video(lhsId, _, _, _, _):
+        guard case let .video(rhsId, _, _, _, _) = to else {
+            return
+        }
+        if let lhsMedia = fromMedia[lhsId], let rhsMedia = toMedia[rhsId] {
+            applyMediaResourceChanges(from: lhsMedia, to: rhsMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+        }
+    case let .audio(lhsId, _):
+        guard case let .audio(rhsId, _) = to else {
+            return
+        }
+        if let lhsMedia = fromMedia[lhsId], let rhsMedia = toMedia[rhsId] {
+            applyMediaResourceChanges(from: lhsMedia, to: rhsMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+        }
+    case let .document(lhsId, _):
+        // Mirrors .audio: on send confirmation this hands the locally-uploaded file's resource data
+        // to the cloud resource. Without it, a document in a just-sent rich message would be
+        // re-downloaded instead of reusing what is already on disk.
+        guard case let .document(rhsId, _) = to else {
+            return
+        }
+        if let lhsMedia = fromMedia[lhsId], let rhsMedia = toMedia[rhsId] {
+            applyMediaResourceChanges(from: lhsMedia, to: rhsMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+        }
+    case let .collage(lhsItems, _):
+        guard case let .collage(rhsItems, _) = to else {
+            return
+        }
+        applyMediaResourceChanges(from: lhsItems, fromMedia: fromMedia, to: rhsItems, toMedia: toMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+    case let .slideshow(lhsItems, _):
+        guard case let .slideshow(rhsItems, _) = to else {
+            return
+        }
+        applyMediaResourceChanges(from: lhsItems, fromMedia: fromMedia, to: rhsItems, toMedia: toMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+    case let .details(_, lhsBlocks, _):
+        guard case let .details(_, rhsBlocks, _) = to else {
+            return
+        }
+        applyMediaResourceChanges(from: lhsBlocks, fromMedia: fromMedia, to: rhsBlocks, toMedia: toMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+    case let .cover(lhsBlock):
+        guard case let .cover(rhsBlock) = to else {
+            return
+        }
+        applyMediaResourceChanges(from: lhsBlock, fromMedia: fromMedia, to: rhsBlock, toMedia: toMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+    case let .postEmbed(_, _, _, _, _, lhsBlocks, _):
+        guard case let .postEmbed(_, _, _, _, _, rhsBlocks, _) = to else {
+            return
+        }
+        applyMediaResourceChanges(from: lhsBlocks, fromMedia: fromMedia, to: rhsBlocks, toMedia: toMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+    }
+}
+
+func applyMediaResourceChanges(from: [InstantPageBlock], fromMedia: [MediaId: Media], to: [InstantPageBlock], toMedia: [MediaId: Media], postbox: Postbox, force: Bool, skipPreviews: Bool) {
+    if from.count != to.count {
+        return
+    }
+    for i in 0 ..< from.count {
+        let lhsBlock = from[i]
+        let rhsBlock = to[i]
+        applyMediaResourceChanges(from: lhsBlock, fromMedia: fromMedia, to: rhsBlock, toMedia: toMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+    }
+}
+
+func applyMediaResourceChanges(from: RichTextMessageAttribute, to: RichTextMessageAttribute, postbox: Postbox, force: Bool, skipPreviews: Bool = false) {
+    applyMediaResourceChanges(from: from.instantPage.blocks, fromMedia: from.instantPage.rawMedia, to: to.instantPage.blocks, toMedia: to.instantPage.rawMedia, postbox: postbox, force: force, skipPreviews: skipPreviews)
+}
+
+func applyUpdateMessage(postbox: Postbox, stateManager: AccountStateManager, message: Message, cacheReferenceKey: CachedSentMediaReferenceKey?, result: Api.Updates, accountPeerId: PeerId, pendingMessageEvent: @escaping (PeerPendingMessageDelivered) -> Void) -> Signal<Void, NoError> {
     return postbox.transaction { transaction -> Void in
         let messageId: Int32?
         var apiMessage: Api.Message?
         
+        var correspondingMessageId: Int32?
+        
+        for update in result.allUpdates {
+            switch update {
+            case let .updateMessageID(updateMessageIDData):
+                let (id, randomId) = (updateMessageIDData.id, updateMessageIDData.randomId)
+                for attribute in message.attributes {
+                    if let attribute = attribute as? OutgoingMessageInfoAttribute {
+                        if attribute.uniqueId == randomId {
+                            correspondingMessageId = id
+                            break
+                        }
+                    }
+                }
+            default:
+                break
+            }
+        }
+        
         for resultMessage in result.messages {
             if let id = resultMessage.id() {
+                if let correspondingMessageId = correspondingMessageId {
+                    if id.id != correspondingMessageId {
+                        continue
+                    }
+                }
                 if id.peerId == message.id.peerId {
                     apiMessage = resultMessage
                     break
@@ -64,16 +211,19 @@ func applyUpdateMessage(postbox: Postbox, stateManager: AccountStateManager, mes
         var updatedTimestamp: Int32?
         if let apiMessage = apiMessage {
             switch apiMessage {
-                case let .message(_, _, _, _, _, _, _, date, _, _, _, _, _, _, _, _, _, _, _, _, _):
+                case let .message(messageData):
+                    let date = messageData.date
                     updatedTimestamp = date
                 case .messageEmpty:
                     break
-                case let .messageService(_, _, _, _, _, date, _, _):
+                case let .messageService(messageServiceData):
+                    let date = messageServiceData.date
                     updatedTimestamp = date
             }
         } else {
             switch result {
-                case let .updateShortSentMessage(_, _, _, _, date, _, _, _):
+                case let .updateShortSentMessage(updateShortSentMessageData):
+                    let (_, _, _, _, date, _, _, _) = (updateShortSentMessageData.flags, updateShortSentMessageData.id, updateShortSentMessageData.pts, updateShortSentMessageData.ptsCount, updateShortSentMessageData.date, updateShortSentMessageData.media, updateShortSentMessageData.entities, updateShortSentMessageData.ttlPeriod)
                     updatedTimestamp = date
                 default:
                     break
@@ -85,39 +235,35 @@ func applyUpdateMessage(postbox: Postbox, stateManager: AccountStateManager, mes
         var sentStickers: [TelegramMediaFile] = []
         var sentGifs: [TelegramMediaFile] = []
         
-        if let updatedTimestamp = updatedTimestamp {
+        if let updatedTimestamp {
             transaction.offsetPendingMessagesTimestamps(lowerBound: message.id, excludeIds: Set([message.id]), timestamp: updatedTimestamp)
         }
         
         var updatedMessage: StoreMessage?
         
+        var bubbleUpEmojiOrStickersets: [ItemCollectionId] = []
+        
         transaction.updateMessage(message.id, update: { currentMessage in
-            let updatedId: MessageId
-            if let messageId = messageId {
-                var namespace: MessageId.Namespace = Namespaces.Message.Cloud
-                if let updatedTimestamp = updatedTimestamp {
-                    if message.scheduleTime != nil && message.scheduleTime == updatedTimestamp {
-                        namespace = Namespaces.Message.ScheduledCloud
-                    }
-                } else if Namespaces.Message.allScheduled.contains(message.id.namespace) {
-                    namespace = Namespaces.Message.ScheduledCloud
-                }
-                updatedId = MessageId(peerId: currentMessage.id.peerId, namespace: namespace, id: messageId)
-            } else {
-                updatedId = currentMessage.id
-            }
-            
             let media: [Media]
             var attributes: [MessageAttribute]
             let text: String
             let forwardInfo: StoreMessageForwardInfo?
-            if let apiMessage = apiMessage, let updatedMessage = StoreMessage(apiMessage: apiMessage) {
+            let threadId: Int64?
+            
+            var namespace = Namespaces.Message.Cloud
+            if message.id.namespace == Namespaces.Message.ScheduledLocal {
+                namespace = Namespaces.Message.ScheduledCloud
+            }
+            
+            if let apiMessage = apiMessage, let apiMessagePeerId = apiMessage.peerId, let updatedMessage = StoreMessage(apiMessage: apiMessage, accountPeerId: accountPeerId, peerIsForum: transaction.getPeer(apiMessagePeerId)?.isForumOrMonoForum ?? false, namespace: namespace) {
                 media = updatedMessage.media
                 attributes = updatedMessage.attributes
                 text = updatedMessage.text
                 forwardInfo = updatedMessage.forwardInfo
-            } else if case let .updateShortSentMessage(_, _, _, _, _, apiMedia, entities, ttlPeriod) = result {
-                let (mediaValue, _) = textMediaAndExpirationTimerFromApiMedia(apiMedia, currentMessage.id.peerId)
+                threadId = updatedMessage.threadId
+            } else if case let .updateShortSentMessage(updateShortSentMessageData) = result {
+                let (_, _, _, _, _, apiMedia, entities, ttlPeriod) = (updateShortSentMessageData.flags, updateShortSentMessageData.id, updateShortSentMessageData.pts, updateShortSentMessageData.ptsCount, updateShortSentMessageData.date, updateShortSentMessageData.media, updateShortSentMessageData.entities, updateShortSentMessageData.ttlPeriod)
+                let (mediaValue, _, nonPremium, hasSpoiler, _, _) = textMediaAndExpirationTimerFromApiMedia(apiMedia, currentMessage.id.peerId)
                 if let mediaValue = mediaValue {
                     media = [mediaValue]
                 } else {
@@ -140,9 +286,24 @@ func applyUpdateMessage(postbox: Postbox, stateManager: AccountStateManager, mes
                     updatedAttributes.append(AutoremoveTimeoutMessageAttribute(timeout: ttlPeriod, countdownBeginTime: updatedTimestamp))
                 }
                 
-                if Namespaces.Message.allScheduled.contains(message.id.namespace) && updatedId.namespace == Namespaces.Message.Cloud {
+                updatedAttributes = updatedAttributes.filter({ !($0 is NonPremiumMessageAttribute) })
+                if let nonPremium = nonPremium, nonPremium {
+                    updatedAttributes.append(NonPremiumMessageAttribute())
+                }
+                
+                if let hasSpoiler = hasSpoiler, hasSpoiler {
+                    updatedAttributes.append(MediaSpoilerMessageAttribute())
+                }
+                
+                for i in 0 ..< updatedAttributes.count {
+                    if updatedAttributes[i] is OutgoingScheduleInfoMessageAttribute {
+                        updatedAttributes.remove(at: i)
+                        break
+                    }
+                }
+                if Namespaces.Message.allQuickReply.contains(message.id.namespace) {
                     for i in 0 ..< updatedAttributes.count {
-                        if updatedAttributes[i] is OutgoingScheduleInfoMessageAttribute {
+                        if updatedAttributes[i] is OutgoingQuickReplyMessageAttribute {
                             updatedAttributes.remove(at: i)
                             break
                         }
@@ -153,11 +314,47 @@ func applyUpdateMessage(postbox: Postbox, stateManager: AccountStateManager, mes
                 text = currentMessage.text
                 
                 forwardInfo = currentMessage.forwardInfo.flatMap(StoreMessageForwardInfo.init)
+                threadId = currentMessage.threadId
             } else {
                 media = currentMessage.media
                 attributes = currentMessage.attributes
                 text = currentMessage.text
                 forwardInfo = currentMessage.forwardInfo.flatMap(StoreMessageForwardInfo.init)
+                threadId = currentMessage.threadId
+            }
+            
+            let updatedId: MessageId
+            if let messageId = messageId {
+                var namespace: MessageId.Namespace = Namespaces.Message.Cloud
+                if attributes.contains(where: { $0 is PendingProcessingMessageAttribute }) {
+                    namespace = Namespaces.Message.ScheduledCloud
+                }
+                if Namespaces.Message.allQuickReply.contains(message.id.namespace) {
+                    namespace = Namespaces.Message.QuickReplyCloud
+                } else if let updatedTimestamp = updatedTimestamp {
+                    if attributes.contains(where: { $0 is PendingProcessingMessageAttribute }) {
+                        namespace = Namespaces.Message.ScheduledCloud
+                    } else {
+                        if message.scheduleTime != nil && message.scheduleTime == updatedTimestamp {
+                            namespace = Namespaces.Message.ScheduledCloud
+                        }
+                    }
+                } else if Namespaces.Message.allScheduled.contains(message.id.namespace) {
+                    namespace = Namespaces.Message.ScheduledCloud
+                }
+                updatedId = MessageId(peerId: currentMessage.id.peerId, namespace: namespace, id: messageId)
+            } else {
+                updatedId = currentMessage.id
+            }
+            
+            for attribute in currentMessage.attributes {
+                if let attribute = attribute as? OutgoingMessageInfoAttribute {
+                    bubbleUpEmojiOrStickersets = attribute.bubbleUpEmojiOrStickersets
+                } else if let attribute = attribute as? OutgoingQuickReplyMessageAttribute {
+                    if let threadId {
+                        _internal_applySentQuickReplyMessage(transaction: transaction, shortcut: attribute.shortcut, quickReplyId: Int32(clamping: threadId))
+                    }
+                }
             }
             
             if let channelPts = channelPts {
@@ -172,6 +369,9 @@ func applyUpdateMessage(postbox: Postbox, stateManager: AccountStateManager, mes
             
             if let fromMedia = currentMessage.media.first, let toMedia = media.first {
                 applyMediaResourceChanges(from: fromMedia, to: toMedia, postbox: postbox, force: false)
+            }
+            if let fromRichText = currentMessage.richText, let toRichText = attributes.first(where: { $0 is RichTextMessageAttribute }) as? RichTextMessageAttribute {
+                applyMediaResourceChanges(from: fromRichText, to: toRichText, postbox: postbox, force: false)
             }
             
             if forwardInfo == nil {
@@ -206,7 +406,7 @@ func applyUpdateMessage(postbox: Postbox, stateManager: AccountStateManager, mes
             
             let (tags, globalTags) = tagsForStoreMessage(incoming: currentMessage.flags.contains(.Incoming), attributes: attributes, media: media, textEntities: entitiesAttribute?.entities, isPinned: currentMessage.tags.contains(.pinned))
             
-            if currentMessage.id.peerId.namespace == Namespaces.Peer.CloudChannel, !currentMessage.flags.contains(.Incoming), !Namespaces.Message.allScheduled.contains(currentMessage.id.namespace) {
+            if currentMessage.id.peerId.namespace == Namespaces.Peer.CloudChannel, !currentMessage.flags.contains(.Incoming), !Namespaces.Message.allNonRegular.contains(currentMessage.id.namespace) {
                 let peerId = currentMessage.id.peerId
                 if let peer = transaction.getPeer(peerId) {
                     if let peer = peer as? TelegramChannel {
@@ -230,7 +430,7 @@ func applyUpdateMessage(postbox: Postbox, stateManager: AccountStateManager, mes
                 }
             }
             
-            let updatedMessageValue = StoreMessage(id: updatedId, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: updatedTimestamp ?? currentMessage.timestamp, flags: [], tags: tags, globalTags: globalTags, localTags: currentMessage.localTags, forwardInfo: forwardInfo, authorId: currentMessage.author?.id, text: text, attributes: attributes, media: media)
+            let updatedMessageValue = StoreMessage(id: updatedId, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: updatedTimestamp ?? currentMessage.timestamp, flags: [], tags: tags, globalTags: globalTags, localTags: currentMessage.localTags, forwardInfo: forwardInfo, authorId: currentMessage.author?.id, text: text, attributes: attributes, media: media)
             updatedMessage = updatedMessageValue
             
             return .update(updatedMessageValue)
@@ -238,10 +438,30 @@ func applyUpdateMessage(postbox: Postbox, stateManager: AccountStateManager, mes
         if let updatedMessage = updatedMessage, case let .Id(updatedId) = updatedMessage.id {
             if message.id.namespace == Namespaces.Message.Local && updatedId.namespace == Namespaces.Message.Cloud && updatedId.peerId.namespace == Namespaces.Peer.CloudChannel {
                 if let threadId = updatedMessage.threadId {
-                    let messageThreadId = makeThreadIdMessageId(peerId: updatedMessage.id.peerId, threadId: threadId)
                     if let authorId = updatedMessage.authorId {
-                        updateMessageThreadStats(transaction: transaction, threadMessageId: messageThreadId, removedCount: 0, addedMessagePeers: [ReplyThreadUserMessage(id: authorId, messageId: updatedId, isOutgoing: true)])
+                        updateMessageThreadStats(transaction: transaction, threadKey: MessageThreadKey(peerId: updatedMessage.id.peerId, threadId: threadId), removedCount: 0, addedMessagePeers: [ReplyThreadUserMessage(id: authorId, messageId: updatedId, isOutgoing: true)])
                     }
+                }
+            }
+            
+            if updatedMessage.id.namespace == Namespaces.Message.Cloud, let cacheReferenceKey = cacheReferenceKey {
+                var storeMedia: Media?
+                var mediaCount = 0
+                for media in updatedMessage.media {
+                    if let image = media as? TelegramMediaImage {
+                        storeMedia = image
+                        mediaCount += 1
+                    } else if let file = media as? TelegramMediaFile {
+                        storeMedia = file
+                        mediaCount += 1
+                    }
+                }
+                if mediaCount > 1 {
+                    storeMedia = nil
+                }
+                
+                if let storeMedia = storeMedia {
+                    storeCachedSentMediaReference(transaction: transaction, key: cacheReferenceKey, media: storeMedia)
                 }
             }
         }
@@ -257,28 +477,58 @@ func applyUpdateMessage(postbox: Postbox, stateManager: AccountStateManager, mes
                 }
             }
         }
+        if !bubbleUpEmojiOrStickersets.isEmpty {
+            applyBubbleUpEmojiOrStickersets(transaction: transaction, ids: bubbleUpEmojiOrStickersets)
+        }
         
         stateManager.addUpdates(result)
         stateManager.addUpdateGroups([.ensurePeerHasLocalState(id: message.id.peerId)])
+        
+        if let updatedMessage, case let .Id(id) = updatedMessage.id {
+            pendingMessageEvent(PeerPendingMessageDelivered(
+                id: id,
+                isSilent: updatedMessage.attributes.contains(where: { attribute in
+                    if let attribute = attribute as? NotificationInfoMessageAttribute {
+                        return attribute.flags.contains(.muted)
+                    } else {
+                        return false
+                    }
+                }),
+                isPendingProcessing: updatedMessage.attributes.contains(where: { $0 is PendingProcessingMessageAttribute })
+            ))
+        }
     }
 }
 
-func applyUpdateGroupMessages(postbox: Postbox, stateManager: AccountStateManager, messages: [Message], result: Api.Updates) -> Signal<Void, NoError> {
+func applyUpdateGroupMessages(postbox: Postbox, stateManager: AccountStateManager, messages: [Message], result: Api.Updates, pendingMessageEvents: @escaping ([PeerPendingMessageDelivered]) -> Void) -> Signal<Void, NoError> {
     guard !messages.isEmpty else {
-        return .complete()
+        return .single(Void())
     }
     
     return postbox.transaction { transaction -> Void in
         let updatedRawMessageIds = result.updatedRawMessageIds
         
         var namespace = Namespaces.Message.Cloud
-        if let message = messages.first, let apiMessage = result.messages.first, message.scheduleTime != nil && message.scheduleTime == apiMessage.timestamp {
-            namespace = Namespaces.Message.ScheduledCloud
+        if Namespaces.Message.allQuickReply.contains(messages[0].id.namespace) {
+            namespace = Namespaces.Message.QuickReplyCloud
+        } else if let message = messages.first, let apiMessage = result.messages.first {
+            if message.scheduleTime != nil && message.scheduleTime == apiMessage.timestamp {
+                namespace = Namespaces.Message.ScheduledCloud
+            } else if let apiMessage = result.messages.first, case let .message(messageData) = apiMessage, (messageData.flags2 & (1 << 4)) != 0 {
+                namespace = Namespaces.Message.ScheduledCloud
+            }
         }
         
         var resultMessages: [MessageId: StoreMessage] = [:]
         for apiMessage in result.messages {
-            if let resultMessage = StoreMessage(apiMessage: apiMessage, namespace: namespace), case let .Id(id) = resultMessage.id {
+            var peerIsForum = false
+            if let apiMessagePeerId = apiMessage.peerId, let peer = transaction.getPeer(apiMessagePeerId) {
+                if peer.isForumOrMonoForum {
+                    peerIsForum = true
+                }
+            }
+            
+            if let resultMessage = StoreMessage(apiMessage: apiMessage, accountPeerId: stateManager.accountPeerId, peerIsForum: peerIsForum, namespace: namespace), case let .Id(id) = resultMessage.id {
                 resultMessages[id] = resultMessage
             }
         }
@@ -299,7 +549,7 @@ func applyUpdateGroupMessages(postbox: Postbox, stateManager: AccountStateManage
                         mapping.append((message, MessageIndex(id: id, timestamp: storeMessage.timestamp), storeMessage))
                     }
                 } else {
-                    assertionFailure()
+                  //  assertionFailure()
                 }
             } else {
                 assertionFailure()
@@ -330,6 +580,18 @@ func applyUpdateGroupMessages(postbox: Postbox, stateManager: AccountStateManage
             transaction.updateMessageGroupingKeysAtomically(ids, groupingKey: key)
         }
         
+        var bubbleUpEmojiOrStickersets: [ItemCollectionId] = []
+        
+        if let (message, _, updatedMessage) = mapping.first {
+            for attribute in message.attributes {
+                if let attribute = attribute as? OutgoingQuickReplyMessageAttribute {
+                    if let threadId = updatedMessage.threadId {
+                        _internal_applySentQuickReplyMessage(transaction: transaction, shortcut: attribute.shortcut, quickReplyId: Int32(clamping: threadId))
+                    }
+                }
+            }
+        }
+        
         for (message, _, updatedMessage) in mapping {
             transaction.updateMessage(message.id, update: { currentMessage in
                 let updatedId: MessageId
@@ -337,6 +599,16 @@ func applyUpdateGroupMessages(postbox: Postbox, stateManager: AccountStateManage
                     updatedId = id
                 } else {
                     updatedId = currentMessage.id
+                }
+                
+                for attribute in currentMessage.attributes {
+                    if let attribute = attribute as? OutgoingMessageInfoAttribute {
+                        for id in attribute.bubbleUpEmojiOrStickersets {
+                            if !bubbleUpEmojiOrStickersets.contains(id) {
+                                bubbleUpEmojiOrStickersets.append(id)
+                            }
+                        }
+                    }
                 }
                 
                 let media: [Media]
@@ -388,7 +660,7 @@ func applyUpdateGroupMessages(postbox: Postbox, stateManager: AccountStateManage
                 
                 let (tags, globalTags) = tagsForStoreMessage(incoming: currentMessage.flags.contains(.Incoming), attributes: attributes, media: media, textEntities: entitiesAttribute?.entities, isPinned: currentMessage.tags.contains(.pinned))
                 
-                return .update(StoreMessage(id: updatedId, globallyUniqueId: nil, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: updatedMessage.timestamp, flags: [], tags: tags, globalTags: globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: text, attributes: attributes, media: media))
+                return .update(StoreMessage(id: updatedId, customStableId: nil, globallyUniqueId: nil, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: updatedMessage.timestamp, flags: [], tags: tags, globalTags: globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: text, attributes: attributes, media: media))
             })
         }
         
@@ -404,7 +676,53 @@ func applyUpdateGroupMessages(postbox: Postbox, stateManager: AccountStateManage
                 }
             }
         }
+        if !bubbleUpEmojiOrStickersets.isEmpty {
+            applyBubbleUpEmojiOrStickersets(transaction: transaction, ids: bubbleUpEmojiOrStickersets)
+        }
         stateManager.addUpdates(result)
         stateManager.addUpdateGroups([.ensurePeerHasLocalState(id: messages[0].id.peerId)])
+        
+        pendingMessageEvents(mapping.compactMap { message, _, updatedMessage -> PeerPendingMessageDelivered? in
+            guard case let .Id(id) = updatedMessage.id else {
+                return nil
+            }
+            return PeerPendingMessageDelivered(
+                id: id,
+                isSilent: updatedMessage.attributes.contains(where: { attribute in
+                    if let attribute = attribute as? NotificationInfoMessageAttribute {
+                        return attribute.flags.contains(.muted)
+                    } else {
+                        return false
+                    }
+                }),
+                isPendingProcessing: updatedMessage.attributes.contains(where: { $0 is PendingProcessingMessageAttribute })
+            )
+        })
+    }
+}
+
+private func applyBubbleUpEmojiOrStickersets(transaction: Transaction, ids: [ItemCollectionId]) {
+    let namespaces: [ItemCollectionId.Namespace] = [Namespaces.ItemCollection.CloudStickerPacks, Namespaces.ItemCollection.CloudEmojiPacks]
+    for namespace in namespaces {
+        let namespaceIds = ids.filter { $0.namespace == namespace }
+        if !namespaceIds.isEmpty {
+            let infos = transaction.getItemCollectionsInfos(namespace: namespace)
+            
+            var packDict: [ItemCollectionId: Int] = [:]
+            for i in 0 ..< infos.count {
+                packDict[infos[i].0] = i
+            }
+            var topSortedPacks: [(ItemCollectionId, ItemCollectionInfo)] = []
+            var processedPacks = Set<ItemCollectionId>()
+            for id in namespaceIds {
+                if let index = packDict[id] {
+                    topSortedPacks.append(infos[index])
+                    processedPacks.insert(id)
+                }
+            }
+            let restPacks = infos.filter { !processedPacks.contains($0.0) }
+            let sortedPacks = topSortedPacks + restPacks
+            transaction.replaceItemCollectionInfos(namespace: namespace, itemCollectionInfos: sortedPacks)
+        }
     }
 }

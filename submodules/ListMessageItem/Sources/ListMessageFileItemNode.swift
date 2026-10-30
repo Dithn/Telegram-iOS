@@ -1,8 +1,8 @@
 import Foundation
+import LottieSettings
 import UIKit
 import AsyncDisplayKit
 import Display
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import TelegramPresentationData
@@ -20,10 +20,12 @@ import ContextUI
 import FileMediaResourceStatus
 import ManagedAnimationNode
 import ShimmerEffect
+import ComponentFlow
+import EmojiStatusComponent
 
 private let extensionImageCache = Atomic<[UInt32: UIImage]>(value: [:])
 
-private let redColors: (UInt32, UInt32) = (0xed6b7b, 0xe63f45)
+private let redColors: (UInt32, UInt32) = (0xff875f, 0xff5069)
 private let greenColors: (UInt32, UInt32) = (0x99de6f, 0x5fb84f)
 private let blueColors: (UInt32, UInt32) = (0x72d5fd, 0x2a9ef1)
 private let yellowColors: (UInt32, UInt32) = (0xffa24b, 0xed705c)
@@ -61,11 +63,22 @@ private func generateExtensionImage(colors: (UInt32, UInt32)) -> UIImage? {
         
         context.restoreGState()
         
+        context.saveGState()
+        let rounded = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 13).cgPath
+        let full = UIBezierPath(rect: CGRect(origin: .zero, size: size)).cgPath
+        context.addPath(full)
+        context.addPath(rounded)
+        context.setBlendMode(.destinationOut)
+        context.drawPath(using: .eoFill)
+        context.setBlendMode(.normal)
+        context.restoreGState()
+        
         context.beginPath()
         let _ = try? drawSvgPath(context, path: "M6,0 L26.7573593,0 C27.5530088,-8.52837125e-16 28.3160705,0.316070521 28.8786797,0.878679656 L39.1213203,11.1213203 C39.6839295,11.6839295 40,12.4469912 40,13.2426407 L40,34 C40,37.3137085 37.3137085,40 34,40 L6,40 C2.6862915,40 4.05812251e-16,37.3137085 0,34 L0,6 C-4.05812251e-16,2.6862915 2.6862915,6.08718376e-16 6,0 ")
         context.clip()
-        
-        context.setFillColor(UIColor(rgb: 0xffffff, alpha: 0.2).cgColor)
+
+        context.setBlendMode(.overlay)
+        context.setFillColor(UIColor(rgb: 0xffffff, alpha: 0.5).cgColor)
         context.translateBy(x: 40.0 - 14.0, y: 0.0)
         let _ = try? drawSvgPath(context, path: "M-1,0 L14,0 L14,15 L14,14 C14,12.8954305 13.1045695,12 12,12 L4,12 C2.8954305,12 2,11.1045695 2,10 L2,2 C2,0.8954305 1.1045695,-2.02906125e-16 0,0 L-1,0 L-1,0 Z ")
     })
@@ -108,7 +121,7 @@ private struct FetchControls {
 }
 
 private enum FileIconImage: Equatable {
-    case imageRepresentation(Media, TelegramMediaImageRepresentation)
+    case imageRepresentation(EngineRawMedia, TelegramMediaImageRepresentation)
     case albumArt(TelegramMediaFile, SharedMediaPlaybackAlbumArt)
     case roundVideo(TelegramMediaFile)
     
@@ -158,7 +171,176 @@ final class CachedChatListSearchResult {
     }
 }
 
+private func selectStoryMedia(item: Stories.Item, preferredHighQuality: Bool) -> EngineRawMedia? {
+    if !preferredHighQuality, let alternativeMediaValue = item.alternativeMediaList.first {
+        return alternativeMediaValue
+    } else {
+        return item.media
+    }
+}
+
 public final class ListMessageFileItemNode: ListMessageNode {
+    public final class DescriptionNode: ASDisplayNode {
+        let descriptionNode: TextNode
+        var titleTopicArrowNode: ASImageNode?
+        var topicTitleNode: TextNode?
+        var titleTopicIconView: ComponentHostView<Empty>?
+        var titleTopicIconComponent: EmojiStatusComponent?
+        
+        var visibilityStatus: Bool = false {
+            didSet {
+                if self.visibilityStatus != oldValue {
+                    if let titleTopicIconView = self.titleTopicIconView, let titleTopicIconComponent = self.titleTopicIconComponent {
+                        let _ = titleTopicIconView.update(
+                            transition: .immediate,
+                            component: AnyComponent(titleTopicIconComponent.withVisibleForAnimations(self.visibilityStatus)),
+                            environment: {},
+                            containerSize: titleTopicIconView.bounds.size
+                        )
+                    }
+                }
+            }
+        }
+        
+        override init() {
+            self.descriptionNode = TextNode()
+            self.descriptionNode.displaysAsynchronously = true
+            
+            super.init()
+            
+            self.addSubnode(self.descriptionNode)
+        }
+        
+        func asyncLayout() -> (_ context: AccountContext, _ constrainedWidth: CGFloat, _ theme: PresentationTheme, _ authorTitle: NSAttributedString?, _ truncateType: CTLineTruncationType, _ topic: (title: NSAttributedString, showIcon: Bool, iconId: Int64?, iconColor: Int32)?) -> (CGSize, () -> Void) {
+            let makeDescriptionLayout = TextNode.asyncLayout(self.descriptionNode)
+            let makeTopicTitleLayout = TextNode.asyncLayout(self.topicTitleNode)
+            
+            return { [weak self] context, constrainedWidth, theme, authorTitle, truncateType, topic in
+                var maxTitleWidth = constrainedWidth
+                if let _ = topic {
+                    maxTitleWidth = floor(constrainedWidth * 0.7)
+                }
+                
+                let descriptionLayout = makeDescriptionLayout(TextNodeLayoutArguments(attributedString: authorTitle, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: truncateType, constrainedSize: CGSize(width: maxTitleWidth, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets(top: 2.0, left: 1.0, bottom: 2.0, right: 1.0)))
+                
+                var remainingWidth = constrainedWidth - descriptionLayout.0.size.width
+                
+                var topicTitleArguments: TextNodeLayoutArguments?
+                var arrowIconImage: UIImage?
+                if let topic = topic {
+                    remainingWidth -= 22.0 + 2.0
+                    
+                    if authorTitle != nil {
+                        arrowIconImage = PresentationResourcesItemList.topicArrowDescriptionIcon(theme)
+                        if let arrowIconImage = arrowIconImage {
+                            remainingWidth -= arrowIconImage.size.width + 6.0 * 2.0
+                        }
+                    }
+                    
+                    topicTitleArguments = TextNodeLayoutArguments(attributedString: topic.title, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: remainingWidth, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets(top: 2.0, left: 1.0, bottom: 2.0, right: 1.0))
+                }
+                
+                let topicTitleLayout = topicTitleArguments.flatMap(makeTopicTitleLayout)
+                
+                var size = descriptionLayout.0.size
+                if let topicTitleLayout = topicTitleLayout {
+                    size.height = max(size.height, topicTitleLayout.0.size.height)
+                    size.width += 10.0 + topicTitleLayout.0.size.width
+                }
+                
+                return (size, {
+                    guard let self else {
+                        return
+                    }
+                    
+                    let _ = descriptionLayout.1()
+                    let authorFrame = CGRect(origin: CGPoint(), size: descriptionLayout.0.size)
+                    self.descriptionNode.frame = authorFrame
+                    
+                    var nextX = authorFrame.maxX - 1.0
+                    if authorTitle == nil {
+                        nextX = 0.0
+                    }
+                    
+                    if let arrowIconImage = arrowIconImage {
+                        let titleTopicArrowNode: ASImageNode
+                        if let current = self.titleTopicArrowNode {
+                            titleTopicArrowNode = current
+                        } else {
+                            titleTopicArrowNode = ASImageNode()
+                            self.titleTopicArrowNode = titleTopicArrowNode
+                            self.addSubnode(titleTopicArrowNode)
+                        }
+                        titleTopicArrowNode.image = arrowIconImage
+                        nextX += 6.0
+                        titleTopicArrowNode.frame = CGRect(origin: CGPoint(x: nextX, y: 5.0), size: arrowIconImage.size)
+                        nextX += arrowIconImage.size.width + 6.0
+                    } else {
+                        if let titleTopicArrowNode = self.titleTopicArrowNode {
+                            self.titleTopicArrowNode = nil
+                            titleTopicArrowNode.removeFromSupernode()
+                        }
+                    }
+                    
+                    if let topic, topic.showIcon {
+                        let titleTopicIconView: ComponentHostView<Empty>
+                        if let current = self.titleTopicIconView {
+                            titleTopicIconView = current
+                        } else {
+                            titleTopicIconView = ComponentHostView<Empty>()
+                            self.titleTopicIconView = titleTopicIconView
+                            self.view.addSubview(titleTopicIconView)
+                        }
+                        
+                        let titleTopicIconContent: EmojiStatusComponent.Content
+                        if let fileId = topic.iconId, fileId != 0 {
+                            titleTopicIconContent = .animation(content: .customEmoji(fileId: fileId), size: CGSize(width: 36.0, height: 36.0), placeholderColor: theme.list.mediaPlaceholderColor, themeColor: theme.list.itemAccentColor, loopMode: .count(2))
+                        } else {
+                            titleTopicIconContent = .topic(title: String(topic.title.string.prefix(1)), color: topic.iconColor, size: CGSize(width: 22.0, height: 22.0))
+                        }
+                        
+                        let titleTopicIconComponent = EmojiStatusComponent(
+                            context: context,
+                            animationCache: context.animationCache,
+                            animationRenderer: context.animationRenderer,
+                            content: titleTopicIconContent,
+                            isVisibleForAnimations: self.visibilityStatus,
+                            action: nil
+                        )
+                        self.titleTopicIconComponent = titleTopicIconComponent
+                        
+                        let iconSize = titleTopicIconView.update(
+                            transition: .immediate,
+                            component: AnyComponent(titleTopicIconComponent),
+                            environment: {},
+                            containerSize: CGSize(width: 22.0, height: 22.0)
+                        )
+                        titleTopicIconView.frame = CGRect(origin: CGPoint(x: nextX, y: UIScreenPixel), size: iconSize)
+                        nextX += iconSize.width + 2.0
+                    } else {
+                        if let titleTopicIconView = self.titleTopicIconView {
+                            self.titleTopicIconView = nil
+                            titleTopicIconView.removeFromSuperview()
+                        }
+                    }
+                    
+                    if let topicTitleLayout = topicTitleLayout {
+                        let topicTitleNode = topicTitleLayout.1()
+                        if topicTitleNode.supernode == nil {
+                            self.addSubnode(topicTitleNode)
+                            self.topicTitleNode = topicTitleNode
+                        }
+                        
+                        topicTitleNode.frame = CGRect(origin: CGPoint(x: nextX - 1.0, y: 0.0), size: topicTitleLayout.0.size)
+                    } else if let topicTitleNode = self.topicTitleNode {
+                        self.topicTitleNode = nil
+                        topicTitleNode.removeFromSupernode()
+                    }
+                })
+            }
+        }
+    }
+    
     private let contextSourceNode: ContextExtractedContentContainingNode
     private let containerNode: ContextControllerSourceNode
     private let extractedBackgroundImageNode: ASImageNode
@@ -175,9 +357,9 @@ public final class ListMessageFileItemNode: ListMessageNode {
     
     private var selectionNode: ItemListSelectableControlNode?
     
-    public let titleNode: TextNode
+    public let titleNode: DescriptionNode
     public let textNode: TextNode
-    public let descriptionNode: TextNode
+    public let descriptionNode: DescriptionNode
     private let descriptionProgressNode: ImmediateTextNode
     public let dateNode: TextNode
     
@@ -185,15 +367,16 @@ public final class ListMessageFileItemNode: ListMessageNode {
     private let extensionIconText: TextNode
     public let iconImageNode: TransformImageNode
     private let iconStatusNode: SemanticStatusNode
+    private let iconButtonNode: HighlightTrackingButtonNode
     
     private let restrictionNode: ASDisplayNode
     
     private var currentIconImage: FileIconImage?
-    public var currentMedia: Media?
+    public var currentMedia: EngineRawMedia?
     
     private let statusDisposable = MetaDisposable()
     private let fetchControls = Atomic<FetchControls?>(value: nil)
-    private var fetchStatus: MediaResourceStatus?
+    private var fetchStatus: EngineMediaResourceStatus?
     private var resourceStatus: FileMediaResourceMediaStatus?
     private let fetchDisposable = MetaDisposable()
     private let playbackStatusDisposable = MetaDisposable()
@@ -206,15 +389,42 @@ public final class ListMessageFileItemNode: ListMessageNode {
     private var absoluteLocation: (CGRect, CGSize)?
     
     private var context: AccountContext?
-    private (set) var message: Message?
+    private(set) var message: EngineRawMessage?
     
     private var appliedItem: ListMessageItem?
     private var layoutParams: ListViewItemLayoutParams?
     private var contentSizeValue: CGSize?
     private var currentLeftOffset: CGFloat = 0.0
+    private var currentRightOffset: CGFloat = 0.0
+    
+    var reorderControlNode: ItemListEditableReorderControlNode?
     
     private var currentIsRestricted = false
     private var cachedSearchResult: CachedChatListSearchResult?
+    
+    public override var visibility: ListViewItemNodeVisibility {
+        didSet {
+            let wasVisible = self.visibilityStatus
+            let isVisible: Bool
+            switch self.visibility {
+                case let .visible(fraction, _):
+                    isVisible = fraction > 0.2
+                case .none:
+                    isVisible = false
+            }
+            if wasVisible != isVisible {
+                self.visibilityStatus = isVisible
+            }
+        }
+    }
+    
+    private var visibilityStatus: Bool = false {
+        didSet {
+            if self.visibilityStatus != oldValue {
+                self.descriptionNode.visibilityStatus = self.visibilityStatus
+            }
+        }
+    }
     
     public required init() {
         self.contextSourceNode = ContextExtractedContentContainingNode()
@@ -236,7 +446,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
         self.highlightedBackgroundNode = ASDisplayNode()
         self.highlightedBackgroundNode.isLayerBacked = true
         
-        self.titleNode = TextNode()
+        self.titleNode = DescriptionNode()
         self.titleNode.displaysAsynchronously = false
         self.titleNode.isUserInteractionEnabled = false
 
@@ -244,7 +454,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
         self.textNode.displaysAsynchronously = false
         self.textNode.isUserInteractionEnabled = false
         
-        self.descriptionNode = TextNode()
+        self.descriptionNode = DescriptionNode()
         self.descriptionNode.displaysAsynchronously = false
         self.descriptionNode.isUserInteractionEnabled = false
         
@@ -272,6 +482,8 @@ public final class ListMessageFileItemNode: ListMessageNode {
         self.iconStatusNode = SemanticStatusNode(backgroundNodeColor: .clear, foregroundNodeColor: .white)
         self.iconStatusNode.isUserInteractionEnabled = false
         
+        self.iconButtonNode = HighlightTrackingButtonNode()
+        
         self.restrictionNode = ASDisplayNode()
         self.restrictionNode.isHidden = true
         
@@ -291,6 +503,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
         self.offsetContainerNode.addSubnode(self.extensionIconNode)
         self.offsetContainerNode.addSubnode(self.extensionIconText)
         self.offsetContainerNode.addSubnode(self.iconStatusNode)
+        self.offsetContainerNode.addSubnode(self.iconButtonNode)
         
         self.addSubnode(self.restrictionNode)
         self.addSubnode(self.separatorNode)
@@ -311,7 +524,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
             }
             
             if isExtracted {
-                strongSelf.extractedBackgroundImageNode.image = generateStretchableFilledCircleImage(diameter: 28.0, color: item.presentationData.theme.theme.list.plainBackgroundColor)
+                strongSelf.extractedBackgroundImageNode.image = generateStretchableFilledCircleImage(diameter: 28.0, color: item.presentationData.theme.theme.list.itemModalBlocksBackgroundColor)
             }
             
             if let extractedRect = strongSelf.extractedRect, let nonExtractedRect = strongSelf.nonExtractedRect {
@@ -327,6 +540,8 @@ public final class ListMessageFileItemNode: ListMessageNode {
             })
             transition.updateAlpha(node: strongSelf.dateNode, alpha: isExtracted ? 0.0 : 1.0)
         }
+        
+        self.iconButtonNode.addTarget(self, action: #selector(self.iconButtonPressed), forControlEvents: .touchUpInside)
     }
     
     deinit {
@@ -342,10 +557,23 @@ public final class ListMessageFileItemNode: ListMessageNode {
         self.item = item
     }
     
-    override public func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, previousItem: ListViewItem?, nextItem: ListViewItem?) {
+    @objc private func iconButtonPressed() {
+        guard let item = self.item, let message = item.message else {
+            return
+        }
+        if let resourceStatus = self.resourceStatus, case .playbackStatus = resourceStatus {
+            if let context = self.context {
+                context.sharedContext.mediaManager.playlistControl(.playback(.togglePlayPause), type: nil)
+            }
+        } else {
+            item.interaction.toggleMediaPlayback?(message)
+        }
+    }
+    
+    override public func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, neighbors: ListViewItemNeighbors) {
         if let item = item as? ListMessageItem {
             let doLayout = self.asyncLayout()
-            let merged = (top: false, bottom: false, dateAtBottom: item.getDateAtBottom(top: previousItem, bottom: nextItem))
+            let merged = (top: false, bottom: false, dateAtBottom: item.getDateAtBottom(top: neighbors.previous))
             let (layout, apply) = doLayout(item, params, merged.top, merged.bottom, merged.dateAtBottom)
             self.contentSize = layout.contentSize
             self.insets = layout.insets
@@ -353,8 +581,8 @@ public final class ListMessageFileItemNode: ListMessageNode {
         }
     }
     
-    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
-        super.animateInsertion(currentTimestamp, duration: duration, short: short)
+    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
+        super.animateInsertion(currentTimestamp, duration: duration, options: options)
         
         self.transitionOffset = self.bounds.size.height * 1.6
         self.addTransitionOffsetAnimation(0.0, duration: duration, beginAt: currentTimestamp)
@@ -373,13 +601,21 @@ public final class ListMessageFileItemNode: ListMessageNode {
         }
     }
     
+    override public func isReorderable(at point: CGPoint) -> Bool {
+        if let reorderControlNode = self.reorderControlNode, reorderControlNode.frame.contains(point) {
+            return true
+        }
+        return false
+    }
+    
     override public func asyncLayout() -> (_ item: ListMessageItem, _ params: ListViewItemLayoutParams, _ mergedTop: Bool, _ mergedBottom: Bool, _ dateHeaderAtBottom: Bool) -> (ListViewItemNodeLayout, (ListViewItemUpdateAnimation) -> Void) {
-        let titleNodeMakeLayout = TextNode.asyncLayout(self.titleNode)
+        let titleNodeMakeLayout = self.titleNode.asyncLayout()
         let textNodeMakeLayout = TextNode.asyncLayout(self.textNode)
-        let descriptionNodeMakeLayout = TextNode.asyncLayout(self.descriptionNode)
+        let descriptionNodeMakeLayout = self.descriptionNode.asyncLayout()
         let extensionIconTextMakeLayout = TextNode.asyncLayout(self.extensionIconText)
         let dateNodeMakeLayout = TextNode.asyncLayout(self.dateNode)
         let iconImageLayout = self.iconImageNode.asyncLayout()
+        let reorderControlLayout = ItemListEditableReorderControlNode.asyncLayout(self.reorderControlNode)
         
         let currentMedia = self.currentMedia
         let currentMessage = self.message
@@ -402,15 +638,23 @@ public final class ListMessageFileItemNode: ListMessageNode {
             let descriptionFont = Font.regular(floor(item.presentationData.fontSize.baseDisplaySize * 14.0 / 17.0))
             let dateFont = Font.regular(floor(item.presentationData.fontSize.itemListBaseFontSize * 14.0 / 17.0))
             
+            let iconCornerRadius: CGFloat = item.systemStyle == .glass ? 12.0 : 6.0
+            
             let leftInset: CGFloat = 65.0 + params.leftInset
             let rightInset: CGFloat = 8.0 + params.rightInset
             
             var leftOffset: CGFloat = 0.0
+            var rightOffset: CGFloat = 0.0
             var selectionNodeWidthAndApply: (CGFloat, (CGSize, Bool) -> ItemListSelectableControlNode)?
-            if case let .selectable(selected) = item.selection {
-                let (selectionWidth, selectionApply) = selectionNodeLayout(item.presentationData.theme.theme.list.itemCheckColors.strokeColor, item.presentationData.theme.theme.list.itemCheckColors.fillColor, item.presentationData.theme.theme.list.itemCheckColors.foregroundColor, selected, false)
+            if case let .selectable(selected, num) = item.selection {
+                let (selectionWidth, selectionApply) = selectionNodeLayout(item.presentationData.theme.theme.list.itemCheckColors.strokeColor, item.presentationData.theme.theme.list.itemCheckColors.fillColor, item.presentationData.theme.theme.list.itemCheckColors.foregroundColor, selected, .regular, num.flatMap { $0 + 1 })
                 selectionNodeWidthAndApply = (selectionWidth, selectionApply)
-                leftOffset += selectionWidth
+                switch item.selectionSide {
+                case .left:
+                    leftOffset += selectionWidth
+                case .right:
+                    rightOffset += selectionWidth
+                }
             }
             
             var extensionIconImage: UIImage?
@@ -423,6 +667,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
             var updatedStatusSignal: Signal<FileMediaResourceStatus, NoError>?
             var updatedPlaybackStatusSignal: Signal<MediaPlayerStatus, NoError>?
             var updatedFetchControls: FetchControls?
+            var reorderControlSizeAndApply: (CGFloat, (CGFloat, Bool, ContainedViewLayoutTransition) -> ItemListEditableReorderControlNode)?
             
             var isAudio = false
             var isVoice = false
@@ -432,9 +677,23 @@ public final class ListMessageFileItemNode: ListMessageNode {
             
             let message = item.message
             
-            var selectedMedia: Media?
+            var titleExtraData: (title: NSAttributedString, showIcon: Bool, iconId: Int64?, iconColor: Int32)? = nil
+            var descriptionExtraData: (title: NSAttributedString, showIcon: Bool, iconId: Int64?, iconColor: Int32)? = nil
+            var globalAuthorTitle: String?
+            
+            var selectedMedia: EngineRawMedia?
             if let message = message {
+                var effectiveMessageMedia = message.effectiveMedia
                 for media in message.media {
+                    if let storyMedia = media as? TelegramMediaStory {
+                        if let story = message.associatedStories[storyMedia.storyId], !story.data.isEmpty, case let .item(storyItem) = story.get(Stories.StoredItem.self), let media = selectStoryMedia(item: storyItem, preferredHighQuality: item.interaction.preferredStoryHighQuality) {
+                            effectiveMessageMedia = [media]
+                            break
+                        }
+                    }
+                }
+                
+                for media in effectiveMessageMedia {
                     if let file = media as? TelegramMediaFile {
                         selectedMedia = file
                         
@@ -462,10 +721,13 @@ public final class ListMessageFileItemNode: ListMessageNode {
                                 
                                 if item.isGlobalSearchResult || item.isDownloadList {
                                     let authorString = stringForFullAuthorName(message: EngineMessage(message), strings: item.presentationData.strings, nameDisplayOrder: item.presentationData.nameDisplayOrder, accountPeerId: item.context.account.peerId)
+                                    if authorString.count > 1 {
+                                        globalAuthorTitle = authorString.last ?? ""
+                                    }
                                     if descriptionString.isEmpty {
-                                        descriptionString = authorString
-                                    } else {
-                                        descriptionString = "\(descriptionString) • \(authorString)"
+                                        descriptionString = authorString.first ?? ""
+                                    } else if let authorStringFirst = authorString.first {
+                                        descriptionString = "\(descriptionString) • \(authorStringFirst)"
                                     }
                                 }
                                 
@@ -473,9 +735,9 @@ public final class ListMessageFileItemNode: ListMessageNode {
                                 
                                 if !voice {
                                     if file.fileName?.lowercased().hasSuffix(".ogg") == true {
-                                        iconImage = .albumArt(file, SharedMediaPlaybackAlbumArt(thumbnailResource: ExternalMusicAlbumArtResource(title: "", performer: "", isThumbnail: true), fullSizeResource: ExternalMusicAlbumArtResource(title: "", performer: "", isThumbnail: false)))
+                                        iconImage = .albumArt(file, SharedMediaPlaybackAlbumArt(thumbnailResource: ExternalMusicAlbumArtResource(file: .message(message: MessageReference(message), media: file), title: "", performer: "", isThumbnail: true), fullSizeResource: ExternalMusicAlbumArtResource(file: .message(message: MessageReference(message), media: file), title: "", performer: "", isThumbnail: false)))
                                     } else {
-                                        iconImage = .albumArt(file, SharedMediaPlaybackAlbumArt(thumbnailResource: ExternalMusicAlbumArtResource(title: title ?? "", performer: performer ?? "", isThumbnail: true), fullSizeResource: ExternalMusicAlbumArtResource(title: title ?? "", performer: performer ?? "", isThumbnail: false)))
+                                        iconImage = .albumArt(file, SharedMediaPlaybackAlbumArt(thumbnailResource: ExternalMusicAlbumArtResource(file: .message(message: MessageReference(message), media: file), title: title ?? "", performer: performer ?? "", isThumbnail: true), fullSizeResource: ExternalMusicAlbumArtResource(file: .message(message: MessageReference(message), media: file), title: title ?? "", performer: performer ?? "", isThumbnail: false)))
                                     }
                                 } else {
                                     titleText = NSAttributedString(string: " ", font: audioTitleFont, textColor: item.presentationData.theme.theme.list.itemPrimaryTextColor)
@@ -505,7 +767,11 @@ public final class ListMessageFileItemNode: ListMessageNode {
                             }
                             
                             if item.isGlobalSearchResult || item.isDownloadList {
-                                authorName = stringForFullAuthorName(message: EngineMessage(message), strings: item.presentationData.strings, nameDisplayOrder: item.presentationData.nameDisplayOrder, accountPeerId: item.context.account.peerId)
+                                let authorString = stringForFullAuthorName(message: EngineMessage(message), strings: item.presentationData.strings, nameDisplayOrder: item.presentationData.nameDisplayOrder, accountPeerId: item.context.account.peerId)
+                                if authorString.count > 1 {
+                                    globalAuthorTitle = authorString.last ?? ""
+                                }
+                                authorName = authorString.first ?? ""
                             }
                             
                             titleText = NSAttributedString(string: authorName, font: audioTitleFont, textColor: item.presentationData.theme.theme.list.itemPrimaryTextColor)
@@ -562,10 +828,13 @@ public final class ListMessageFileItemNode: ListMessageNode {
                             
                             if item.isGlobalSearchResult || item.isDownloadList {
                                 let authorString = stringForFullAuthorName(message: EngineMessage(message), strings: item.presentationData.strings, nameDisplayOrder: item.presentationData.nameDisplayOrder, accountPeerId: item.context.account.peerId)
+                                if authorString.count > 1 {
+                                    globalAuthorTitle = authorString.last ?? ""
+                                }
                                 if descriptionString.isEmpty {
-                                    descriptionString = authorString
+                                    descriptionString = authorString.first ?? ""
                                 } else {
-                                    descriptionString = "\(descriptionString) • \(authorString)"
+                                    descriptionString = "\(descriptionString) • \(authorString.first ?? "")"
                                 }
                             }
                         
@@ -590,12 +859,15 @@ public final class ListMessageFileItemNode: ListMessageNode {
                             descriptionString = "\(dateString)"
                         }
                         
-                        if item.isGlobalSearchResult || item.isDownloadList {
+                        if item.isGlobalSearchResult || item.isDownloadList {                            
                             let authorString = stringForFullAuthorName(message: EngineMessage(message), strings: item.presentationData.strings, nameDisplayOrder: item.presentationData.nameDisplayOrder, accountPeerId: item.context.account.peerId)
+                            if authorString.count > 1 {
+                                globalAuthorTitle = authorString.last ?? ""
+                            }
                             if descriptionString.isEmpty {
-                                descriptionString = authorString
+                                descriptionString = authorString.first ?? ""
                             } else {
-                                descriptionString = "\(descriptionString) • \(authorString)"
+                                descriptionString = "\(descriptionString) • \(authorString.first ?? "")"
                             }
                         }
                     
@@ -612,6 +884,20 @@ public final class ListMessageFileItemNode: ListMessageNode {
             } else {
                 titleText = NSAttributedString(string: " ", font: titleFont, textColor: item.presentationData.theme.theme.list.itemPrimaryTextColor)
                 descriptionText = NSAttributedString(string: " ", font: descriptionFont, textColor: item.presentationData.theme.theme.list.itemSecondaryTextColor)
+            }
+            
+            if let _ = item.message?.threadId, item.message?.id.peerId.namespace == Namespaces.Peer.CloudChannel, let threadInfo = item.message?.associatedThreadInfo {
+                if isInstantVideo || isVoice {
+                    titleExtraData = (NSAttributedString(string: threadInfo.title, font: titleFont, textColor: item.presentationData.theme.theme.list.itemPrimaryTextColor), true, threadInfo.icon, threadInfo.iconColor)
+                } else {
+                    descriptionExtraData = (NSAttributedString(string: threadInfo.title, font: descriptionFont, textColor: item.presentationData.theme.theme.list.itemSecondaryTextColor), true, threadInfo.icon, threadInfo.iconColor)
+                }
+            } else if let globalAuthorTitle = globalAuthorTitle {
+                if isInstantVideo || isVoice {
+                    titleExtraData = (NSAttributedString(string: globalAuthorTitle, font: titleFont, textColor: item.presentationData.theme.theme.list.itemPrimaryTextColor), false, nil, 0)
+                } else {
+                    descriptionExtraData = (NSAttributedString(string: globalAuthorTitle, font: descriptionFont, textColor: item.presentationData.theme.theme.list.itemSecondaryTextColor), false, nil, 0)
+                }
             }
             
             var mediaUpdated = false
@@ -638,7 +924,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
                             if let file = selectedMedia as? TelegramMediaFile {
                                 strongSelf.fetchDisposable.set(messageMediaFileInteractiveFetched(context: context, message: message, file: file, userInitiated: true).start())
                             } else if let image = selectedMedia as? TelegramMediaImage, let representation = image.representations.last {
-                                strongSelf.fetchDisposable.set(messageMediaImageInteractiveFetched(context: context, message: message, image: image, resource: representation.resource, userInitiated: true, storeToDownloadsPeerType: nil).start())
+                                strongSelf.fetchDisposable.set(messageMediaImageInteractiveFetched(context: context, message: message, image: image, resource: representation.resource, userInitiated: true, storeToDownloadsPeerId: nil).start())
                             }
                         }
                     }, cancel: {
@@ -660,7 +946,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
                 
                 if statusUpdated && item.displayFileInfo {
                     if let file = selectedMedia as? TelegramMediaFile {
-                        updatedStatusSignal = messageFileMediaResourceStatus(context: item.context, file: file, message: message, isRecentActions: false, isSharedMedia: true, isGlobalSearch: item.isGlobalSearchResult, isDownloadList: item.isDownloadList)
+                        updatedStatusSignal = messageFileMediaResourceStatus(context: item.context, file: file, message: EngineMessage(message), isRecentActions: false, isSharedMedia: true, isGlobalSearch: item.isGlobalSearchResult, isDownloadList: item.isDownloadList, isSavedMusic: item.isSavedMusic, isAttachMusic: item.isAttachMusic || item.isStoryMusic, richMessageQueueId: item.richMessageQueueId)
                         |> mapToSignal { value -> Signal<FileMediaResourceStatus, NoError> in
                             if case .Fetching = value.fetchStatus, !item.isDownloadList {
                                 return .single(value) |> delay(0.1, queue: Queue.concurrentDefaultQueue())
@@ -687,10 +973,10 @@ public final class ListMessageFileItemNode: ListMessageNode {
                             }
                         }
                         if isVoice {
-                            updatedPlaybackStatusSignal = messageFileMediaPlaybackStatus(context: item.context, file: file, message: message, isRecentActions: false, isGlobalSearch: item.isGlobalSearchResult, isDownloadList: item.isDownloadList)
+                            updatedPlaybackStatusSignal = messageFileMediaPlaybackStatus(context: item.context, file: file, message: EngineMessage(message), isRecentActions: false, isGlobalSearch: item.isGlobalSearchResult, isDownloadList: item.isDownloadList, isSavedMusic: false, richMessageQueueId: item.richMessageQueueId)
                         }
                     } else if let image = selectedMedia as? TelegramMediaImage {
-                        updatedStatusSignal = messageImageMediaResourceStatus(context: item.context, image: image, message: message, isRecentActions: false, isSharedMedia: true, isGlobalSearch: item.isGlobalSearchResult || item.isDownloadList)
+                        updatedStatusSignal = messageImageMediaResourceStatus(context: item.context, image: image, message: EngineMessage(message), isRecentActions: false, isSharedMedia: true, isGlobalSearch: item.isGlobalSearchResult || item.isDownloadList)
                         |> mapToSignal { value -> Signal<FileMediaResourceStatus, NoError> in
                             if case .Fetching = value.fetchStatus, !item.isDownloadList {
                                 return .single(value) |> delay(0.1, queue: Queue.concurrentDefaultQueue())
@@ -742,17 +1028,30 @@ public final class ListMessageFileItemNode: ListMessageNode {
                 captionText = text
             }
             
+            var reorderInset: CGFloat = 0.0
+            
+            if item.canReorder {
+                let sizeAndApply = reorderControlLayout(item.presentationData.theme.theme)
+                reorderControlSizeAndApply = sizeAndApply
+                reorderInset = sizeAndApply.0
+            }
+            
+            var contentRightInset = rightInset + rightOffset + reorderInset
+            if !item.isGlobalSearchResult {
+                contentRightInset += 16.0
+            }
+            
             let timestamp = Int32(CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970)
             let dateText = stringForRelativeTimestamp(strings: item.presentationData.strings, relativeTimestamp: item.message?.timestamp ?? 0, relativeTo: timestamp, dateTimeFormat: item.presentationData.dateTimeFormat)
-            let dateAttributedString = NSAttributedString(string: dateText, font: dateFont, textColor: item.presentationData.theme.theme.list.itemSecondaryTextColor)
+            let dateAttributedString = !item.isGlobalSearchResult ? NSAttributedString() : NSAttributedString(string: dateText, font: dateFont, textColor: item.presentationData.theme.theme.list.itemSecondaryTextColor)
             
-            let (dateNodeLayout, dateNodeApply) = dateNodeMakeLayout(TextNodeLayoutArguments(attributedString: dateAttributedString, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - rightInset - 12.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let (dateNodeLayout, dateNodeApply) = dateNodeMakeLayout(TextNodeLayoutArguments(attributedString: dateAttributedString, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - leftOffset - contentRightInset - 12.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
-            let (titleNodeLayout, titleNodeApply) = titleNodeMakeLayout(TextNodeLayoutArguments(attributedString: titleText, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .middle, constrainedSize: CGSize(width: params.width - leftInset - leftOffset - rightInset - dateNodeLayout.size.width - 4.0, height: CGFloat.infinity), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let (titleNodeLayout, titleNodeApply) = titleNodeMakeLayout(item.context, params.width - leftInset - leftOffset - contentRightInset - dateNodeLayout.size.width - 4.0, item.presentationData.theme.theme, titleText, isAudio ? .end : .middle, titleExtraData)
             
-            let (textNodeLayout, textNodeApply) = textNodeMakeLayout(TextNodeLayoutArguments(attributedString: captionText, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - rightInset - 30.0, height: CGFloat.infinity), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let (textNodeLayout, textNodeApply) = textNodeMakeLayout(TextNodeLayoutArguments(attributedString: captionText, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - leftOffset - contentRightInset - 30.0, height: CGFloat.infinity), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
-            let (descriptionNodeLayout, descriptionNodeApply) = descriptionNodeMakeLayout(TextNodeLayoutArguments(attributedString: descriptionText, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - rightInset - 30.0, height: CGFloat.infinity), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let (descriptionNodeLayout, descriptionNodeApply) = descriptionNodeMakeLayout(item.context, params.width - leftInset - leftOffset - contentRightInset - 30.0, item.presentationData.theme.theme, descriptionText, .middle, descriptionExtraData)
             
             var (extensionTextLayout, extensionTextApply) = extensionIconTextMakeLayout(TextNodeLayoutArguments(attributedString: extensionText, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: 38.0, height: CGFloat.infinity), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             if extensionTextLayout.truncated, let text = extensionText?.string  {
@@ -765,7 +1064,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
                 switch iconImage {
                     case let .imageRepresentation(_, representation):
                         let iconSize = CGSize(width: 40.0, height: 40.0)
-                        let imageCorners = ImageCorners(radius: 6.0)
+                        let imageCorners = ImageCorners(radius: iconCornerRadius, curve: item.systemStyle == .glass ? .continuous : .circular)
                         let arguments = TransformImageArguments(corners: imageCorners, imageSize: representation.dimensions.cgSize.aspectFilled(iconSize), boundingSize: iconSize, intrinsicInsets: UIEdgeInsets(), emptyColor: item.presentationData.theme.theme.list.mediaPlaceholderColor)
                         iconImageApply = iconImageLayout(arguments)
                     case .albumArt:
@@ -787,16 +1086,16 @@ public final class ListMessageFileItemNode: ListMessageNode {
                         switch iconImage {
                             case let .imageRepresentation(media, representation):
                                 if let file = media as? TelegramMediaFile {
-                                    updateIconImageSignal = chatWebpageSnippetFile(account: item.context.account, mediaReference: FileMediaReference.message(message: MessageReference(message), media: file).abstract, representation: representation)
+                                    updateIconImageSignal = chatWebpageSnippetFile(account: item.context.account, userLocation: .peer(message.id.peerId), mediaReference: FileMediaReference.message(message: MessageReference(message), media: file).abstract, representation: representation)
                                 } else if let image = media as? TelegramMediaImage {
-                                    updateIconImageSignal = mediaGridMessagePhoto(account: item.context.account, photoReference: ImageMediaReference.message(message: MessageReference(message), media: image))
+                                    updateIconImageSignal = mediaGridMessagePhoto(account: item.context.account, userLocation: .peer(message.id.peerId), photoReference: ImageMediaReference.message(message: MessageReference(message), media: image))
                                 } else {
                                     updateIconImageSignal = .complete()
                                 }
                             case let .albumArt(file, albumArt):
-                                updateIconImageSignal = playerAlbumArt(postbox: item.context.account.postbox, engine: item.context.engine, fileReference: .message(message: MessageReference(message), media: file), albumArt: albumArt, thumbnail: true, overlayColor: UIColor(white: 0.0, alpha: 0.3), emptyColor: item.presentationData.theme.theme.list.itemAccentColor)
+                                updateIconImageSignal = playerAlbumArt(engine: item.context.engine, fileReference: .message(message: MessageReference(message), media: file), albumArt: albumArt, thumbnail: true, overlayColor: UIColor(white: 0.0, alpha: 0.3), emptyColor: item.presentationData.theme.theme.list.itemAccentColor)
                             case let .roundVideo(file):
-                                updateIconImageSignal = mediaGridMessageVideo(postbox: item.context.account.postbox, videoReference: FileMediaReference.message(message: MessageReference(message), media: file), autoFetchFullSizeThumbnail: true, overlayColor: UIColor(white: 0.0, alpha: 0.3))
+                                updateIconImageSignal = mediaGridMessageVideo(postbox: item.context.account.postbox, userLocation: .peer(message.id.peerId), videoReference: FileMediaReference.message(message: MessageReference(message), media: file), autoFetchFullSizeThumbnail: true, overlayColor: UIColor(white: 0.0, alpha: 0.3))
                         }
                     } else {
                         updateIconImageSignal = .complete()
@@ -808,11 +1107,15 @@ public final class ListMessageFileItemNode: ListMessageNode {
             if dateHeaderAtBottom, let header = item.header {
                 insets.top += header.height
             }
-            if !mergedBottom, case .blocks = item.style {
-                insets.bottom += 35.0
+
+            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
+            
+            var verticalInset: CGFloat = 0.0
+            if case .glass = item.systemStyle {
+                verticalInset += 2.0 + UIScreenPixel
             }
             
-            let nodeLayout = ListViewItemNodeLayout(contentSize: CGSize(width: params.width, height: 8.0 * 2.0 + titleNodeLayout.size.height + 3.0 + descriptionNodeLayout.size.height + (textNodeLayout.size.height > 0.0 ? textNodeLayout.size.height + 3.0 : 0.0)), insets: insets)
+            let nodeLayout = ListViewItemNodeLayout(contentSize: CGSize(width: params.width, height: verticalInset * 2.0 + 8.0 * 2.0 + titleNodeLayout.height - 5.0 + descriptionNodeLayout.height + (textNodeLayout.size.height > 0.0 ? textNodeLayout.size.height + 3.0 : 0.0)), insets: insets)
             
             return (nodeLayout, { animation in
                 if let strongSelf = self {
@@ -856,9 +1159,10 @@ public final class ListMessageFileItemNode: ListMessageNode {
                     strongSelf.layoutParams = params
                     strongSelf.contentSizeValue = nodeLayout.contentSize
                     strongSelf.currentLeftOffset = leftOffset
+                    strongSelf.currentRightOffset = rightOffset + reorderInset
                     
                     if let _ = updatedTheme {
-                        if item.displayBackground {
+                        if item.displayBackground || item.canReorder {
                             let backgroundNode: ASDisplayNode
                             if let current = strongSelf.backgroundNode {
                                 backgroundNode = current
@@ -867,7 +1171,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
                                 strongSelf.backgroundNode = backgroundNode
                                 strongSelf.insertSubnode(backgroundNode, at: 0)
                             }
-                            backgroundNode.backgroundColor = item.presentationData.theme.theme.list.itemBlocksBackgroundColor
+                            backgroundNode.backgroundColor = item.canReorder ? item.presentationData.theme.theme.list.itemModalBlocksBackgroundColor : item.presentationData.theme.theme.list.itemBlocksBackgroundColor
                         }
                         
                         strongSelf.separatorNode.backgroundColor = item.presentationData.theme.theme.list.itemPlainSeparatorColor
@@ -880,26 +1184,60 @@ public final class ListMessageFileItemNode: ListMessageNode {
                     }
                     
                     if let (selectionWidth, selectionApply) = selectionNodeWidthAndApply {
-                        let selectionFrame = CGRect(origin: CGPoint(x: params.leftInset, y: 0.0), size: CGSize(width: selectionWidth, height: nodeLayout.contentSize.height))
+                        let selectionFrame: CGRect
+                        let sidePosition: CGPoint
+                        switch item.selectionSide {
+                        case .left:
+                            selectionFrame = CGRect(origin: CGPoint(x: params.leftInset, y: 0.0), size: CGSize(width: selectionWidth, height: nodeLayout.contentSize.height))
+                            sidePosition = CGPoint(x: -selectionFrame.size.width / 2.0, y: selectionFrame.midY)
+                        case .right:
+                            selectionFrame = CGRect(origin: CGPoint(x: params.width - params.rightInset - reorderInset - selectionWidth - 7.0, y: 0.0), size: CGSize(width: selectionWidth, height: nodeLayout.contentSize.height))
+                            sidePosition = CGPoint(x: params.width + selectionFrame.size.width / 2.0, y: selectionFrame.midY)
+                        }
                         let selectionNode = selectionApply(selectionFrame.size, transition.isAnimated)
                         if selectionNode !== strongSelf.selectionNode {
                             strongSelf.selectionNode?.removeFromSupernode()
                             strongSelf.selectionNode = selectionNode
                             strongSelf.contextSourceNode.contentNode.addSubnode(selectionNode)
                             selectionNode.frame = selectionFrame
-                            transition.animatePosition(node: selectionNode, from: CGPoint(x: -selectionFrame.size.width / 2.0, y: selectionFrame.midY))
+                            transition.animatePosition(node: selectionNode, from: sidePosition)
                         } else {
                             transition.updateFrame(node: selectionNode, frame: selectionFrame)
                         }
                     } else if let selectionNode = strongSelf.selectionNode {
                         strongSelf.selectionNode = nil
                         let selectionFrame = selectionNode.frame
-                        transition.updatePosition(node: selectionNode, position: CGPoint(x: -selectionFrame.size.width / 2.0, y: selectionFrame.midY), completion: { [weak selectionNode] _ in
+                        let sidePosition: CGPoint
+                        switch item.selectionSide {
+                        case .left:
+                            sidePosition = CGPoint(x: -selectionFrame.size.width / 2.0, y: selectionFrame.midY)
+                        case .right:
+                            sidePosition = CGPoint(x: params.width + selectionFrame.size.width / 2.0, y: selectionFrame.midY)
+                        }
+                        transition.updatePosition(node: selectionNode, position: sidePosition, completion: { [weak selectionNode] _ in
                             selectionNode?.removeFromSupernode()
                         })
                     }
                     
-                    transition.updateFrame(node: strongSelf.separatorNode, frame: CGRect(origin: CGPoint(x: leftInset + leftOffset, y: nodeLayout.contentSize.height - UIScreenPixel), size: CGSize(width: params.width - leftInset - leftOffset, height: UIScreenPixel)))
+                    if let reorderControlSizeAndApply = reorderControlSizeAndApply {
+                        let reorderControlFrame = CGRect(origin: CGPoint(x: params.width - params.rightInset - reorderControlSizeAndApply.0, y: 0.0), size: CGSize(width: reorderControlSizeAndApply.0, height: nodeLayout.contentSize.height))
+                        if strongSelf.reorderControlNode == nil {
+                            let reorderControlNode = reorderControlSizeAndApply.1(nodeLayout.contentSize.height, false, .immediate)
+                            strongSelf.reorderControlNode = reorderControlNode
+                            strongSelf.addSubnode(reorderControlNode)
+                            reorderControlNode.frame = reorderControlFrame
+                        } else if let reorderControlNode = strongSelf.reorderControlNode {
+                            let _ = reorderControlSizeAndApply.1(nodeLayout.contentSize.height, false, .immediate)
+                            transition.updateFrame(node: reorderControlNode, frame: reorderControlFrame)
+                        }
+                    } else if let reorderControlNode = strongSelf.reorderControlNode {
+                        strongSelf.reorderControlNode = nil
+                        transition.updateAlpha(node: reorderControlNode, alpha: 0.0, completion: { [weak reorderControlNode] _ in
+                            reorderControlNode?.removeFromSupernode()
+                        })
+                    }
+                    
+                    transition.updateFrame(node: strongSelf.separatorNode, frame: CGRect(origin: CGPoint(x: leftInset + leftOffset, y: nodeLayout.contentSize.height - UIScreenPixel), size: CGSize(width: params.width - leftInset - leftOffset - separatorRightInset - params.rightInset - rightOffset, height: UIScreenPixel)))
                     strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -nodeLayout.insets.top - UIScreenPixel), size: CGSize(width: params.width, height: nodeLayout.size.height + UIScreenPixel - nodeLayout.insets.bottom))
                     
                     if let backgroundNode = strongSelf.backgroundNode {
@@ -910,6 +1248,11 @@ public final class ListMessageFileItemNode: ListMessageNode {
                     case .plain:
                         if strongSelf.maskNode.supernode != nil {
                             strongSelf.maskNode.removeFromSupernode()
+                        }
+                        if !mergedBottom {
+                            strongSelf.separatorNode.isHidden = true
+                        } else {
+                            strongSelf.separatorNode.isHidden = false
                         }
                     case .blocks:
                         if strongSelf.maskNode.supernode == nil {
@@ -930,13 +1273,13 @@ public final class ListMessageFileItemNode: ListMessageNode {
                             strongSelf.separatorNode.isHidden = false
                         }
 
-                        strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                        strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                         if let backgroundNode = strongSelf.backgroundNode {
-                            strongSelf.maskNode.frame = backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                            strongSelf.maskNode.frame = backgroundNode.frame.insetBy(dx: params.leftInset, dy: -UIScreenPixel)
                         }
                     }
                     
-                    transition.updateFrame(node: strongSelf.titleNode, frame: CGRect(origin: CGPoint(x: leftOffset + leftInset, y: 9.0), size: titleNodeLayout.size))
+                    transition.updateFrame(node: strongSelf.titleNode, frame: CGRect(origin: CGPoint(x: leftOffset + leftInset - 1.0, y: 7.0 + verticalInset), size: titleNodeLayout))
                     let _ = titleNodeApply()
                     
                     var descriptionOffset: CGFloat = 0.0
@@ -954,27 +1297,34 @@ public final class ListMessageFileItemNode: ListMessageNode {
                         }
                     }
                     
-                    transition.updateFrame(node: strongSelf.textNode, frame: CGRect(origin: CGPoint(x: leftOffset + leftInset + descriptionOffset, y: strongSelf.titleNode.frame.maxY + 1.0), size: textNodeLayout.size))
+                    transition.updateFrame(node: strongSelf.textNode, frame: CGRect(origin: CGPoint(x: leftOffset + leftInset + descriptionOffset, y: strongSelf.titleNode.frame.maxY + 1.0 + verticalInset), size: textNodeLayout.size))
                     let _ = textNodeApply()
                     
-                    transition.updateFrame(node: strongSelf.descriptionNode, frame: CGRect(origin: CGPoint(x: leftOffset + leftInset + descriptionOffset, y: strongSelf.titleNode.frame.maxY + 1.0 + (textNodeLayout.size.height > 0.0 ? textNodeLayout.size.height + 3.0 : 0.0)), size: descriptionNodeLayout.size))
+                    transition.updateFrame(node: strongSelf.descriptionNode, frame: CGRect(origin: CGPoint(x: leftOffset + leftInset + descriptionOffset - 1.0, y: strongSelf.titleNode.frame.maxY - 3.0 + (textNodeLayout.size.height > 0.0 ? textNodeLayout.size.height + 3.0 : 0.0)), size: descriptionNodeLayout))
                     let _ = descriptionNodeApply()
                     
                     let _ = dateNodeApply()
-                    transition.updateFrame(node: strongSelf.dateNode, frame: CGRect(origin: CGPoint(x: params.width - rightInset - dateNodeLayout.size.width, y: 11.0), size: dateNodeLayout.size))
+                    transition.updateFrame(node: strongSelf.dateNode, frame: CGRect(origin: CGPoint(x: params.width - contentRightInset - dateNodeLayout.size.width, y: 11.0), size: dateNodeLayout.size))
                     strongSelf.dateNode.isHidden = !item.isGlobalSearchResult
                     
                     let iconSize = CGSize(width: 40.0, height: 40.0)
-                    let iconFrame = CGRect(origin: CGPoint(x: params.leftInset + leftOffset + 12.0, y: 8.0), size: iconSize)
+                    let iconFrame = CGRect(origin: CGPoint(x: params.leftInset + leftOffset + 12.0, y: 8.0 + verticalInset), size: iconSize)
                     transition.updateFrame(node: strongSelf.extensionIconNode, frame: iconFrame)
                     strongSelf.extensionIconNode.image = extensionIconImage
-                    transition.updateFrame(node: strongSelf.extensionIconText, frame: CGRect(origin: CGPoint(x: iconFrame.minX + floor((iconFrame.width - extensionTextLayout.size.width) / 2.0), y: iconFrame.minY + 7.0 + floor((iconFrame.height - extensionTextLayout.size.height) / 2.0)), size: extensionTextLayout.size))
+                    transition.updateFrame(node: strongSelf.extensionIconText, frame: CGRect(origin: CGPoint(x: iconFrame.minX + floorToScreenPixels((iconFrame.width - extensionTextLayout.size.width) / 2.0), y: iconFrame.minY + 5.0 + floorToScreenPixels((iconFrame.height - extensionTextLayout.size.height) / 2.0)), size: extensionTextLayout.size))
                     
                     transition.updateFrame(node: strongSelf.iconStatusNode, frame: iconFrame)
+                    
+                    strongSelf.iconButtonNode.isHidden = item.interaction.toggleMediaPlayback == nil
+                    strongSelf.iconButtonNode.frame = iconFrame.insetBy(dx: -8.0, dy: -8.0)
                     
                     let _ = extensionTextApply()
                     
                     strongSelf.currentIconImage = iconImage
+                                
+                    if let updateIconImageSignal, let iconImage, case .albumArt = iconImage {
+                        strongSelf.iconStatusNode.setBackgroundImage(updateIconImageSignal, size: CGSize(width: 40.0, height: 40.0))
+                    }
                     
                     if let iconImageApply = iconImageApply {
                         if let updateImageSignal = updateIconImageSignal {
@@ -1009,7 +1359,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
                         strongSelf.statusDisposable.set((updatedStatusSignal
                         |> deliverOnMainQueue).start(next: { [weak strongSelf] fileStatus in
                             if let strongSelf = strongSelf {
-                                strongSelf.fetchStatus = fileStatus.fetchStatus
+                                strongSelf.fetchStatus = fileStatus.fetchStatus._asStatus()
                                 strongSelf.resourceStatus = fileStatus.mediaStatus
                                 strongSelf.updateStatus(transition: .immediate)
                             }
@@ -1017,7 +1367,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
                     }
 
                     if let downloadStatusIconNode = strongSelf.downloadStatusIconNode {
-                        transition.updateFrame(node: downloadStatusIconNode, frame: CGRect(origin: CGPoint(x: leftOffset + leftInset - 3.0, y: strongSelf.descriptionNode.frame.minY + floor((strongSelf.descriptionNode.frame.height - 18.0) / 2.0)), size: CGSize(width: 18.0, height: 18.0)))
+                        transition.updateFrame(node: downloadStatusIconNode, frame: CGRect(origin: CGPoint(x: leftOffset + leftInset - 3.0, y: strongSelf.descriptionNode.frame.minY + floorToScreenPixels((strongSelf.descriptionNode.frame.height - 18.0) / 2.0) + UIScreenPixel), size: CGSize(width: 18.0, height: 18.0)))
                     }
                     
                     if let updatedFetchControls = updatedFetchControls {
@@ -1034,7 +1384,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
                             }
                         }))*/
                     }
-                    
+                                        
                     strongSelf.updateStatus(transition: transition)
                     
                     if item.message == nil {
@@ -1062,13 +1412,17 @@ public final class ListMessageFileItemNode: ListMessageNode {
                         let lineDiameter: CGFloat = 8.0
 
                         let titleFrame = strongSelf.titleNode.frame
-                        shapes.append(.roundedRectLine(startPoint: CGPoint(x: titleFrame.minX, y: titleFrame.minY + floor((titleFrame.height - lineDiameter) / 2.0)), width: titleLineWidth, diameter: lineDiameter))
+                        shapes.append(.roundedRectLine(startPoint: CGPoint(x: titleFrame.minX, y: titleFrame.minY + floorToScreenPixels((titleFrame.height - lineDiameter) / 2.0)), width: titleLineWidth, diameter: lineDiameter))
                         
                         let descriptionFrame = strongSelf.descriptionNode.frame
-                        shapes.append(.roundedRectLine(startPoint: CGPoint(x: descriptionFrame.minX, y: descriptionFrame.minY + floor((descriptionFrame.height - lineDiameter) / 2.0)), width: descriptionLineWidth, diameter: lineDiameter))
+                        shapes.append(.roundedRectLine(startPoint: CGPoint(x: descriptionFrame.minX, y: descriptionFrame.minY + floorToScreenPixels((descriptionFrame.height - lineDiameter) / 2.0)), width: descriptionLineWidth, diameter: lineDiameter))
                         
-                        shapes.append(.roundedRect(rect: iconFrame, cornerRadius: 6.0))
-
+                        if let media = selectedMedia as? TelegramMediaFile, media.isInstantVideo {
+                            shapes.append(.circle(iconFrame))
+                        } else {
+                            shapes.append(.roundedRect(rect: iconFrame, cornerRadius: iconCornerRadius))
+                        }
+                            
                         shimmerNode.update(backgroundColor: item.presentationData.theme.theme.list.itemBlocksBackgroundColor, foregroundColor: item.presentationData.theme.theme.list.mediaPlaceholderColor, shimmeringColor: item.presentationData.theme.theme.list.itemBlocksBackgroundColor.withAlphaComponent(0.4), shapes: shapes, size: nodeLayout.contentSize)
                     } else if let shimmerNode = strongSelf.placeholderNode {
                         strongSelf.placeholderNode = nil
@@ -1116,7 +1470,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
                 switch fetchStatus {
                 case let .Fetching(_, progress):
                     if item.isDownloadList {
-                        iconStatusState = .progress(value: CGFloat(progress), cancelEnabled: true, appearance: nil)
+                        iconStatusState = .progress(value: CGFloat(progress), cancelEnabled: true, appearance: nil, animateRotation: true)
                     }
                 case .Local:
                     if isAudio || isInstantVideo {
@@ -1172,7 +1526,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
         }
     }
     
-    override public func transitionNode(id: MessageId, media: Media) -> (ASDisplayNode, CGRect, () -> (UIView?, UIView?))? {
+    override public func transitionNode(id: EngineMessage.Id, media: EngineRawMedia, adjustRect: Bool) -> (ASDisplayNode, CGRect, () -> (UIView?, UIView?))? {
         if let item = self.item, let message = item.message, message.id == id, self.iconImageNode.supernode != nil {
             let iconImageNode = self.iconImageNode
             return (self.iconImageNode, self.iconImageNode.bounds, { [weak iconImageNode] in
@@ -1204,13 +1558,13 @@ public final class ListMessageFileItemNode: ListMessageNode {
         var descriptionOffset: CGFloat = 0.0
         
         var downloadingString: String?
-        if let resourceStatus = self.resourceStatus {
-            var maybeFetchStatus: MediaResourceStatus = .Local
+        if let resourceStatus = self.resourceStatus, !item.isAttachMusic {
+            var maybeFetchStatus: EngineMediaResourceStatus = .Local
             switch resourceStatus {
                 case .playbackStatus:
                     break
                 case let .fetchStatus(fetchStatus):
-                    maybeFetchStatus = fetchStatus
+                    maybeFetchStatus = fetchStatus._asStatus()
             }
             
             if item.isDownloadList, let fetchStatus = self.fetchStatus {
@@ -1231,7 +1585,7 @@ public final class ListMessageFileItemNode: ListMessageNode {
             
             switch maybeFetchStatus {
                 case .Fetching(_, let progress), .Paused(let progress):
-                    let progressFrame = CGRect(x: self.currentLeftOffset + leftInset + 65.0, y: size.height - 3.0, width: floor((size.width - 65.0 - leftInset - rightInset)), height: 3.0)
+                    let progressFrame = CGRect(x: self.currentLeftOffset + leftInset + 65.0, y: size.height - 3.0, width: floorToScreenPixels((size.width - 65.0 - leftInset - rightInset - self.currentLeftOffset - self.currentRightOffset)), height: 3.0)
                     let linearProgressNode: LinearProgressNode
                     if let current = self.linearProgressNode {
                         linearProgressNode = current
@@ -1321,10 +1675,10 @@ public final class ListMessageFileItemNode: ListMessageNode {
             alphaTransition.updateAlpha(node: self.descriptionNode, alpha: 1.0)
         }
         
-        let descriptionFont = Font.with(size: floor(item.presentationData.fontSize.baseDisplaySize * 13.0 / 17.0), design: .regular, weight: .regular, traits: [.monospacedNumbers])
+        let descriptionFont = Font.with(size: floorToScreenPixels(item.presentationData.fontSize.baseDisplaySize * 13.0 / 17.0), design: .regular, weight: .regular, traits: [.monospacedNumbers])
         self.descriptionProgressNode.attributedText = NSAttributedString(string: downloadingString ?? "", font: descriptionFont, textColor: item.presentationData.theme.theme.list.itemSecondaryTextColor)
         let descriptionSize = self.descriptionProgressNode.updateLayout(CGSize(width: size.width - 14.0, height: size.height))
-        transition.updateFrame(node: self.descriptionProgressNode, frame: CGRect(origin: self.descriptionNode.frame.origin, size: descriptionSize))
+        transition.updateFrame(node: self.descriptionProgressNode, frame: CGRect(origin: CGPoint(x: self.descriptionNode.frame.minX, y: self.descriptionNode.frame.minY + floorToScreenPixels((self.descriptionNode.bounds.height - descriptionSize.height) / 2.0)), size: descriptionSize))
     }
     
     public func activateMedia() {
@@ -1351,7 +1705,11 @@ public final class ListMessageFileItemNode: ListMessageNode {
                         }
                 case .playbackStatus:
                     if let context = self.context {
-                        context.sharedContext.mediaManager.playlistControl(.playback(.togglePlayPause), type: nil)
+                        if let item = self.item, let message = item.message, let interaction = self.interaction, item.isStoryMusic {
+                            let _ = interaction.openMessage(message, .default)
+                        } else {
+                            context.sharedContext.mediaManager.playlistControl(.playback(.togglePlayPause), type: nil)
+                        }
                     }
             }
         }
@@ -1363,7 +1721,9 @@ public final class ListMessageFileItemNode: ListMessageNode {
     
     override public func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         if let item = self.item, case .selectable = item.selection {
-            if self.bounds.contains(point) {
+            if !self.iconButtonNode.isHidden && self.iconButtonNode.frame.contains(point) {
+                
+            } else if self.bounds.contains(point) {
                 return self.view
             }
         }
@@ -1526,7 +1886,7 @@ private enum DownloadIconNodeState: Equatable {
 }
 
 private func generateDownloadIcon(color: UIColor) -> UIImage? {
-    let animation = ManagedAnimationNode(size: CGSize(width: 18.0, height: 18.0))
+    let animation = ManagedAnimationNode(size: CGSize(width: 18.0, height: 18.0), lottieSettings: .noAccountFallback)
     animation.customColor = color
     animation.trackTo(item: ManagedAnimationItem(source: .local("anim_shareddownload"), frames: .range(startFrame: 0, endFrame: 0), duration: 0.01))
     return animation.image
@@ -1565,7 +1925,7 @@ private final class DownloadIconNode: ASImageNode {
         }
 
         if self.animationNode == nil {
-            let animationNode = ManagedAnimationNode(size: CGSize(width: 18.0, height: 18.0))
+            let animationNode = ManagedAnimationNode(size: CGSize(width: 18.0, height: 18.0), lottieSettings: .noAccountFallback)
             self.animationNode = animationNode
             animationNode.frame = CGRect(origin: CGPoint(), size: CGSize(width: 18.0, height: 18.0))
             animationNode.trackTo(item: ManagedAnimationItem(source: .local("anim_shareddownload"), frames: .range(startFrame: 0, endFrame: 0), duration: 0.01))

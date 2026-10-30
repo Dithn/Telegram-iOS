@@ -36,14 +36,16 @@ public final class PermissionController: ViewController {
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
         self.splashScreen = splashScreen
         
-        let navigationBarPresentationData: NavigationBarPresentationData
-        if splashScreen {
-            navigationBarPresentationData = NavigationBarPresentationData(theme: NavigationBarTheme(buttonColor: self.presentationData.theme.rootController.navigationBar.accentTextColor, disabledButtonColor: self.presentationData.theme.rootController.navigationBar.disabledButtonColor, primaryTextColor: self.presentationData.theme.rootController.navigationBar.primaryTextColor, backgroundColor: .clear, enableBackgroundBlur: false, separatorColor: .clear, badgeBackgroundColor: .clear, badgeStrokeColor: .clear, badgeTextColor: .clear), strings: NavigationBarStrings(presentationStrings: self.presentationData.strings))
-        } else {
-            navigationBarPresentationData = NavigationBarPresentationData(presentationData: self.presentationData)
-        }
+//        let navigationBarPresentationData: NavigationBarPresentationData
+//        if splashScreen {
+//            navigationBarPresentationData = NavigationBarPresentationData(theme: NavigationBarTheme(overallDarkAppearance: self.presentationData.theme.overallDarkAppearance, buttonColor: self.presentationData.theme.rootController.navigationBar.accentTextColor, disabledButtonColor: self.presentationData.theme.rootController.navigationBar.disabledButtonColor, primaryTextColor: self.presentationData.theme.rootController.navigationBar.primaryTextColor, backgroundColor: .clear, enableBackgroundBlur: false, separatorColor: .clear, badgeBackgroundColor: .clear, badgeStrokeColor: .clear, badgeTextColor: .clear, style: .glass), strings: NavigationBarStrings(presentationStrings: self.presentationData.strings))
+//        } else {
+        let navigationBarPresentationData = NavigationBarPresentationData(presentationData: self.presentationData)
+//        }
         
         super.init(navigationBarPresentationData: navigationBarPresentationData)
+        
+        self._hasGlassStyle = true
         
         self.supportedOrientations = ViewControllerSupportedOrientations(regularSize: .all, compactSize: .portrait)
         
@@ -86,15 +88,15 @@ public final class PermissionController: ViewController {
     private func updateThemeAndStrings() {
         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
         
-        let navigationBarPresentationData: NavigationBarPresentationData
-        if self.splashScreen {
-            navigationBarPresentationData = NavigationBarPresentationData(theme: NavigationBarTheme(buttonColor: self.presentationData.theme.rootController.navigationBar.accentTextColor, disabledButtonColor: self.presentationData.theme.rootController.navigationBar.disabledButtonColor, primaryTextColor: self.presentationData.theme.rootController.navigationBar.primaryTextColor, backgroundColor: .clear, enableBackgroundBlur: false, separatorColor: .clear, badgeBackgroundColor: .clear, badgeStrokeColor: .clear, badgeTextColor: .clear), strings: NavigationBarStrings(presentationStrings: self.presentationData.strings))
-        } else {
-            navigationBarPresentationData = NavigationBarPresentationData(presentationData: self.presentationData)
-        }
+//        let navigationBarPresentationData: NavigationBarPresentationData
+//        if self.splashScreen {
+//            navigationBarPresentationData = NavigationBarPresentationData(theme: NavigationBarTheme(overallDarkAppearance: self.presentationData.theme.overallDarkAppearance, buttonColor: self.presentationData.theme.rootController.navigationBar.accentTextColor, disabledButtonColor: self.presentationData.theme.rootController.navigationBar.disabledButtonColor, primaryTextColor: self.presentationData.theme.rootController.navigationBar.primaryTextColor, backgroundColor: .clear, enableBackgroundBlur: false, separatorColor: .clear, badgeBackgroundColor: .clear, badgeStrokeColor: .clear, badgeTextColor: .clear), strings: NavigationBarStrings(presentationStrings: self.presentationData.strings))
+//        } else {
+        let navigationBarPresentationData = NavigationBarPresentationData(presentationData: self.presentationData)
+//        }
         
-        self.navigationBar?.updatePresentationData(navigationBarPresentationData)
-        self.navigationItem.backBarButtonItem = UIBarButtonItem(title: nil, style: .plain, target: nil, action: nil)
+        self.navigationBar?.updatePresentationData(navigationBarPresentationData, transition: .immediate)
+        //self.navigationItem.backBarButtonItem = UIBarButtonItem(title: nil, style: .plain, target: nil, action: nil)
         if self.navigationItem.rightBarButtonItem != nil {
             self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Permissions_Skip, style: .plain, target: self, action: #selector(PermissionController.nextPressed))
         }
@@ -112,10 +114,7 @@ public final class PermissionController: ViewController {
         
         self.state = state
         if case let .permission(permission) = state, let state = permission {
-            if case .nearbyLocation = state {
-            } else {
-                self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Permissions_Skip, style: .plain, target: self, action: #selector(PermissionController.nextPressed))
-            }
+            self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Permissions_Skip, style: .plain, target: self, action: #selector(PermissionController.nextPressed))
             
             switch state {
                 case let .contacts(status):
@@ -184,28 +183,6 @@ public final class PermissionController: ViewController {
                             strongSelf.proceed?(true)
                         }
                     }
-                case let .nearbyLocation(status):
-                    self.title = self.presentationData.strings.Permissions_PeopleNearbyTitle_v0
-                    
-                    if self.locationManager == nil {
-                        self.locationManager = LocationManager()
-                    }
-                    
-                    self.allow = { [weak self] in
-                        if let strongSelf = self {
-                            switch status {
-                                case .requestable:
-                                    DeviceAccess.authorizeAccess(to: .location(.tracking), locationManager: strongSelf.locationManager, presentationData: strongSelf.context.sharedContext.currentPresentationData.with { $0 }, { [weak self] result in
-                                        self?.proceed?(result)
-                                    })
-                            case .denied, .unreachable:
-                                strongSelf.openAppSettings()
-                                strongSelf.proceed?(false)
-                            default:
-                                break
-                            }
-                        }
-                    }
             }
         } else if case let .custom(icon, _, _, _, _, _, _) = state {
             if case .animation = icon, case .modal = self.navigationPresentation {
@@ -228,7 +205,6 @@ public final class PermissionController: ViewController {
         self.displayNode = PermissionControllerNode(context: self.context, splitTest: self.splitTest)
         self.displayNodeDidLoad()
         
-        self.navigationBar?.updateBackgroundAlpha(0.0, transition: .immediate)
         
         self.controllerNode.allow = { [weak self] in
             self?.allow?()

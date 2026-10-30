@@ -8,8 +8,9 @@ import MediaResources
 import Tuples
 import ImageBlur
 import FastBlur
+import Accelerate
 
-private func imageFromAJpeg(data: Data) -> (UIImage, UIImage)? {
+public func imageFromAJpeg(data: Data) -> (UIImage, UIImage)? {
     if let (colorData, alphaData) = data.withUnsafeBytes({ bytes -> (Data, Data)? in
         var colorSize: Int32 = 0
         memcpy(&colorSize, bytes.baseAddress, 4)
@@ -48,7 +49,7 @@ public func chatMessageStickerResource(file: TelegramMediaFile, small: Bool) -> 
     return resource
 }
 
-private func chatMessageStickerDatas(postbox: Postbox, file: TelegramMediaFile, small: Bool, fetched: Bool, onlyFullSize: Bool, synchronousLoad: Bool) -> Signal<Tuple3<Data?, Data?, Bool>, NoError> {
+private func chatMessageStickerDatas(postbox: Postbox, userLocation: MediaResourceUserLocation, file: TelegramMediaFile, small: Bool, fetched: Bool, onlyFullSize: Bool, synchronousLoad: Bool) -> Signal<Tuple3<Data?, Data?, Bool>, NoError> {
     let thumbnailResource = chatMessageStickerResource(file: file, small: true)
     let resource = chatMessageStickerResource(file: file, small: small)
     
@@ -71,12 +72,12 @@ private func chatMessageStickerDatas(postbox: Postbox, file: TelegramMediaFile, 
             return Signal { subscriber in
                 var fetch: Disposable?
                 if fetched {
-                    fetch = fetchedMediaResource(mediaBox: postbox.mediaBox, reference: stickerPackFileReference(file).resourceReference(resource)).start()
+                    fetch = fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: userLocation, userContentType: .sticker, reference: stickerPackFileReference(file).resourceReference(resource)).start()
                 }
                 
                 var fetchThumbnail: Disposable?
                 if thumbnailResource.id != resource.id {
-                    fetchThumbnail = fetchedMediaResource(mediaBox: postbox.mediaBox, reference: stickerPackFileReference(file).resourceReference(thumbnailResource)).start()
+                    fetchThumbnail = fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: userLocation, userContentType: .sticker, reference: stickerPackFileReference(file).resourceReference(thumbnailResource)).start()
                 }
                 let disposable = (combineLatest(thumbnailData, fullSizeData)
                 |> map { thumbnailData, fullSizeData -> Tuple3<Data?, Data?, Bool> in
@@ -98,7 +99,7 @@ private func chatMessageStickerDatas(postbox: Postbox, file: TelegramMediaFile, 
     }
 }
 
-public func chatMessageAnimatedStickerDatas(postbox: Postbox, file: TelegramMediaFile, small: Bool, size: CGSize, fitzModifier: EmojiFitzModifier? = nil, fetched: Bool, onlyFullSize: Bool, synchronousLoad: Bool) -> Signal<Tuple3<Data?, Data?, Bool>, NoError> {
+public func chatMessageAnimatedStickerDatas(postbox: Postbox, userLocation: MediaResourceUserLocation, file: TelegramMediaFile, small: Bool, size: CGSize, fitzModifier: EmojiFitzModifier? = nil, fetched: Bool, onlyFullSize: Bool, synchronousLoad: Bool) -> Signal<Tuple3<Data?, Data?, Bool>, NoError> {
     let thumbnailResource = chatMessageStickerResource(file: file, small: true)
     let resource = chatMessageStickerResource(file: file, small: false)
     
@@ -122,12 +123,12 @@ public func chatMessageAnimatedStickerDatas(postbox: Postbox, file: TelegramMedi
             return Signal { subscriber in
                 var fetch: Disposable?
                 if fetched {
-                    fetch = fetchedMediaResource(mediaBox: postbox.mediaBox, reference: stickerPackFileReference(file).resourceReference(resource)).start()
+                    fetch = fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: userLocation, userContentType: .sticker, reference: stickerPackFileReference(file).resourceReference(resource)).start()
                 }
                 
                 var fetchThumbnail: Disposable?
                 if thumbnailResource.id != resource.id {
-                    fetchThumbnail = fetchedMediaResource(mediaBox: postbox.mediaBox, reference: stickerPackFileReference(file).resourceReference(thumbnailResource)).start()
+                    fetchThumbnail = fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: userLocation, userContentType: .sticker, reference: stickerPackFileReference(file).resourceReference(thumbnailResource)).start()
                 }
                 let disposable = (combineLatest(thumbnailData, fullSizeData)
                     |> map { thumbnailData, fullSizeData -> Tuple3<Data?, Data?, Bool> in
@@ -149,7 +150,7 @@ public func chatMessageAnimatedStickerDatas(postbox: Postbox, file: TelegramMedi
     }
 }
 
-private func chatMessageStickerThumbnailData(postbox: Postbox, file: TelegramMediaFile, synchronousLoad: Bool) -> Signal<Data?, NoError> {
+private func chatMessageStickerThumbnailData(postbox: Postbox, userLocation: MediaResourceUserLocation, file: TelegramMediaFile, synchronousLoad: Bool) -> Signal<Data?, NoError> {
     let thumbnailResource = chatMessageStickerResource(file: file, small: true)
     
     let maybeFetched = postbox.mediaBox.cachedResourceRepresentation(thumbnailResource, representation: CachedStickerAJpegRepresentation(size: nil), complete: false, fetch: false, attemptSynchronously: synchronousLoad)
@@ -164,7 +165,7 @@ private func chatMessageStickerThumbnailData(postbox: Postbox, file: TelegramMed
             let thumbnailData = postbox.mediaBox.cachedResourceRepresentation(thumbnailResource, representation: CachedStickerAJpegRepresentation(size: nil), complete: false)
             
             return Signal { subscriber in
-                let fetchThumbnail = fetchedMediaResource(mediaBox: postbox.mediaBox, reference: stickerPackFileReference(file).resourceReference(thumbnailResource)).start()
+                let fetchThumbnail = fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: userLocation, userContentType: .sticker, reference: stickerPackFileReference(file).resourceReference(thumbnailResource)).start()
 
                 let disposable = (thumbnailData
                 |> map { thumbnailData -> Data? in
@@ -259,74 +260,9 @@ public func chatMessageAnimatedStickerBackingData(postbox: Postbox, fileReferenc
     }
 }
 
-public func chatMessageLegacySticker(account: Account, file: TelegramMediaFile, small: Bool, fitSize: CGSize, fetched: Bool = false, onlyFullSize: Bool = false) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError> {
-    let signal = chatMessageStickerDatas(postbox: account.postbox, file: file, small: small, fetched: fetched, onlyFullSize: onlyFullSize, synchronousLoad: false)
-    return signal |> map { value in
-        let fullSizeData = value._1
-        let fullSizeComplete = value._2
-        return { preArguments in
-            var fullSizeImage: (UIImage, UIImage)?
-            if let fullSizeData = fullSizeData, fullSizeComplete {
-                if let image = imageFromAJpeg(data: fullSizeData) {
-                    fullSizeImage = image
-                }
-            }
-            
-            if let fullSizeImage = fullSizeImage {
-                var updatedFitSize = fitSize
-                if updatedFitSize.width.isEqual(to: 1.0) {
-                    updatedFitSize = fullSizeImage.0.size
-                }
-                
-                let contextSize = fullSizeImage.0.size.aspectFitted(updatedFitSize)
-                
-                let arguments = TransformImageArguments(corners: preArguments.corners, imageSize: contextSize, boundingSize: contextSize, intrinsicInsets: preArguments.intrinsicInsets)
-                
-                let context = DrawingContext(size: arguments.drawingSize, clear: true)
-                
-                let thumbnailImage: CGImage? = nil
-                
-                var blurredThumbnailImage: UIImage?
-                if let thumbnailImage = thumbnailImage {
-                    let thumbnailSize = CGSize(width: thumbnailImage.width, height: thumbnailImage.height)
-                    let thumbnailContextSize = thumbnailSize.aspectFitted(CGSize(width: 150.0, height: 150.0))
-                    let thumbnailContext = DrawingContext(size: thumbnailContextSize, scale: 1.0)
-                    thumbnailContext.withFlippedContext { c in
-                        c.interpolationQuality = .none
-                        c.draw(thumbnailImage, in: CGRect(origin: CGPoint(), size: thumbnailContextSize))
-                    }
-                    imageFastBlur(Int32(thumbnailContextSize.width), Int32(thumbnailContextSize.height), Int32(thumbnailContext.bytesPerRow), thumbnailContext.bytes)
-                    
-                    blurredThumbnailImage = thumbnailContext.generateImage()
-                }
-                
-                context.withFlippedContext { c in
-                    c.setBlendMode(.copy)
-                    if let blurredThumbnailImage = blurredThumbnailImage {
-                        c.interpolationQuality = .low
-                        c.draw(blurredThumbnailImage.cgImage!, in: arguments.drawingRect)
-                    }
-                    
-                    if let cgImage = fullSizeImage.0.cgImage, let cgImageAlpha = fullSizeImage.1.cgImage {
-                        c.setBlendMode(.normal)
-                        c.interpolationQuality = .medium
-                        
-                        let mask = CGImage(maskWidth: cgImageAlpha.width, height: cgImageAlpha.height, bitsPerComponent: cgImageAlpha.bitsPerComponent, bitsPerPixel: cgImageAlpha.bitsPerPixel, bytesPerRow: cgImageAlpha.bytesPerRow, provider: cgImageAlpha.dataProvider!, decode: nil, shouldInterpolate: true)
-                        
-                        c.draw(cgImage.masking(mask!)!, in: arguments.drawingRect)
-                    }
-                }
-                
-                return context
-            } else {
-                return nil
-            }
-        }
-    }
-}
 
-public func chatMessageSticker(account: Account, file: TelegramMediaFile, small: Bool, fetched: Bool = false, onlyFullSize: Bool = false, thumbnail: Bool = false, synchronousLoad: Bool = false) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError> {
-    return chatMessageSticker(postbox: account.postbox, file: file, small: small, fetched: fetched, onlyFullSize: onlyFullSize, thumbnail: thumbnail, synchronousLoad: synchronousLoad)
+public func chatMessageSticker(account: Account, userLocation: MediaResourceUserLocation, file: TelegramMediaFile, small: Bool, fetched: Bool = false, onlyFullSize: Bool = false, thumbnail: Bool = false, synchronousLoad: Bool = false, colorSpace: CGColorSpace? = nil) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError> {
+    return chatMessageSticker(postbox: account.postbox, userLocation: userLocation, file: file, small: small, fetched: fetched, onlyFullSize: onlyFullSize, thumbnail: thumbnail, synchronousLoad: synchronousLoad, colorSpace: colorSpace)
 }
 
 public func chatMessageStickerPackThumbnail(postbox: Postbox, resource: MediaResource, animated: Bool = false, synchronousLoad: Bool = false, nilIfEmpty: Bool = false) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError> {
@@ -341,7 +277,9 @@ public func chatMessageStickerPackThumbnail(postbox: Postbox, resource: MediaRes
                 }
             }
             
-            let context = DrawingContext(size: arguments.drawingSize, scale: arguments.scale ?? 0.0, clear: arguments.emptyColor == nil)
+            guard let context = DrawingContext(size: arguments.drawingSize, scale: arguments.scale ?? 0.0, clear: arguments.emptyColor == nil) else {
+                return nil
+            }
             
             let drawingRect = arguments.drawingRect
             let fittedSize = arguments.imageSize
@@ -380,15 +318,16 @@ public func chatMessageStickerPackThumbnail(postbox: Postbox, resource: MediaRes
     }
 }
 
-public func chatMessageSticker(postbox: Postbox, file: TelegramMediaFile, small: Bool, fetched: Bool = false, onlyFullSize: Bool = false, thumbnail: Bool = false, synchronousLoad: Bool = false) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError> {
+public func chatMessageSticker(postbox: Postbox, userLocation: MediaResourceUserLocation, file: TelegramMediaFile, small: Bool, fetched: Bool = false, onlyFullSize: Bool = false, thumbnail: Bool = false, synchronousLoad: Bool = false, colorSpace: CGColorSpace? = nil) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError> {
     let signal: Signal<Tuple3<Data?, Data?, Bool>, NoError>
+    
     if thumbnail {
-        signal = chatMessageStickerThumbnailData(postbox: postbox, file: file, synchronousLoad: synchronousLoad)
+        signal = chatMessageStickerThumbnailData(postbox: postbox, userLocation: userLocation, file: file, synchronousLoad: synchronousLoad)
         |> map { data -> Tuple3<Data?, Data?, Bool>in
             return Tuple3(data, nil, false)
         }
     } else {
-        signal = chatMessageStickerDatas(postbox: postbox, file: file, small: small, fetched: fetched, onlyFullSize: onlyFullSize, synchronousLoad: synchronousLoad)
+        signal = chatMessageStickerDatas(postbox: postbox, userLocation: userLocation, file: file, small: small, fetched: fetched, onlyFullSize: onlyFullSize, synchronousLoad: synchronousLoad)
     }
     return signal |> map { value in
         let thumbnailData = value._0
@@ -403,7 +342,9 @@ public func chatMessageSticker(postbox: Postbox, file: TelegramMediaFile, small:
                 return nil
             }
             
-            let context = DrawingContext(size: arguments.drawingSize, scale: arguments.scale ?? 0.0, clear: arguments.emptyColor == nil)
+            guard let context = DrawingContext(size: arguments.drawingSize, scale: arguments.scale ?? 0.0, clear: arguments.emptyColor == nil, colorSpace: colorSpace) else {
+                return nil
+            }
             
             let drawingRect = arguments.drawingRect
             let fittedSize = arguments.imageSize
@@ -432,20 +373,21 @@ public func chatMessageSticker(postbox: Postbox, file: TelegramMediaFile, small:
                 let thumbnailDrawingSize = thumbnailContextSize
                 thumbnailContextSize.width += thumbnailInset * 2.0
                 thumbnailContextSize.height += thumbnailInset * 2.0
-                let thumbnailContext = DrawingContext(size: thumbnailContextSize, scale: 1.0, clear: true)
-                thumbnailContext.withFlippedContext { c in
-                    if let cgImage = thumbnailImage.0.cgImage, let cgImageAlpha = thumbnailImage.1.cgImage {
-                        c.setBlendMode(.normal)
-                        c.interpolationQuality = .medium
-                        
-                        let mask = CGImage(maskWidth: cgImageAlpha.width, height: cgImageAlpha.height, bitsPerComponent: cgImageAlpha.bitsPerComponent, bitsPerPixel: cgImageAlpha.bitsPerPixel, bytesPerRow: cgImageAlpha.bytesPerRow, provider: cgImageAlpha.dataProvider!, decode: nil, shouldInterpolate: true)
-                        
-                        c.draw(cgImage.masking(mask!)!, in: CGRect(origin: CGPoint(x: thumbnailInset, y: thumbnailInset), size: thumbnailDrawingSize))
+                if let thumbnailContext = DrawingContext(size: thumbnailContextSize, scale: 1.0, clear: true) {
+                    thumbnailContext.withFlippedContext { c in
+                        if let cgImage = thumbnailImage.0.cgImage, let cgImageAlpha = thumbnailImage.1.cgImage {
+                            c.setBlendMode(.normal)
+                            c.interpolationQuality = .medium
+                            
+                            let mask = CGImage(maskWidth: cgImageAlpha.width, height: cgImageAlpha.height, bitsPerComponent: cgImageAlpha.bitsPerComponent, bitsPerPixel: cgImageAlpha.bitsPerPixel, bytesPerRow: cgImageAlpha.bytesPerRow, provider: cgImageAlpha.dataProvider!, decode: nil, shouldInterpolate: true)
+                            
+                            c.draw(cgImage.masking(mask!)!, in: CGRect(origin: CGPoint(x: thumbnailInset, y: thumbnailInset), size: thumbnailDrawingSize))
+                        }
                     }
+                    stickerThumbnailAlphaBlur(Int32(thumbnailContextSize.width), Int32(thumbnailContextSize.height), Int32(thumbnailContext.bytesPerRow), thumbnailContext.bytes)
+                    
+                    blurredThumbnailImage = thumbnailContext.generateImage()
                 }
-                stickerThumbnailAlphaBlur(Int32(thumbnailContextSize.width), Int32(thumbnailContextSize.height), Int32(thumbnailContext.bytesPerRow), thumbnailContext.bytes)
-                
-                blurredThumbnailImage = thumbnailContext.generateImage()
             }
             
             context.withFlippedContext { c in
@@ -478,15 +420,15 @@ public func chatMessageSticker(postbox: Postbox, file: TelegramMediaFile, small:
     }
 }
 
-public func chatMessageAnimatedSticker(postbox: Postbox, file: TelegramMediaFile, small: Bool, size: CGSize, fitzModifier: EmojiFitzModifier? = nil, fetched: Bool = false, onlyFullSize: Bool = false, thumbnail: Bool = false, synchronousLoad: Bool = false) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError> {
+public func chatMessageAnimatedSticker(postbox: Postbox, userLocation: MediaResourceUserLocation, file: TelegramMediaFile, small: Bool, size: CGSize, fitzModifier: EmojiFitzModifier? = nil, fetched: Bool = false, onlyFullSize: Bool = false, thumbnail: Bool = false, synchronousLoad: Bool = false) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError> {
     let signal: Signal<Tuple3<Data?, Data?, Bool>, NoError>
     if thumbnail {
-        signal = chatMessageStickerThumbnailData(postbox: postbox, file: file, synchronousLoad: synchronousLoad)
+        signal = chatMessageStickerThumbnailData(postbox: postbox, userLocation: userLocation, file: file, synchronousLoad: synchronousLoad)
         |> map { data -> Tuple3<Data?, Data?, Bool> in
             return Tuple(data, nil, false)
         }
     } else {
-        signal = chatMessageAnimatedStickerDatas(postbox: postbox, file: file, small: small, size: size, fitzModifier: fitzModifier, fetched: fetched, onlyFullSize: onlyFullSize, synchronousLoad: synchronousLoad)
+        signal = chatMessageAnimatedStickerDatas(postbox: postbox, userLocation: userLocation, file: file, small: small, size: size, fitzModifier: fitzModifier, fetched: fetched, onlyFullSize: onlyFullSize, synchronousLoad: synchronousLoad)
     }
     return signal
     |> map { value in
@@ -498,7 +440,9 @@ public func chatMessageAnimatedSticker(postbox: Postbox, file: TelegramMediaFile
                 return nil
             }
             
-            let context = DrawingContext(size: arguments.drawingSize, scale: arguments.scale ?? 0.0, clear: true)
+            guard let context = DrawingContext(size: arguments.drawingSize, scale: arguments.scale ?? 0.0, clear: true) else {
+                return nil
+            }
             
             let drawingRect = arguments.drawingRect
             let fittedSize = arguments.imageSize
@@ -526,20 +470,21 @@ public func chatMessageAnimatedSticker(postbox: Postbox, file: TelegramMediaFile
                 let thumbnailDrawingSize = thumbnailContextSize
                 thumbnailContextSize.width += thumbnailInset * 2.0
                 thumbnailContextSize.height += thumbnailInset * 2.0
-                let thumbnailContext = DrawingContext(size: thumbnailContextSize, scale: 1.0, clear: true)
-                thumbnailContext.withFlippedContext { c in
-                    if let cgImage = thumbnailImage.0.cgImage, let cgImageAlpha = thumbnailImage.1.cgImage {
-                        c.setBlendMode(.normal)
-                        c.interpolationQuality = .medium
-                        
-                        let mask = CGImage(maskWidth: cgImageAlpha.width, height: cgImageAlpha.height, bitsPerComponent: cgImageAlpha.bitsPerComponent, bitsPerPixel: cgImageAlpha.bitsPerPixel, bytesPerRow: cgImageAlpha.bytesPerRow, provider: cgImageAlpha.dataProvider!, decode: nil, shouldInterpolate: true)
-                        
-                        c.draw(cgImage.masking(mask!)!, in: CGRect(origin: CGPoint(x: thumbnailInset, y: thumbnailInset), size: thumbnailDrawingSize))
+                if let thumbnailContext = DrawingContext(size: thumbnailContextSize, scale: 1.0, clear: true) {
+                    thumbnailContext.withFlippedContext { c in
+                        if let cgImage = thumbnailImage.0.cgImage, let cgImageAlpha = thumbnailImage.1.cgImage {
+                            c.setBlendMode(.normal)
+                            c.interpolationQuality = .medium
+                            
+                            let mask = CGImage(maskWidth: cgImageAlpha.width, height: cgImageAlpha.height, bitsPerComponent: cgImageAlpha.bitsPerComponent, bitsPerPixel: cgImageAlpha.bitsPerPixel, bytesPerRow: cgImageAlpha.bytesPerRow, provider: cgImageAlpha.dataProvider!, decode: nil, shouldInterpolate: true)
+                            
+                            c.draw(cgImage.masking(mask!)!, in: CGRect(origin: CGPoint(x: thumbnailInset, y: thumbnailInset), size: thumbnailDrawingSize))
+                        }
                     }
+                    stickerThumbnailAlphaBlur(Int32(thumbnailContextSize.width), Int32(thumbnailContextSize.height), Int32(thumbnailContext.bytesPerRow), thumbnailContext.bytes)
+                    
+                    blurredThumbnailImage = thumbnailContext.generateImage()
                 }
-                stickerThumbnailAlphaBlur(Int32(thumbnailContextSize.width), Int32(thumbnailContextSize.height), Int32(thumbnailContext.bytesPerRow), thumbnailContext.bytes)
-                
-                blurredThumbnailImage = thumbnailContext.generateImage()
             }
             
             context.withFlippedContext { c in
@@ -572,4 +517,179 @@ public func chatMessageAnimatedSticker(postbox: Postbox, file: TelegramMediaFile
             return context
         }
     }
+}
+
+public func preloadedStickerPackThumbnail(account: Account, info: StickerPackCollectionInfo.Accessor, items: [ItemCollectionItem]) -> Signal<Bool, NoError> {
+    let info = info._parse()
+    if let thumbnail = info.thumbnail {
+        let signal = Signal<Bool, NoError> { subscriber in
+            let fetched = TelegramEngine(account: account).resources.fetch(reference: .stickerPackThumbnail(stickerPack: .id(id: info.id.id, accessHash: info.accessHash), resource: thumbnail.resource), userLocation: .other, userContentType: .sticker).start()
+            let dataDisposable: Disposable
+            if thumbnail.typeHint != .generic {
+                dataDisposable = chatMessageAnimationData(mediaBox: account.postbox.mediaBox, resource: thumbnail.resource, isVideo: thumbnail.typeHint == .video, width: 80, height: 80, synchronousLoad: false).start(next: { data in
+                    if data.complete {
+                        subscriber.putNext(true)
+                        subscriber.putCompletion()
+                    } else {
+                        subscriber.putNext(false)
+                    }
+                })
+            } else {
+                dataDisposable = TelegramEngine(account: account).resources.data(resource: EngineMediaResource(thumbnail.resource), waitUntilFetchStatus: false, incremental: true).start(next: { data in
+                    if data.isComplete {
+                        subscriber.putNext(true)
+                        subscriber.putCompletion()
+                    } else {
+                        subscriber.putNext(false)
+                    }
+                })
+            }
+            return ActionDisposable {
+                fetched.dispose()
+                dataDisposable.dispose()
+            }
+        }
+        return signal
+    }
+    
+    if let item = items.first as? StickerPackItem {
+        if item.file.isAnimatedSticker {
+            let signal = Signal<Bool, NoError> { subscriber in
+                let itemFile = item.file._parse()
+                let fetched = TelegramEngine(account: account).resources.fetch(reference: FileMediaReference.standalone(media: itemFile).resourceReference(itemFile.resource), userLocation: .other, userContentType: .sticker).start()
+                let data = TelegramEngine(account: account).resources.data(resource: EngineMediaResource(itemFile.resource)).start()
+                let dimensions = itemFile.dimensions ?? PixelDimensions(width: 512, height: 512)
+                let fetchedRepresentation = chatMessageAnimatedStickerDatas(postbox: account.postbox, userLocation: .other, file: itemFile, small: false, size: dimensions.cgSize.aspectFitted(CGSize(width: 160.0, height: 160.0)), fetched: true, onlyFullSize: false, synchronousLoad: false).start(next: { next in
+                    let hasContent = next._0 != nil || next._1 != nil
+                    subscriber.putNext(hasContent)
+                    if hasContent {
+                        subscriber.putCompletion()
+                    }
+                })
+                return ActionDisposable {
+                    fetched.dispose()
+                    data.dispose()
+                    fetchedRepresentation.dispose()
+                }
+            }
+            return signal
+        } else {
+            let signal = Signal<Bool, NoError> { subscriber in
+                let itemFile = item.file._parse()
+                let data = TelegramEngine(account: account).resources.data(resource: EngineMediaResource(itemFile.resource)).start()
+                let dimensions = itemFile.dimensions ?? PixelDimensions(width: 512, height: 512)
+                let fetchedRepresentation = chatMessageAnimatedStickerDatas(postbox: account.postbox, userLocation: .other, file: itemFile, small: true, size: dimensions.cgSize.aspectFitted(CGSize(width: 160.0, height: 160.0)), fetched: true, onlyFullSize: false, synchronousLoad: false).start(next: { next in
+                    let hasContent = next._0 != nil || next._1 != nil
+                    subscriber.putNext(hasContent)
+                    if hasContent {
+                        subscriber.putCompletion()
+                    }
+                })
+                return ActionDisposable {
+                    data.dispose()
+                    fetchedRepresentation.dispose()
+                }
+            }
+            return signal
+        }
+    }
+    
+    return .single(true)
+}
+
+public func getAverageColor(image: UIImage) -> UIColor? {
+    let blurredWidth = 16
+    let blurredHeight = 16
+    let blurredBytesPerRow = blurredWidth * 4
+    guard let context = DrawingContext(size: CGSize(width: CGFloat(blurredWidth), height: CGFloat(blurredHeight)), scale: 1.0, opaque: true, bytesPerRow: blurredBytesPerRow) else {
+        return nil
+    }
+    
+    let size = CGSize(width: CGFloat(blurredWidth), height: CGFloat(blurredHeight))
+    
+    if let cgImage = image.cgImage {
+        context.withFlippedContext { c in
+            c.setFillColor(UIColor.white.cgColor)
+            c.fill(CGRect(origin: CGPoint(), size: size))
+            c.draw(cgImage, in: CGRect(origin: CGPoint(x: -size.width / 2.0, y: -size.height / 2.0), size: CGSize(width: size.width * 1.8, height: size.height * 1.8)))
+        }
+    }
+        
+    var destinationBuffer = vImage_Buffer()
+    destinationBuffer.width = UInt(blurredWidth)
+    destinationBuffer.height = UInt(blurredHeight)
+    destinationBuffer.data = context.bytes
+    destinationBuffer.rowBytes = context.bytesPerRow
+    
+    vImageBoxConvolve_ARGB8888(&destinationBuffer,
+                               &destinationBuffer,
+                               nil,
+                               0, 0,
+                               UInt32(15),
+                               UInt32(15),
+                               nil,
+                               vImage_Flags(kvImageTruncateKernel))
+    
+    let divisor: Int32 = 0x1000
+
+    let rwgt: CGFloat = 0.3086
+    let gwgt: CGFloat = 0.6094
+    let bwgt: CGFloat = 0.0820
+
+    let adjustSaturation: CGFloat = 1.7
+
+    let a = (1.0 - adjustSaturation) * rwgt + adjustSaturation
+    let b = (1.0 - adjustSaturation) * rwgt
+    let c = (1.0 - adjustSaturation) * rwgt
+    let d = (1.0 - adjustSaturation) * gwgt
+    let e = (1.0 - adjustSaturation) * gwgt + adjustSaturation
+    let f = (1.0 - adjustSaturation) * gwgt
+    let g = (1.0 - adjustSaturation) * bwgt
+    let h = (1.0 - adjustSaturation) * bwgt
+    let i = (1.0 - adjustSaturation) * bwgt + adjustSaturation
+
+    let satMatrix: [CGFloat] = [
+        a, b, c, 0,
+        d, e, f, 0,
+        g, h, i, 0,
+        0, 0, 0, 1
+    ]
+
+    var matrix: [Int16] = satMatrix.map { value in
+        return Int16(value * CGFloat(divisor))
+    }
+
+    vImageMatrixMultiply_ARGB8888(&destinationBuffer, &destinationBuffer, &matrix, divisor, nil, nil, vImage_Flags(kvImageDoNotTile))
+    
+    context.withFlippedContext { c in
+        c.setFillColor(UIColor.white.withMultipliedAlpha(0.1).cgColor)
+        c.fill(CGRect(origin: CGPoint(), size: size))
+    }
+    
+    var sumR: UInt64 = 0
+    var sumG: UInt64 = 0
+    var sumB: UInt64 = 0
+    var sumA: UInt64 = 0
+    
+    for y in 0 ..< blurredHeight {
+        let row = context.bytes.assumingMemoryBound(to: UInt8.self).advanced(by: y * blurredBytesPerRow)
+        for x in 0 ..< blurredWidth {
+            let pixel = row.advanced(by: x * 4)
+            sumB += UInt64(pixel.advanced(by: 0).pointee)
+            sumG += UInt64(pixel.advanced(by: 1).pointee)
+            sumR += UInt64(pixel.advanced(by: 2).pointee)
+            sumA += UInt64(pixel.advanced(by: 3).pointee)
+        }
+    }
+    sumR /= UInt64(blurredWidth * blurredHeight)
+    sumG /= UInt64(blurredWidth * blurredHeight)
+    sumB /= UInt64(blurredWidth * blurredHeight)
+    sumA /= UInt64(blurredWidth * blurredHeight)
+    sumA = 255
+    
+    var color = UIColor(red: CGFloat(sumR) / 255.0, green: CGFloat(sumG) / 255.0, blue: CGFloat(sumB) / 255.0, alpha: CGFloat(sumA) / 255.0)
+    if color.lightness > 0.8 {
+        color = color.withMultipliedBrightnessBy(0.8)
+    }
+    return color
 }

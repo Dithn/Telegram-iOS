@@ -3,7 +3,6 @@ import UIKit
 import Display
 import AsyncDisplayKit
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
@@ -16,8 +15,15 @@ import AccountContext
 import LegacyComponents
 import AudioBlob
 import PeerInfoAvatarListNode
+import ComponentFlow
+import EmojiStatusComponent
+import VoiceChatActionButton
 
 final class VoiceChatParticipantItem: ListViewItem {
+    var neighborDescriptor: AnyEquatable {
+        return AnyEquatable.noNeighborInfluence
+    }
+
     enum ParticipantText: Equatable {
         struct TextIcon: OptionSet {
             public var rawValue: Int32
@@ -57,7 +63,7 @@ final class VoiceChatParticipantItem: ListViewItem {
     let dateTimeFormat: PresentationDateTimeFormat
     let nameDisplayOrder: PresentationPersonNameOrder
     let context: AccountContext
-    let peer: Peer
+    let peer: EnginePeer
     let text: ParticipantText
     let expandedText: ParticipantText?
     let icon: Icon
@@ -69,7 +75,7 @@ final class VoiceChatParticipantItem: ListViewItem {
     
     public let selectable: Bool = true
     
-    public init(presentationData: ItemListPresentationData, dateTimeFormat: PresentationDateTimeFormat, nameDisplayOrder: PresentationPersonNameOrder, context: AccountContext, peer: Peer, text: ParticipantText, expandedText: ParticipantText?, icon: Icon, getAudioLevel: (() -> Signal<Float, NoError>)?, action: ((ASDisplayNode?) -> Void)?, contextAction: ((ASDisplayNode, ContextGesture?) -> Void)? = nil, getIsExpanded: @escaping () -> Bool, getUpdatingAvatar: @escaping () -> Signal<(TelegramMediaImageRepresentation, Float)?, NoError>) {
+    public init(presentationData: ItemListPresentationData, dateTimeFormat: PresentationDateTimeFormat, nameDisplayOrder: PresentationPersonNameOrder, context: AccountContext, peer: EnginePeer, text: ParticipantText, expandedText: ParticipantText?, icon: Icon, getAudioLevel: (() -> Signal<Float, NoError>)?, action: ((ASDisplayNode?) -> Void)?, contextAction: ((ASDisplayNode, ContextGesture?) -> Void)? = nil, getIsExpanded: @escaping () -> Bool, getUpdatingAvatar: @escaping () -> Signal<(TelegramMediaImageRepresentation, Float)?, NoError>) {
         self.presentationData = presentationData
         self.dateTimeFormat = dateTimeFormat
         self.nameDisplayOrder = nameDisplayOrder
@@ -85,10 +91,10 @@ final class VoiceChatParticipantItem: ListViewItem {
         self.getUpdatingAvatar = getUpdatingAvatar
     }
         
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = VoiceChatParticipantItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, previousItem == nil || previousItem is VoiceChatTilesGridItem, nextItem == nil)
+            let (layout, apply) = node.asyncLayout()(self, params, neighbors.previous == nil || neighbors.previous?.base(HeaderNeighborFacet.self)?.headerFamily == .voiceChatTilesGrid, neighbors.next == nil)
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -101,7 +107,7 @@ final class VoiceChatParticipantItem: ListViewItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? VoiceChatParticipantItemNode {
                 let makeLayout = nodeValue.asyncLayout()
@@ -112,7 +118,7 @@ final class VoiceChatParticipantItem: ListViewItem {
                 }
                 
                 async {
-                    let (layout, apply) = makeLayout(self, params, previousItem == nil || previousItem is VoiceChatTilesGridItem, nextItem == nil)
+                    let (layout, apply) = makeLayout(self, params, neighbors.previous == nil || neighbors.previous?.base(HeaderNeighborFacet.self)?.headerFamily == .voiceChatTilesGrid, neighbors.next == nil)
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply(false, animated)
@@ -133,7 +139,7 @@ private let tileSize = CGSize(width: 84.0, height: 84.0)
 private let backgroundCornerRadius: CGFloat = 14.0
 private let avatarSize: CGFloat = 40.0
 
-private let accentColor: UIColor = UIColor(rgb: 0x007aff)
+private let accentColor: UIColor = UIColor(rgb: 0x0088ff)
 private let constructiveColor: UIColor = UIColor(rgb: 0x34c759)
 private let destructiveColor: UIColor = UIColor(rgb: 0xff3b30)
 
@@ -158,7 +164,7 @@ class VoiceChatParticipantStatusNode: ASDisplayNode {
     func asyncLayout() -> (_ size: CGSize, _ text: VoiceChatParticipantItem.ParticipantText, _ expanded: Bool) -> (CGSize, () -> Void) {
         let makeTextLayout = TextNode.asyncLayout(self.textNode)
         
-        return { size, text, expanded in
+        return { [weak self] size, text, expanded in
             let statusFont = Font.regular(14.0)
             
             var attributedString: NSAttributedString?
@@ -262,7 +268,7 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
     private let titleNode: TextNode
     private let statusNode: VoiceChatParticipantStatusNode
     private let expandedStatusNode: VoiceChatParticipantStatusNode
-    private var credibilityIconNode: ASImageNode?
+    private var credibilityIconView: ComponentHostView<Empty>?
     
     private var avatarTransitionNode: ASImageNode?
     private var avatarListContainerNode: ASDisplayNode?
@@ -342,7 +348,7 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
         
         self.highlightedBackgroundNode = ASDisplayNode()
         
-        super.init(layerBacked: false, dynamicBounce: false, rotated: false, seeThrough: false)
+        super.init(layerBacked: false, rotated: false, seeThrough: false)
         
         self.isAccessibilityElement = true
         
@@ -460,8 +466,8 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
                                     return
                                 }
                                 strongSelf.avatarListNode?.controlsContainerNode.alpha = 0.0
-                                let pinchController = PinchController(sourceNode: sourceNode, getContentAreaInScreenSpace: {
-                                    return UIScreen.main.bounds
+                                let pinchController = makePinchController(sourceNode: sourceNode, getContentAreaInScreenSpace: {
+                                    return mainWindowScreenBounds
                                 })
                                 item.context.sharedContext.mainWindow?.presentInGlobalOverlay(pinchController)
                             }
@@ -770,7 +776,7 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
         let currentItem = self.layoutParams?.0
         let currentTitle = self.currentTitle
         
-        return { item, params, first, last in
+        return { [weak self] item, params, first, last in
             var updatedTheme: PresentationTheme?
             if currentItem?.presentationData.theme !== item.presentationData.theme {
                 updatedTheme = item.presentationData.theme
@@ -783,7 +789,7 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
             let rightInset: CGFloat = params.rightInset
             
             var updatedTitle = false
-            if let user = item.peer as? TelegramUser {
+            if case let .user(user) = item.peer {
                 if let firstName = user.firstName, let lastName = user.lastName, !firstName.isEmpty, !lastName.isEmpty {
                         let string = NSMutableAttributedString()
                         switch item.nameDisplayOrder {
@@ -804,9 +810,9 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
                 } else {
                     titleAttributedString = NSAttributedString(string: item.presentationData.strings.User_DeletedAccount, font: titleFont, textColor: titleColor)
                 }
-            } else if let group = item.peer as? TelegramGroup {
+            } else if case let .legacyGroup(group) = item.peer {
                 titleAttributedString = NSAttributedString(string: group.title, font: titleFont, textColor: titleColor)
-            } else if let channel = item.peer as? TelegramChannel {
+            } else if case let .channel(channel) = item.peer {
                 titleAttributedString = NSAttributedString(string: channel.title, font: titleFont, textColor: titleColor)
             }
             if let currentTitle = currentTitle, currentTitle != titleAttributedString?.string {
@@ -829,22 +835,33 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
             let verticalInset: CGFloat = 8.0
             let verticalOffset: CGFloat = 0.0
             
+            let premiumConfiguration = PremiumConfiguration.with(appConfiguration: item.context.currentAppConfiguration.with { $0 })
+            
             var titleIconsWidth: CGFloat = 0.0
-            var currentCredibilityIconImage: UIImage?
-            var credibilityIconOffset: CGFloat = 0.0
+            
+            var credibilityIcon: EmojiStatusComponent.Content?
             if item.peer.isScam {
-                currentCredibilityIconImage = PresentationResourcesChatList.scamIcon(item.presentationData.theme, strings: item.presentationData.strings, type: .regular)
-                credibilityIconOffset = 2.0
+                credibilityIcon = .text(color: item.presentationData.theme.chat.message.incoming.scamColor, string: item.presentationData.strings.Message_ScamAccount.uppercased())
             } else if item.peer.isFake {
-                currentCredibilityIconImage = PresentationResourcesChatList.fakeIcon(item.presentationData.theme, strings: item.presentationData.strings, type: .regular)
-                credibilityIconOffset = 2.0
+                credibilityIcon = .text(color: item.presentationData.theme.chat.message.incoming.scamColor, string: item.presentationData.strings.Message_FakeAccount.uppercased())
+            } else if let emojiStatus = item.peer.emojiStatus {
+                credibilityIcon = .animation(content: .customEmoji(fileId: emojiStatus.fileId), size: CGSize(width: 20.0, height: 20.0), placeholderColor: item.presentationData.theme.list.mediaPlaceholderColor, themeColor: item.presentationData.theme.list.itemAccentColor, loopMode: .count(2))
             } else if item.peer.isVerified {
-                currentCredibilityIconImage = PresentationResourcesChatList.verifiedIcon(item.presentationData.theme)
-                credibilityIconOffset = 3.0
+                credibilityIcon = .verified(fillColor: item.presentationData.theme.list.itemCheckColors.fillColor, foregroundColor: item.presentationData.theme.list.itemCheckColors.foregroundColor, sizeType: .compact)
+            } else if item.peer.isPremium && !premiumConfiguration.isPremiumDisabled {
+                credibilityIcon = .premium(color: item.presentationData.theme.list.itemAccentColor)
             }
             
-            if let currentCredibilityIconImage = currentCredibilityIconImage {
-                titleIconsWidth += 4.0 + currentCredibilityIconImage.size.width
+            if let credibilityIcon = credibilityIcon {
+                titleIconsWidth += 4.0
+                switch credibilityIcon {
+                case let .text(_, string):
+                    let textString = NSAttributedString(string: string, font: Font.bold(10.0), textColor: .black, paragraphAlignment: .center)
+                    let stringRect = textString.boundingRect(with: CGSize(width: 100.0, height: 16.0), options: .usesLineFragmentOrigin, context: nil)
+                    titleIconsWidth += floor(stringRect.width) + 11.0
+                default:
+                    titleIconsWidth += 16.0
+                }
             }
             
             var expandedRightInset: CGFloat = 30.0
@@ -899,7 +916,7 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
                     animationFrame = CGRect(x: params.width - animationSize.width - 6.0 - params.rightInset, y: floor((layout.contentSize.height - animationSize.height) / 2.0) + 1.0, width: animationSize.width, height: animationSize.height)
                     titleFrame = CGRect(origin: CGPoint(x: leftInset, y: verticalInset + verticalOffset), size: titleLayout.size)
                                        
-                    var extractedRect = CGRect(origin: CGPoint(), size: layout.contentSize).insetBy(dx: params.leftInset, dy: 0.0)
+                    var extractedRect = CGRect(origin: CGPoint(), size: layout.contentSize).inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                     var extractedHeight = extractedRect.height + expandedStatusLayout.height - statusLayout.height
                     var extractedVerticalOffset: CGFloat = 0.0
                     if item.peer.smallProfileImage != nil {
@@ -1003,23 +1020,38 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
                     transition.updateFrame(node: strongSelf.statusNode, frame: CGRect(origin: CGPoint(x: leftInset, y: strongSelf.titleNode.frame.maxY + titleSpacing), size: statusLayout))
                     transition.updateFrame(node: strongSelf.expandedStatusNode, frame: CGRect(origin: CGPoint(x: leftInset, y: strongSelf.titleNode.frame.maxY + titleSpacing), size: expandedStatusLayout))
                     
-                    if let currentCredibilityIconImage = currentCredibilityIconImage {
-                        let iconNode: ASImageNode
-                        if let current = strongSelf.credibilityIconNode {
-                            iconNode = current
+                    if let credibilityIcon = credibilityIcon {
+                        let animationCache = item.context.animationCache
+                        let animationRenderer = item.context.animationRenderer
+                        
+                        let credibilityIconView: ComponentHostView<Empty>
+                        if let current = strongSelf.credibilityIconView {
+                            credibilityIconView = current
                         } else {
-                            iconNode = ASImageNode()
-                            iconNode.isLayerBacked = true
-                            iconNode.displaysAsynchronously = false
-                            iconNode.displayWithoutProcessing = true
-                            strongSelf.offsetContainerNode.addSubnode(iconNode)
-                            strongSelf.credibilityIconNode = iconNode
+                            credibilityIconView = ComponentHostView<Empty>()
+                            strongSelf.offsetContainerNode.view.addSubview(credibilityIconView)
+                            strongSelf.credibilityIconView = credibilityIconView
                         }
-                        iconNode.image = currentCredibilityIconImage
-                        transition.updateFrame(node: iconNode, frame: CGRect(origin: CGPoint(x: leftInset + titleLayout.size.width + 3.0, y: verticalInset + credibilityIconOffset), size: currentCredibilityIconImage.size))
-                    } else if let credibilityIconNode = strongSelf.credibilityIconNode {
-                        strongSelf.credibilityIconNode = nil
-                        credibilityIconNode.removeFromSupernode()
+                        
+                        let iconSize = credibilityIconView.update(
+                            transition: .immediate,
+                            component: AnyComponent(EmojiStatusComponent(
+                                context: item.context,
+                                animationCache: animationCache,
+                                animationRenderer: animationRenderer,
+                                content: credibilityIcon,
+                                isVisibleForAnimations: true,
+                                action: nil,
+                                emojiFileUpdated: nil
+                            )),
+                            environment: {},
+                            containerSize: CGSize(width: 20.0, height: 20.0)
+                        )
+                        
+                        transition.updateFrame(view: credibilityIconView, frame: CGRect(origin: CGPoint(x: leftInset + titleLayout.size.width + 3.0, y: verticalInset + floor((titleFrame.height - iconSize.height) / 2.0)), size: iconSize))
+                    } else if let credibilityIconView = strongSelf.credibilityIconView {
+                        strongSelf.credibilityIconView = nil
+                        credibilityIconView.removeFromSuperview()
                     }
                     
                     transition.updateFrameAsPositionAndBounds(node: strongSelf.avatarNode, frame: avatarFrame)
@@ -1035,7 +1067,7 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
                                     return
                                 }
                                 
-                                if strongSelf.audioLevelView == nil, value > 0.0 {
+                                if strongSelf.audioLevelView == nil, value > 0.0, item.context.sharedContext.energyUsageSettings.fullTranslucency {
                                     let audioLevelView = VoiceBlobView(
                                         frame: blobFrame,
                                         maxLevel: 1.5,
@@ -1105,7 +1137,7 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
                     if item.peer.isDeleted {
                         overrideImage = .deletedIcon
                     }
-                    strongSelf.avatarNode.setPeer(context: item.context, theme: item.presentationData.theme, peer: EnginePeer(item.peer), overrideImage: overrideImage, emptyColor: item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: synchronousLoad, storeUnrounded: true)
+                    strongSelf.avatarNode.setPeer(context: item.context, theme: item.presentationData.theme, peer: item.peer, overrideImage: overrideImage, emptyColor: item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: synchronousLoad, storeUnrounded: true)
                 
                     strongSelf.highlightContainerNode.frame = CGRect(origin: CGPoint(x: params.leftInset, y: -UIScreenPixel), size: CGSize(width: params.width - params.leftInset - params.rightInset, height: layout.contentSize.height + UIScreenPixel + UIScreenPixel + 11.0))
                     
@@ -1264,7 +1296,7 @@ class VoiceChatParticipantItemNode: ItemListRevealOptionsItemNode {
         self.updateIsHighlighted(transition: (animated && !highlighted) ? .animated(duration: 0.3, curve: .easeInOut) : .immediate)
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     

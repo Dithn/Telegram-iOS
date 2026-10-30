@@ -23,15 +23,33 @@ public enum ContainerViewLayoutSizeClass {
 public struct LayoutMetrics: Equatable {
     public let widthClass: ContainerViewLayoutSizeClass
     public let heightClass: ContainerViewLayoutSizeClass
+    public let orientation: UIInterfaceOrientation?
+    /// The size of the window the layout is hosted in, as the system currently sizes it. Nil for a
+    /// layout that is not derived from a window (previews, offscreen rendering, embedded content).
+    public let windowSize: CGSize?
     
-    public init(widthClass: ContainerViewLayoutSizeClass, heightClass: ContainerViewLayoutSizeClass) {
+    public init(widthClass: ContainerViewLayoutSizeClass, heightClass: ContainerViewLayoutSizeClass, orientation: UIInterfaceOrientation?, windowSize: CGSize? = nil) {
         self.widthClass = widthClass
         self.heightClass = heightClass
+        self.orientation = orientation
+        self.windowSize = windowSize
     }
     
     public init() {
         self.widthClass = .compact
         self.heightClass = .compact
+        self.orientation = nil
+        self.windowSize = nil
+    }
+}
+
+public extension LayoutMetrics {
+    var isTablet: Bool {
+        if case .regular = self.widthClass {
+            return true
+        } else {
+            return false
+        }
     }
 }
 
@@ -46,43 +64,65 @@ public struct ContainerViewLayout: Equatable {
     public var deviceMetrics: DeviceMetrics
     public var intrinsicInsets: UIEdgeInsets
     public var safeInsets: UIEdgeInsets
+    /// The block reserved in each corner (iPhone Duo's status corner), in this layout's coordinates.
+    /// Additional to `safeInsets`, which are unchanged and may already cover a block along a full
+    /// edge: do not add the two. `.none` on every device without such blocks.
+    public var reservedCorners: ContainerViewLayoutCorners
+    /// The fold while the system reports it active, including its margins, in this layout's
+    /// coordinates. Nil when there is none, it is inactive, or it does not cross this layout.
+    public var division: CGRect?
     public var additionalInsets: UIEdgeInsets
     public var statusBarHeight: CGFloat?
     public var inputHeight: CGFloat?
     public var inputHeightIsInteractivellyChanging: Bool
     public var inVoiceOver: Bool
+    /// The layout is the content of a form sheet: a modal card that `NavigationModalContainer` centers
+    /// over a regular-width window. Set by the container that makes that presentation decision, never
+    /// inferred from geometry, and carried into every layout derived from it.
+    public var presentedInFormSheet: Bool
     
-    public init(size: CGSize, metrics: LayoutMetrics, deviceMetrics: DeviceMetrics, intrinsicInsets: UIEdgeInsets, safeInsets: UIEdgeInsets, additionalInsets: UIEdgeInsets, statusBarHeight: CGFloat?, inputHeight: CGFloat?, inputHeightIsInteractivellyChanging: Bool, inVoiceOver: Bool) {
+    public init(size: CGSize, metrics: LayoutMetrics, deviceMetrics: DeviceMetrics, intrinsicInsets: UIEdgeInsets, safeInsets: UIEdgeInsets, reservedCorners: ContainerViewLayoutCorners, division: CGRect?, additionalInsets: UIEdgeInsets, statusBarHeight: CGFloat?, inputHeight: CGFloat?, inputHeightIsInteractivellyChanging: Bool, inVoiceOver: Bool, presentedInFormSheet: Bool) {
         self.size = size
         self.metrics = metrics
         self.deviceMetrics = deviceMetrics
         self.intrinsicInsets = intrinsicInsets
         self.safeInsets = safeInsets
+        self.reservedCorners = reservedCorners
+        self.division = division
         self.additionalInsets = additionalInsets
         self.statusBarHeight = statusBarHeight
         self.inputHeight = inputHeight
         self.inputHeightIsInteractivellyChanging = inputHeightIsInteractivellyChanging
         self.inVoiceOver = inVoiceOver
+        self.presentedInFormSheet = presentedInFormSheet
     }
     
     public func addedInsets(insets: UIEdgeInsets) -> ContainerViewLayout {
-        return ContainerViewLayout(size: self.size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: UIEdgeInsets(top: self.intrinsicInsets.top + insets.top, left: self.intrinsicInsets.left + insets.left, bottom: self.intrinsicInsets.bottom + insets.bottom, right: self.intrinsicInsets.right + insets.right), safeInsets: self.safeInsets, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver)
+        return ContainerViewLayout(size: self.size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: UIEdgeInsets(top: self.intrinsicInsets.top + insets.top, left: self.intrinsicInsets.left + insets.left, bottom: self.intrinsicInsets.bottom + insets.bottom, right: self.intrinsicInsets.right + insets.right), safeInsets: self.safeInsets, reservedCorners: self.reservedCorners, division: self.division, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver, presentedInFormSheet: self.presentedInFormSheet)
     }
     
     public func withUpdatedSize(_ size: CGSize) -> ContainerViewLayout {
-        return ContainerViewLayout(size: size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: self.intrinsicInsets, safeInsets: self.safeInsets, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver)
+        return ContainerViewLayout(size: size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: self.intrinsicInsets, safeInsets: self.safeInsets, reservedCorners: self.reservedCorners, division: self.division, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver, presentedInFormSheet: self.presentedInFormSheet)
     }
     
     public func withUpdatedIntrinsicInsets(_ intrinsicInsets: UIEdgeInsets) -> ContainerViewLayout {
-        return ContainerViewLayout(size: self.size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: intrinsicInsets, safeInsets: self.safeInsets, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver)
+        return ContainerViewLayout(size: self.size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: intrinsicInsets, safeInsets: self.safeInsets, reservedCorners: self.reservedCorners, division: self.division, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver, presentedInFormSheet: self.presentedInFormSheet)
+    }
+    
+    public func withUpdatedSafeInsets(_ safeInsets: UIEdgeInsets) -> ContainerViewLayout {
+        return ContainerViewLayout(size: self.size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: self.intrinsicInsets, safeInsets: safeInsets, reservedCorners: self.reservedCorners, division: self.division, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver, presentedInFormSheet: self.presentedInFormSheet)
+    }
+    
+    public func withUpdatedAdditionalInsets(_ additionalInsets: UIEdgeInsets) -> ContainerViewLayout {
+        return ContainerViewLayout(size: self.size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: self.intrinsicInsets, safeInsets: self.safeInsets, reservedCorners: self.reservedCorners, division: self.division, additionalInsets: additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver, presentedInFormSheet: self.presentedInFormSheet)
     }
     
     public func withUpdatedInputHeight(_ inputHeight: CGFloat?) -> ContainerViewLayout {
-        return ContainerViewLayout(size: self.size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: self.intrinsicInsets, safeInsets: self.safeInsets, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver)
+        return ContainerViewLayout(size: self.size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: self.intrinsicInsets, safeInsets: self.safeInsets, reservedCorners: self.reservedCorners, division: self.division, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver, presentedInFormSheet: self.presentedInFormSheet)
     }
     
     public func withUpdatedMetrics(_ metrics: LayoutMetrics) -> ContainerViewLayout {
-        return ContainerViewLayout(size: self.size, metrics: metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: self.intrinsicInsets, safeInsets: self.safeInsets, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver)
+        return ContainerViewLayout(size: self.size, metrics: metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: self.intrinsicInsets, safeInsets: self.safeInsets, reservedCorners: self.reservedCorners, division: self.division, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver, presentedInFormSheet: self.presentedInFormSheet)
     }
 }
 
@@ -98,15 +138,6 @@ public extension ContainerViewLayout {
         return insets
     }
     
-    var isModalOverlay: Bool {
-        if case .tablet = self.deviceMetrics.type {
-            if case .regular = self.metrics.widthClass {
-                return abs(max(self.size.width, self.size.height) - self.deviceMetrics.screenSize.height) > 1.0
-            }
-        }
-        return false
-    }
-    
     var isNonExclusive: Bool {
         if case .tablet = self.deviceMetrics.type {
             if case .compact = self.metrics.widthClass {
@@ -119,43 +150,20 @@ public extension ContainerViewLayout {
         return false
     }
     
-    var inSplitView: Bool {
-        var maybeSplitView = false
-        if case .tablet = self.deviceMetrics.type {
-            if case .compact = self.metrics.widthClass {
-                maybeSplitView = true
-            }
-            if case .compact = self.metrics.heightClass {
-                maybeSplitView = true
-            }
-        }
-        if maybeSplitView && abs(max(self.size.width, self.size.height) - self.deviceMetrics.screenSize.height) < 1.0 {
-            return true
-        }
-        return false
-    }
-    
-    var inSlideOver: Bool {
-        var maybeSlideOver = false
-        if case .tablet = self.deviceMetrics.type {
-            if case .compact = self.metrics.widthClass {
-                maybeSlideOver = true
-            }
-            if case .compact = self.metrics.heightClass {
-                maybeSlideOver = true
-            }
-        }
-        if maybeSlideOver && abs(max(self.size.width, self.size.height) - self.deviceMetrics.screenSize.height) > 10.0 {
-            return true
-        }
-        return false
-    }
-    
     var orientation: LayoutOrientation {
         return self.size.width > self.size.height ? .landscape : .portrait
     }
     
+    var standardKeyboardHeight: CGFloat {
+        return self.deviceMetrics.keyboardHeight(inLandscape: self.orientation == .landscape)
+    }
+    
     var standardInputHeight: CGFloat {
-        return self.deviceMetrics.keyboardHeight(inLandscape: self.orientation == .landscape) + self.deviceMetrics.predictiveInputHeight(inLandscape: self.orientation == .landscape)
+        return self.deviceMetrics.standardInputHeight(inLandscape: self.orientation == .landscape)
+    }
+    
+    static func concentricInsets(bottomInset: CGFloat, innerDiameter: CGFloat, sideInset: CGFloat) -> UIEdgeInsets {
+        let mappedBottomInset: CGFloat = max(bottomInset, sideInset)
+        return UIEdgeInsets(top: 0.0, left: sideInset, bottom: mappedBottomInset, right: sideInset)
     }
 }

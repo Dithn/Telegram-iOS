@@ -66,10 +66,16 @@ public func isRoundEqualCorners(_ corners: ImageCorners) -> Bool {
 }
 
 public struct ImageCorners: Equatable {
+    public enum Curve {
+        case circular
+        case continuous
+    }
+    
     public let topLeft: ImageCorner
     public let topRight: ImageCorner
     public let bottomLeft: ImageCorner
     public let bottomRight: ImageCorner
+    public let curve: Curve
     
     public var isEmpty: Bool {
         if self.topLeft != .Corner(0.0) {
@@ -87,22 +93,24 @@ public struct ImageCorners: Equatable {
         return true
     }
     
-    public init(radius: CGFloat) {
+    public init(radius: CGFloat, curve: Curve = .circular) {
         self.topLeft = .Corner(radius)
         self.topRight = .Corner(radius)
         self.bottomLeft = .Corner(radius)
         self.bottomRight = .Corner(radius)
+        self.curve = curve
     }
     
-    public init(topLeft: ImageCorner, topRight: ImageCorner, bottomLeft: ImageCorner, bottomRight: ImageCorner) {
+    public init(topLeft: ImageCorner, topRight: ImageCorner, bottomLeft: ImageCorner, bottomRight: ImageCorner, curve: Curve = .circular) {
         self.topLeft = topLeft
         self.topRight = topRight
         self.bottomLeft = bottomLeft
         self.bottomRight = bottomRight
+        self.curve = curve
     }
     
     public init() {
-        self.init(topLeft: .Corner(0.0), topRight: .Corner(0.0), bottomLeft: .Corner(0.0), bottomRight: .Corner(0.0))
+        self.init(topLeft: .Corner(0.0), topRight: .Corner(0.0), bottomLeft: .Corner(0.0), bottomRight: .Corner(0.0), curve: .circular)
     }
     
     public var extendedEdges: UIEdgeInsets {
@@ -113,12 +121,12 @@ public struct ImageCorners: Equatable {
     }
     
     public func withRemovedTails() -> ImageCorners {
-        return ImageCorners(topLeft: self.topLeft.withoutTail, topRight: self.topRight.withoutTail, bottomLeft: self.bottomLeft.withoutTail, bottomRight: self.bottomRight.withoutTail)
+        return ImageCorners(topLeft: self.topLeft.withoutTail, topRight: self.topRight.withoutTail, bottomLeft: self.bottomLeft.withoutTail, bottomRight: self.bottomRight.withoutTail, curve: self.curve)
     }
 }
 
 public func ==(lhs: ImageCorners, rhs: ImageCorners) -> Bool {
-    return lhs.topLeft == rhs.topLeft && lhs.topRight == rhs.topRight && lhs.bottomLeft == rhs.bottomLeft && lhs.bottomRight == rhs.bottomRight
+    return lhs.topLeft == rhs.topLeft && lhs.topRight == rhs.topRight && lhs.bottomLeft == rhs.bottomLeft && lhs.bottomRight == rhs.bottomRight && lhs.curve == rhs.curve
 }
 
 public class ImageNode: ASDisplayNode {
@@ -143,6 +151,8 @@ public class ImageNode: ASDisplayNode {
         }
     }
     
+    public var contentUpdated: ((UIImage?) -> Void)?
+    
     public init(enableHasImage: Bool = false, enableEmpty: Bool = false, enableAnimatedTransition: Bool = false) {
         if enableHasImage {
             self.hasImage = ValuePromise(false, ignoreRepeated: true)
@@ -160,6 +170,7 @@ public class ImageNode: ASDisplayNode {
     
     public func setSignal(_ signal: Signal<UIImage?, NoError>) {
         var reportedHasImage = false
+        var wasSynchronous = true
         self.disposable.set((signal |> deliverOnMainQueue).start(next: {[weak self] next in
             dispatcher.dispatch {
                 if let strongSelf = self {
@@ -167,12 +178,12 @@ public class ImageNode: ASDisplayNode {
                     if strongSelf.first && next != nil {
                         strongSelf.first = false
                         animate = false
-                        if strongSelf.isNodeLoaded && strongSelf.animateFirstTransition {
+                        if strongSelf.isNodeLoaded && strongSelf.animateFirstTransition && !wasSynchronous {
                             strongSelf.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.18)
                         }
                     }
                     if let image = next?.cgImage {
-                        if animate, let previousContents = strongSelf.contents {
+                        if animate, let previousContents = strongSelf.contents, !wasSynchronous {
                             strongSelf.contents = image
                             let tempLayer = CALayer()
                             tempLayer.contents = previousContents
@@ -187,8 +198,10 @@ public class ImageNode: ASDisplayNode {
                         } else {
                             strongSelf.contents = image
                         }
+                        strongSelf.contentUpdated?(next)
                     } else if strongSelf.enableEmpty {
                         strongSelf.contents = nil
+                        strongSelf.contentUpdated?(nil)
                     }
                     if !reportedHasImage {
                         if let hasImage = strongSelf.hasImage {
@@ -203,6 +216,7 @@ public class ImageNode: ASDisplayNode {
                 }
             }
         }))
+        wasSynchronous = false
     }
     
     public override func clearContents() {
@@ -210,6 +224,7 @@ public class ImageNode: ASDisplayNode {
         
         self.contents = nil
         self.disposable.set(nil)
+        self.contentUpdated?(nil)
     }
     
     public var image: UIImage? {

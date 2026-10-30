@@ -2,7 +2,22 @@
 
 #import <MtProtoKit/MTRpcError.h>
 
+#import <os/lock.h>
 #import <libkern/OSAtomic.h>
+
+@implementation MTRequestResponseInfo
+
+- (instancetype)initWithNetworkType:(int32_t)networkType timestamp:(double)timestamp duration:(double)duration {
+    self = [super init];
+    if (self != nil) {
+        _networkType = networkType;
+        _timestamp = timestamp;
+        _duration = duration;
+    }
+    return self;
+}
+
+@end
 
 @interface MTRequestInternalId : NSObject <NSCopying>
 {
@@ -19,7 +34,10 @@
     if (self != nil)
     {
         static int32_t nextValue = 1;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         _value = OSAtomicIncrement32(&nextValue);
+#pragma clang diagnostic pop
     }
     return self;
 }
@@ -45,6 +63,18 @@
 @end
 
 @implementation MTRequest
+
+- (bool)scanNeedsTimeoutTimer {
+    return _needsTimeoutTimer;
+}
+
+- (MTRequestErrorContext *)scanErrorContext {
+    return _errorContext;
+}
+
+- (id)scanInternalId {
+    return _internalId;
+}
 
 - (instancetype)init
 {

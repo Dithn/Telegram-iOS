@@ -1,25 +1,33 @@
 import Foundation
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import SwiftSignalKit
 
 public struct ContentSettings: Equatable {
-    public static var `default` = ContentSettings(ignoreContentRestrictionReasons: [])
+    public static var `default` = ContentSettings(ignoreContentRestrictionReasons: [], addContentRestrictionReasons: [])
     
     public var ignoreContentRestrictionReasons: Set<String>
+    public var addContentRestrictionReasons: [String]
     
-    public init(ignoreContentRestrictionReasons: Set<String>) {
+    public init(ignoreContentRestrictionReasons: Set<String>, addContentRestrictionReasons: [String]) {
         self.ignoreContentRestrictionReasons = ignoreContentRestrictionReasons
+        self.addContentRestrictionReasons = addContentRestrictionReasons
     }
 }
 
-private extension ContentSettings {
+extension ContentSettings {
     init(appConfiguration: AppConfiguration) {
         var reasons: [String] = []
-        if let data = appConfiguration.data, let reasonsData = data["ignore_restriction_reasons"] as? [String] {
-            reasons = reasonsData
+        var addContentRestrictionReasons: [String] = []
+        if let data = appConfiguration.data {
+            if let reasonsData = data["ignore_restriction_reasons"] as? [String] {
+                reasons = reasonsData
+            }
+            if let addContentRestrictionReasonsData = data["restriction_add_platforms"] as? [String] {
+                addContentRestrictionReasons = addContentRestrictionReasonsData
+            }
         }
-        self.init(ignoreContentRestrictionReasons: Set(reasons))
+        self.init(ignoreContentRestrictionReasons: Set(reasons), addContentRestrictionReasons: addContentRestrictionReasons)
     }
 }
 
@@ -53,7 +61,8 @@ public func contentSettingsConfiguration(network: Network) -> Signal<ContentSett
     return network.request(Api.functions.account.getContentSettings())
     |> map { result -> ContentSettingsConfiguration in
         switch result {
-        case let .contentSettings(flags):
+        case let .contentSettings(contentSettingsData):
+            let flags = contentSettingsData.flags
             return ContentSettingsConfiguration(sensitiveContentEnabled: (flags & (1 << 0)) != 0, canAdjustSensitiveContent: (flags & (1 << 1)) != 0)
         }
     }

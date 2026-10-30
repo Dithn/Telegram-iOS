@@ -3,22 +3,23 @@ import UIKit
 import Display
 import AsyncDisplayKit
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import AccountContext
 import PhotoResources
 import GalleryUI
+import Tuples
 
 private struct InstantImageGalleryThumbnailItem: GalleryThumbnailItem {
     let account: Account
+    let userLocation: MediaResourceUserLocation
     let mediaReference: AnyMediaReference
     
     func image(synchronous: Bool) -> (Signal<(TransformImageArguments) -> DrawingContext?, NoError>, CGSize) {
         if let imageReferene = mediaReference.concrete(TelegramMediaImage.self), let representation = largestImageRepresentation(imageReferene.media.representations) {
-            return (mediaGridMessagePhoto(account: self.account, photoReference: imageReferene), representation.dimensions.cgSize)
+            return (mediaGridMessagePhoto(account: self.account, userLocation: self.userLocation, photoReference: imageReferene), representation.dimensions.cgSize)
         } else if let fileReference = mediaReference.concrete(TelegramMediaFile.self), let dimensions = fileReference.media.dimensions {
-                return (mediaGridMessageVideo(postbox: account.postbox, videoReference: fileReference), dimensions.cgSize)
+            return (mediaGridMessageVideo(postbox: account.postbox, userLocation: self.userLocation, videoReference: fileReference), dimensions.cgSize)
             } else {
             return (.single({ _ in return nil }), CGSize(width: 128.0, height: 128.0))
         }
@@ -42,15 +43,22 @@ class InstantImageGalleryItem: GalleryItem {
     
     let context: AccountContext
     let presentationData: PresentationData
+    let userLocation: MediaResourceUserLocation
     let imageReference: ImageMediaReference
     let caption: NSAttributedString
     let credit: NSAttributedString
     let location: InstantPageGalleryEntryLocation?
     let openUrl: (InstantPageUrlItem) -> Void
     let openUrlOptions: (InstantPageUrlItem) -> Void
-    
-    init(context: AccountContext, presentationData: PresentationData, itemId: AnyHashable, imageReference: ImageMediaReference, caption: NSAttributedString, credit: NSAttributedString, location: InstantPageGalleryEntryLocation?, openUrl: @escaping (InstantPageUrlItem) -> Void, openUrlOptions: @escaping (InstantPageUrlItem) -> Void) {
+    let getPreloadedResource: (String) -> Data?
+    /// The page's media is screenshot-protected and must not be shareable — see
+    /// `InstantPageGalleryController.captureProtected`.
+    let captureProtected: Bool
+
+    init(context: AccountContext, presentationData: PresentationData, itemId: AnyHashable, userLocation: MediaResourceUserLocation, imageReference: ImageMediaReference, caption: NSAttributedString, credit: NSAttributedString, location: InstantPageGalleryEntryLocation?, openUrl: @escaping (InstantPageUrlItem) -> Void, openUrlOptions: @escaping (InstantPageUrlItem) -> Void, getPreloadedResource: @escaping (String) -> Data?, captureProtected: Bool) {
         self.itemId = itemId
+        self.captureProtected = captureProtected
+        self.userLocation = userLocation
         self.context = context
         self.presentationData = presentationData
         self.imageReference = imageReference
@@ -59,12 +67,13 @@ class InstantImageGalleryItem: GalleryItem {
         self.location = location
         self.openUrl = openUrl
         self.openUrlOptions = openUrlOptions
+        self.getPreloadedResource = getPreloadedResource
     }
     
     func node(synchronous: Bool) -> GalleryItemNode {
-        let node = InstantImageGalleryItemNode(context: self.context, presentationData: self.presentationData, openUrl: self.openUrl, openUrlOptions: self.openUrlOptions)
-        
-        node.setImage(imageReference: self.imageReference)
+        let node = InstantImageGalleryItemNode(context: self.context, presentationData: self.presentationData, openUrl: self.openUrl, openUrlOptions: self.openUrlOptions, getPreloadedResource: self.getPreloadedResource, captureProtected: self.captureProtected)
+
+        node.setImage(userLocation: self.userLocation, imageReference: self.imageReference)
     
         if let location = self.location {
             node._title.set(.single(self.presentationData.strings.Items_NOfM("\(location.position + 1)", "\(location.totalCount)").string))
@@ -86,7 +95,7 @@ class InstantImageGalleryItem: GalleryItem {
     }
     
     func thumbnailItem() -> (Int64, GalleryThumbnailItem)? {
-        return (0, InstantImageGalleryThumbnailItem(account: self.context.account, mediaReference: imageReference.abstract))
+        return (0, InstantImageGalleryThumbnailItem(account: self.context.account, userLocation: self.userLocation, mediaReference: imageReference.abstract))
     }
 }
 
@@ -98,14 +107,25 @@ final class InstantImageGalleryItemNode: ZoomableContentGalleryItemNode {
     fileprivate let _title = Promise<String>()
     private let footerContentNode: InstantPageGalleryFooterContentNode
     
+    private var userLocation: MediaResourceUserLocation?
     private var contextAndMedia: (AccountContext, AnyMediaReference)?
     
     private var fetchDisposable = MetaDisposable()
     
-    init(context: AccountContext, presentationData: PresentationData, openUrl: @escaping (InstantPageUrlItem) -> Void, openUrlOptions: @escaping (InstantPageUrlItem) -> Void) {
+    private var getPreloadedResource: (String) -> Data?
+    /// When true the zoomed image is excluded from screenshots and the footer's share/save-to-camera-roll
+    /// button is withheld, matching `ChatImageGalleryItem` for a copy-protected message.
+    private let captureProtected: Bool
+
+    init(context: AccountContext, presentationData: PresentationData, openUrl: @escaping (InstantPageUrlItem) -> Void, openUrlOptions: @escaping (InstantPageUrlItem) -> Void, getPreloadedResource: @escaping (String) -> Data?, captureProtected: Bool) {
         self.context = context
-        
-        self.imageNode = TransformImageNode()
+        self.getPreloadedResource = getPreloadedResource
+        self.captureProtected = captureProtected
+
+        // Configured through a local: `self.imageNode` is not usable until after `super.init`.
+        let imageNode = TransformImageNode()
+        imageNode.captureProtected = captureProtected
+        self.imageNode = imageNode
         self.footerContentNode = InstantPageGalleryFooterContentNode(context: context, presentationData: presentationData)
         self.footerContentNode.openUrl = openUrl
         self.footerContentNode.openUrlOptions = openUrlOptions
@@ -136,35 +156,69 @@ final class InstantImageGalleryItemNode: ZoomableContentGalleryItemNode {
         self.footerContentNode.setCaption(caption, credit: credit)
     }
     
-    fileprivate func setImage(imageReference: ImageMediaReference) {
+    fileprivate func setImage(userLocation: MediaResourceUserLocation, imageReference: ImageMediaReference) {
+        self.userLocation = userLocation
+        
         if self.contextAndMedia == nil || !self.contextAndMedia!.1.media.isEqual(to: imageReference.media) {
             if let largestSize = largestRepresentationForPhoto(imageReference.media) {
                 let displaySize = largestSize.dimensions.cgSize.fitted(CGSize(width: 1280.0, height: 1280.0)).dividedByScreenScale().integralFloor
                 self.imageNode.asyncLayout()(TransformImageArguments(corners: ImageCorners(), imageSize: displaySize, boundingSize: displaySize, intrinsicInsets: UIEdgeInsets(), emptyColor: .black))()
-                self.imageNode.setSignal(chatMessagePhoto(postbox: self.context.account.postbox, photoReference: imageReference), dispatchOnDisplayLink: false)
                 self.zoomableContent = (largestSize.dimensions.cgSize, self.imageNode)
-                self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.context.account.postbox.mediaBox, reference: imageReference.resourceReference(largestSize.resource)).start())
+                
+                if let externalResource = largestSize.resource as? InstantPageExternalMediaResource {
+                    var url = externalResource.url
+                    if !url.hasPrefix("http") && !url.hasPrefix("https") && url.hasPrefix("//") {
+                        url = "https:\(url)"
+                    }
+                    let photoData: Signal<Tuple4<Data?, Data?, ChatMessagePhotoQuality, Bool>, NoError>
+                    if let preloadedData = getPreloadedResource(externalResource.url) {
+                        photoData = .single(Tuple4(nil, preloadedData, .full, true))
+                    } else {
+                        photoData = self.context.engine.resources.httpData(url: url, preserveExactUrl: true)
+                        |> map(Optional.init)
+                        |> `catch` { _ -> Signal<Data?, NoError> in
+                            return .single(nil)
+                        }
+                        |> map { data in
+                            if let data {
+                                return Tuple4(nil, data, .full, true)
+                            } else {
+                                return Tuple4(nil, nil, .full, false)
+                            }
+                        }
+                    }
+                    self.imageNode.setSignal(chatMessagePhotoInternal(photoData: photoData)
+                    |> map { _, _, generate in
+                        return generate
+                    })
+                } else {
+                    self.imageNode.setSignal(chatMessagePhoto(postbox: self.context.account.postbox, userLocation: userLocation, photoReference: imageReference), dispatchOnDisplayLink: false)
+                    self.fetchDisposable.set(self.context.engine.resources.fetch(reference: imageReference.resourceReference(largestSize.resource), userLocation: userLocation, userContentType: .image).start())
+                }
             } else {
                 self._ready.set(.single(Void()))
             }
         }
         self.contextAndMedia = (self.context, imageReference.abstract)
-        self.footerContentNode.setShareMedia(imageReference.abstract)
+        // nil hides the action button entirely — sharing/saving is exactly what copy protection denies.
+        self.footerContentNode.setShareMedia(self.captureProtected ? nil : imageReference.abstract)
     }
     
-    func setFile(context: AccountContext, fileReference: FileMediaReference) {
+    func setFile(context: AccountContext, userLocation: MediaResourceUserLocation, fileReference: FileMediaReference) {
+        self.userLocation = userLocation
+        
         if self.contextAndMedia == nil || !self.contextAndMedia!.1.media.isEqual(to: fileReference.media) {
             if let largestSize = fileReference.media.dimensions {
                 let displaySize = largestSize.cgSize.dividedByScreenScale()
                 self.imageNode.asyncLayout()(TransformImageArguments(corners: ImageCorners(), imageSize: displaySize, boundingSize: displaySize, intrinsicInsets: UIEdgeInsets()))()
-                self.imageNode.setSignal(chatMessageImageFile(account: context.account, fileReference: fileReference, thumbnail: false), dispatchOnDisplayLink: false)
+                self.imageNode.setSignal(chatMessageImageFile(account: context.account, userLocation: userLocation, fileReference: fileReference, thumbnail: false), dispatchOnDisplayLink: false)
                 self.zoomableContent = (largestSize.cgSize, self.imageNode)
             } else {
                 self._ready.set(.single(Void()))
             }
         }
         self.contextAndMedia = (context, fileReference.abstract)
-        self.footerContentNode.setShareMedia(fileReference.abstract)
+        self.footerContentNode.setShareMedia(self.captureProtected ? nil : fileReference.abstract)
     }
     
     override func animateIn(from node: (ASDisplayNode, CGRect, () -> (UIView?, UIView?)), addToTransitionSurface: (UIView) -> Void, completion: @escaping () -> Void) {
@@ -205,7 +259,7 @@ final class InstantImageGalleryItemNode: ZoomableContentGalleryItemNode {
         copyView.layer.animate(from: NSValue(caTransform3D: CATransform3DIdentity), to: NSValue(caTransform3D: CATransform3DMakeScale(scale.width, scale.height, 1.0)), keyPath: "transform", timingFunction: kCAMediaTimingFunctionSpring, duration: 0.25, removeOnCompletion: false)
         
         if let transformedSurfaceFrame = transformedSurfaceFrame, let transformedSurfaceFinalFrame = transformedSurfaceFinalFrame {
-            surfaceCopyView.layer.animatePosition(from: CGPoint(x: transformedSurfaceFrame.midX, y: transformedSurfaceFrame.midY), to: CGPoint(x: transformedCopyViewFinalFrame.midX, y: transformedCopyViewFinalFrame.midY), duration: positionDuration, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { [weak surfaceCopyView] _ in
+            surfaceCopyView.layer.animatePosition(from: CGPoint(x: transformedSurfaceFrame.midX, y: transformedSurfaceFrame.midY), to: CGPoint(x: transformedSurfaceFinalFrame.midX, y: transformedSurfaceFinalFrame.midY), duration: positionDuration, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { [weak surfaceCopyView] _ in
                 surfaceCopyView?.removeFromSuperview()
             })
             let scale = CGSize(width: transformedSurfaceFinalFrame.size.width / transformedSurfaceFrame.size.width, height: transformedSurfaceFinalFrame.size.height / transformedSurfaceFrame.size.height)
@@ -296,7 +350,7 @@ final class InstantImageGalleryItemNode: ZoomableContentGalleryItemNode {
         
         if let (context, media) = self.contextAndMedia, let fileReference = media.concrete(TelegramMediaFile.self) {
             if isVisible {
-                self.fetchDisposable.set(fetchedMediaResource(mediaBox: context.account.postbox.mediaBox, reference: fileReference.resourceReference(fileReference.media.resource)).start())
+                self.fetchDisposable.set(context.engine.resources.fetch(reference: fileReference.resourceReference(fileReference.media.resource), userLocation: self.userLocation ?? .other, userContentType: .file).start())
             } else {
                 self.fetchDisposable.set(nil)
             }

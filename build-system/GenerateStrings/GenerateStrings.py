@@ -88,7 +88,7 @@ def parse_positional_arguments(string: str) -> [PositionalArgument]:
     result = list()
 
     implicit_index = 0
-    argument = re.compile(r'%((\d)\$)?([@d])', re.U)
+    argument = re.compile(r'%((\d+)\$)?([@d])', re.U)
     start_position = 0
     while True:
         m = argument.search(string, start_position)
@@ -646,7 +646,9 @@ static NSString * _Nonnull getPluralizedIndirect(_PresentationStrings * _Nonnull
 
             if entry.is_pluralized:
                 argument_format_type = ''
-                if entry.positional_arguments[0].kind == 'd':
+                if len(entry.positional_arguments) == 0:
+                    argument_format_type = '1'
+                elif entry.positional_arguments[0].kind == 'd':
                     argument_format_type = '0'
                 elif entry.positional_arguments[0].kind == '@':
                     argument_format_type = '1'

@@ -1,7 +1,43 @@
 import Foundation
+import UIKit
 import AsyncDisplayKit
 
+private var morphsIntoContextMenuKey: UInt8 = 0
+
+public extension UIView {
+    /// Opts this view in to UIKit's liquid morph (iOS 26+) when it is the reference
+    /// view of a context menu; every other source keeps the standard presentation.
+    /// For now only navigation-header glass capsules holding a single button set it.
+    var morphsIntoContextMenu: Bool {
+        get {
+            return (objc_getAssociatedObject(self, &morphsIntoContextMenuKey) as? Bool) ?? false
+        }
+        set {
+            objc_setAssociatedObject(self, &morphsIntoContextMenuKey, newValue ? true : nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        }
+    }
+}
+
 open class ContextReferenceContentNode: ASDisplayNode {
+    /// Source decorations rendered outside this node (for example, a shared blur mask).
+    public var additionalContextMenuSourceViews: [UIView] = []
+    /// Visible source outline in this node's bounds, including separately drawn backdrops.
+    public var contextMenuSourcePath: UIBezierPath?
+    /// Supplies a live foreground/backdrop container for sources with a shared background.
+    public var makeContextMenuSourceContent: (() -> ContextMenuSourceContent?)?
+
+    public static func makeSourceContent(for view: UIView) -> (() -> ContextMenuSourceContent?)? {
+        return (view.asyncdisplaykit_node as? ContextReferenceContentNode)?.makeContextMenuSourceContent
+    }
+
+    public static func sourcePath(for view: UIView) -> UIBezierPath? {
+        return (view.asyncdisplaykit_node as? ContextReferenceContentNode)?.contextMenuSourcePath
+    }
+
+    public static func additionalSourceViews(for view: UIView) -> [UIView] {
+        return (view.asyncdisplaykit_node as? ContextReferenceContentNode)?.additionalContextMenuSourceViews ?? []
+    }
+
     override public init() {
         super.init()
     }
@@ -14,11 +50,10 @@ public final class ContextExtractedContentContainingNode: ASDisplayNode {
     public var willUpdateIsExtractedToContextPreview: ((Bool, ContainedViewLayoutTransition) -> Void)?
     public var isExtractedToContextPreviewUpdated: ((Bool) -> Void)?
     public var updateAbsoluteRect: ((CGRect, CGSize) -> Void)?
-    public var applyAbsoluteOffset: ((CGPoint, ContainedViewLayoutTransitionCurve, Double) -> Void)?
-    public var applyAbsoluteOffsetSpring: ((CGFloat, Double, CGFloat) -> Void)?
     public var layoutUpdated: ((CGSize, ListViewItemUpdateAnimation) -> Void)?
     public var updateDistractionFreeMode: ((Bool) -> Void)?
     public var requestDismiss: (() -> Void)?
+    public var onDismiss: (() -> Void)?
     
     public override init() {
         self.contentNode = ContextExtractedContentNode()
@@ -35,14 +70,129 @@ public final class ContextExtractedContentContainingNode: ASDisplayNode {
             return nil
         }
     }
+
+    /// `rect`, in the coordinate space of `view` (a view inside `contentNode`), converted to
+    /// `targetView` (a view outside it) as if the content had not been extracted.
+    ///
+    /// While the content is in a context preview, `contentNode` lives in the context controller's
+    /// hierarchy, and a direct `UIView.convert` from inside it to a view outside it returns
+    /// `CGRect.null` or a rect in the wrong place. The content keeps its own coordinate space while
+    /// extracted, so the conversion goes through it. Precondition: the owner lays the content out at
+    /// this node's bounds (`contentNode.frame == bounds`) while it is in place.
+    public func convertFromContent(_ rect: CGRect, in view: UIView, to targetView: UIView) -> CGRect {
+        if self.contentNode.view.superview === self.view {
+            return view.convert(rect, to: targetView)
+        }
+        let contentRect = view.convert(rect, to: self.contentNode.view)
+        return self.view.convert(contentRect, to: targetView)
+    }
+}
+
+public enum ContextExtractableContainerState {
+    public enum ExtractionState {
+        case animatedOut
+        case animatedIn
+    }
+    
+    case normal
+    case extracted(size: CGSize, cornerRadius: CGFloat, state: ExtractionState)
+}
+
+public struct ContextExtractableContainerNormalState {
+    public let size: CGSize
+    public let cornerRadius: CGFloat
+    
+    public init(size: CGSize, cornerRadius: CGFloat) {
+        self.size = size
+        self.cornerRadius = cornerRadius
+    }
+}
+
+public enum ContextExtractableContainerTransition {
+    case transition(ContainedViewLayoutTransition)
+    case spring(duration: Double, stiffness: CGFloat, damping: CGFloat)
+}
+
+public protocol ContextExtractableContainer: UIView {
+    typealias State = ContextExtractableContainerState
+    typealias NormalState = ContextExtractableContainerNormalState
+    typealias Transition = ContextExtractableContainerTransition
+    
+    var normalState: NormalState { get }
+    var extractableContentView: UIView { get }
+    
+    func updateState(state: State, transition: Transition, completion: ((Bool) -> Void)?)
+}
+
+public final class ContextExtractedContentContainingView: UIView {
+    public let contentView: ContextExtractedContentView
+    public var contentRect: CGRect = CGRect()
+    public var isExtractedToContextPreview: Bool = false
+    public var willUpdateIsExtractedToContextPreview: ((Bool, ContainedViewLayoutTransition) -> Void)?
+    public var isExtractedToContextPreviewUpdated: ((Bool) -> Void)?
+    public var updateAbsoluteRect: ((CGRect, CGSize) -> Void)?
+    public var layoutUpdated: ((CGSize, ListViewItemUpdateAnimation) -> Void)?
+    public var updateDistractionFreeMode: ((Bool) -> Void)?
+    public var requestDismiss: (() -> Void)?
+    public var onDismiss: (() -> Void)?
+    
+    public override init(frame: CGRect) {
+        self.contentView = ContextExtractedContentView()
+        
+        super.init(frame: frame)
+        
+        self.addSubview(self.contentView)
+    }
+    
+    required public init?(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if self.contentView.superview === self {
+            return self.contentView.hitTest(self.convert(point, to: self.contentView), with: event)
+        } else {
+            return nil
+        }
+    }
 }
 
 public final class ContextExtractedContentNode: ASDisplayNode {
+    private var viewImpl: ContextExtractedContentView {
+        return self.view as! ContextExtractedContentView
+    }
+    
+    public var customHitTest: ((CGPoint) -> UIView?)? {
+        didSet {
+            if self.isNodeLoaded {
+                self.viewImpl.customHitTest = self.customHitTest
+            }
+        }
+    }
+
+    override public init() {
+        super.init()
+        
+        self.setViewBlock {
+            return ContextExtractedContentView(frame: CGRect())
+        }
+    }
+}
+
+public final class ContextExtractedContentView: UIView {
     public var customHitTest: ((CGPoint) -> UIView?)?
+    
+    override public init(frame: CGRect) {
+        super.init(frame: frame)
+    }
+    
+    required public init?(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        let result = self.view.hitTest(point, with: event)
-        if result === self.view {
+        let result = super.hitTest(point, with: event)
+        if result === self {
             return nil
         } else {
             return result
@@ -51,12 +201,12 @@ public final class ContextExtractedContentNode: ASDisplayNode {
 }
 
 public final class ContextControllerContentNode: ASDisplayNode {
-    public let sourceNode: ASDisplayNode
+    public let sourceView: UIView
     public let controller: ViewController
     private let tapped: () -> Void
     
-    public init(sourceNode: ASDisplayNode, controller: ViewController, tapped: @escaping () -> Void) {
-        self.sourceNode = sourceNode
+    public init(sourceView: UIView, controller: ViewController, tapped: @escaping () -> Void) {
+        self.sourceView = sourceView
         self.controller = controller
         self.tapped = tapped
         
@@ -85,5 +235,6 @@ public final class ContextControllerContentNode: ASDisplayNode {
 public enum ContextContentNode {
     case reference(view: UIView)
     case extracted(node: ContextExtractedContentContainingNode, keepInPlace: Bool)
+    case extractedContainer(container: ContextExtractableContainer)
     case controller(ContextControllerContentNode)
 }

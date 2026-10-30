@@ -1,4 +1,5 @@
 import Foundation
+import LottieSettings
 import SwiftSignalKit
 import Compression
 import Display
@@ -6,6 +7,7 @@ import AsyncDisplayKit
 import YuvConversion
 import MediaResources
 import AnimationCompression
+import UIKit
 
 private let sharedQueue = Queue()
 
@@ -144,10 +146,47 @@ public protocol AnimatedStickerNodeSource {
     var isVideo: Bool { get }
     
     func cachedDataPath(width: Int, height: Int) -> Signal<(String, Bool), NoError>
-    func directDataPath() -> Signal<String, NoError>
+    func directDataPath(attemptSynchronously: Bool) -> Signal<String?, NoError>
 }
 
-public final class AnimatedStickerNode: ASDisplayNode {
+public protocol AnimatedStickerNode: ASDisplayNode {
+    var automaticallyLoadFirstFrame: Bool { get set }
+    var automaticallyLoadLastFrame: Bool { get set }
+    var playToCompletionOnStop: Bool { get set }
+    var started: () -> Void { get set }
+    
+    var completed: (Bool) -> Void { get set }
+    var frameUpdated: (Int, Int) -> Void { get set }
+    var currentFrameIndex: Int { get }
+    var currentFrameImage: UIImage? { get }
+    var currentFrameCount: Int { get }
+    var isPlaying: Bool { get }
+    var stopAtNearestLoop: Bool { get set }
+    
+    var status: Signal<AnimatedStickerStatus, NoError> { get }
+    
+    var autoplay: Bool { get set }
+    
+    var visibility: Bool { get set }
+    var overrideVisibility: Bool { get set }
+    
+    var isPlayingChanged: (Bool) -> Void { get set }
+    
+    func cloneCurrentFrame(from otherNode: AnimatedStickerNode?)
+    func setup(source: AnimatedStickerNodeSource, width: Int, height: Int, playbackMode: AnimatedStickerPlaybackMode, mode: AnimatedStickerMode)
+    func reset()
+    func playOnce()
+    func playLoop()
+    func play(firstFrame: Bool, fromIndex: Int?)
+    func pause()
+    func stop()
+    func seekTo(_ position: AnimatedStickerPlaybackPosition)
+    func playIfNeeded() -> Bool
+    func updateLayout(size: CGSize)
+    func setOverlayColor(_ color: UIColor?, replace: Bool, animated: Bool)
+}
+    
+public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedStickerNode {
     private let queue: Queue
     private let disposable = MetaDisposable()
     private let fetchDisposable = MetaDisposable()
@@ -163,7 +202,11 @@ public final class AnimatedStickerNode: ASDisplayNode {
     public var completed: (Bool) -> Void = { _ in }
     public var frameUpdated: (Int, Int) -> Void = { _, _ in }
     public private(set) var currentFrameIndex: Int = 0
+    public private(set) var currentFrameCount: Int = 0
+    public private(set) var currentFrameRate: Int = 0
     private var playFromIndex: Int?
+    
+    public var frameColorUpdated: ((UIColor) -> Void)?
     
     private let timer = Atomic<SwiftSignalKit.Timer?>(value: nil)
     private let frameSource = Atomic<QueueLocalObject<AnimatedStickerFrameSourceWrapper>?>(value: nil)
@@ -177,7 +220,7 @@ public final class AnimatedStickerNode: ASDisplayNode {
     public var isPlaying: Bool = false
     private var currentLoopCount: Int = 0
     private var canDisplayFirstFrame: Bool = false
-    private var playbackMode: AnimatedStickerPlaybackMode = .loop
+    public var playbackMode: AnimatedStickerPlaybackMode = .loop
     
     public var stopAtNearestLoop: Bool = false
     
@@ -187,6 +230,11 @@ public final class AnimatedStickerNode: ASDisplayNode {
     }
     
     public var autoplay = false
+    public var overrideVisibility: Bool = false
+    
+    public var currentFrameImage: UIImage? {
+        return self.renderer?.renderer.currentFrameImage
+    }
     
     public var visibility = false {
         didSet {
@@ -209,11 +257,26 @@ public final class AnimatedStickerNode: ASDisplayNode {
     private var overlayColor: (UIColor?, Bool)? = nil
     private var size: CGSize?
     
-    public init(useMetalCache: Bool = false) {
+    public var dynamicColor: UIColor? {
+        didSet {
+            if let renderer = self.renderer?.renderer as? SoftwareAnimationRenderer {
+                renderer.renderAsTemplateImage = self.dynamicColor != nil
+            }
+            self.renderer?.renderer.view.tintColor = self.dynamicColor
+        }
+    }
+    
+    
+    public var forceSynchronous = false
+    
+    private let lottieSettings: LottieRenderingSettings
+
+    public init(useMetalCache: Bool = false, lottieSettings: LottieRenderingSettings) {
         self.queue = sharedQueue
         self.eventsNode = AnimatedStickerNodeDisplayEvents()
         
         self.useMetalCache = useMetalCache
+        self.lottieSettings = lottieSettings
         
         super.init()
         
@@ -236,22 +299,28 @@ public final class AnimatedStickerNode: ASDisplayNode {
         if #available(iOS 10.0, *) {
             return CompressedAnimationRenderer()
         } else {
-            return SoftwareAnimationRenderer()
+            return SoftwareAnimationRenderer(templateImageSupport: true)
         }
     })
     
     private static let softwareRendererPool = AnimationRendererPool(generate: {
-        return SoftwareAnimationRenderer()
+        return SoftwareAnimationRenderer(templateImageSupport: true)
     })
     
-    private weak var nodeToCopyFrameFrom: AnimatedStickerNode?
+    private weak var nodeToCopyFrameFrom: DefaultAnimatedStickerNodeImpl?
     override public func didLoad() {
         super.didLoad()
         
         if #available(iOS 10.0, *), (self.useMetalCache/* || "".isEmpty*/) {
-            self.renderer = AnimatedStickerNode.hardwareRendererPool.take()
+            self.renderer = DefaultAnimatedStickerNodeImpl.hardwareRendererPool.take()
         } else {
-            self.renderer = AnimatedStickerNode.softwareRendererPool.take()
+            self.renderer = DefaultAnimatedStickerNodeImpl.softwareRendererPool.take()
+            
+            if let renderer = self.renderer?.renderer as? SoftwareAnimationRenderer {
+                renderer.renderAsTemplateImage = self.dynamicColor != nil
+            }
+            self.renderer?.renderer.view.tintColor = self.dynamicColor
+            
             if let contents = self.nodeToCopyFrameFrom?.renderer?.renderer.contents {
                 self.renderer?.renderer.contents = contents
             }
@@ -266,7 +335,12 @@ public final class AnimatedStickerNode: ASDisplayNode {
     }
     
     public func cloneCurrentFrame(from otherNode: AnimatedStickerNode?) {
-        if let renderer = self.renderer?.renderer as? SoftwareAnimationRenderer, let otherRenderer = otherNode?.renderer?.renderer as? SoftwareAnimationRenderer {
+        guard let otherNode = otherNode as? DefaultAnimatedStickerNodeImpl else {
+            self.nodeToCopyFrameFrom = nil
+            return
+        }
+
+        if let renderer = self.renderer?.renderer as? SoftwareAnimationRenderer, let otherRenderer = otherNode.renderer?.renderer as? SoftwareAnimationRenderer {
             if let contents = otherRenderer.contents {
                 renderer.contents = contents
             }
@@ -289,7 +363,7 @@ public final class AnimatedStickerNode: ASDisplayNode {
                 if let directData = try? Data(contentsOf: URL(fileURLWithPath: path), options: [.mappedRead]) {
                     strongSelf.directData = (directData, path, width, height, cachePathPrefix, source.fitzModifier, source.isVideo)
                 }
-                if case let .still(position) = playbackMode {
+                if case let .still(position) = strongSelf.playbackMode {
                     strongSelf.seekTo(position)
                 } else if strongSelf.isPlaying || strongSelf.autoplay {
                     if strongSelf.autoplay {
@@ -303,13 +377,14 @@ public final class AnimatedStickerNode: ASDisplayNode {
                     strongSelf.play(firstFrame: true)
                 }
             }
-            self.disposable.set((source.directDataPath()
-            |> deliverOnMainQueue).start(next: { path in
-                f(path)
+            self.disposable.set((source.directDataPath(attemptSynchronously: self.forceSynchronous)
+            |> filter { $0 != nil }
+            |> deliverOnMainQueue).startStrict(next: { path in
+                f(path!)
             }))
         case .cached:
             self.disposable.set((source.cachedDataPath(width: width, height: height)
-            |> deliverOnMainQueue).start(next: { [weak self] path, complete in
+            |> deliverOnMainQueue).startStrict(next: { [weak self] path, complete in
                 guard let strongSelf = self else {
                     return
                 }
@@ -345,7 +420,7 @@ public final class AnimatedStickerNode: ASDisplayNode {
     
     private func updateIsPlaying() {
         if !self.autoplay {
-            let isPlaying = self.visibility && self.isDisplaying
+            let isPlaying = self.visibility && (self.isDisplaying || self.overrideVisibility)
             if self.isPlaying != isPlaying {
                 self.isPlaying = isPlaying
                 if isPlaying {
@@ -373,6 +448,16 @@ public final class AnimatedStickerNode: ASDisplayNode {
     }
     
     private var isSetUpForPlayback = false
+    
+    public func playOnce() {
+        self.playbackMode = .once
+        self.play()
+    }
+    
+    public func playLoop() {
+        self.playbackMode = .loop
+        self.play()
+    }
         
     public func play(firstFrame: Bool = false, fromIndex: Int? = nil) {
         if !firstFrame {
@@ -393,6 +478,7 @@ public final class AnimatedStickerNode: ASDisplayNode {
             let timerHolder = self.timer
             let frameSourceHolder = self.frameSource
             let useMetalCache = self.useMetalCache
+            let lottieSettings = self.lottieSettings
             self.queue.async { [weak self] in
                 var maybeFrameSource: AnimatedStickerFrameSource? = frameSourceHolder.with { $0 }?.syncWith { $0 }.value
                 if maybeFrameSource == nil {
@@ -401,7 +487,7 @@ public final class AnimatedStickerNode: ASDisplayNode {
                         if directData.6 {
                             maybeFrameSource = VideoStickerDirectFrameSource(queue: queue, path: directData.1, width: directData.2, height: directData.3, cachePathPrefix: directData.4)
                         } else {
-                            maybeFrameSource = AnimatedStickerDirectFrameSource(queue: queue, data: directData.0, width: directData.2, height: directData.3, cachePathPrefix: directData.4, useMetalCache: useMetalCache, fitzModifier: directData.5)
+                            maybeFrameSource = AnimatedStickerDirectFrameSource(queue: queue, data: directData.0, width: directData.2, height: directData.3, cachePathPrefix: directData.4, useMetalCache: useMetalCache, fitzModifier: directData.5, lottieSettings: lottieSettings)
                         }
                     } else if let (cachedData, cachedDataComplete, _) = cachedData {
                         if #available(iOS 9.0, *) {
@@ -430,7 +516,7 @@ public final class AnimatedStickerNode: ASDisplayNode {
                 let duration: Double = frameSource.frameRate > 0 ? Double(frameSource.frameCount) / Double(frameSource.frameRate) : 0
                 let frameRate = frameSource.frameRate
                 
-                let timer = SwiftSignalKit.Timer(timeout: 1.0 / Double(frameRate), repeat: !firstFrame, completion: {
+                let timerEvent: () -> Void = {
                     let frame = frameQueue.syncWith { frameQueue in
                         return frameQueue.take(draw: true)
                     }
@@ -448,10 +534,17 @@ public final class AnimatedStickerNode: ASDisplayNode {
                                     strongSelf.reportedStarted = true
                                     strongSelf.started()
                                 }
+                            }, averageColor: strongSelf.frameColorUpdated == nil ? nil : { color in
+                                guard let strongSelf = self else {
+                                    return
+                                }
+                                strongSelf.frameColorUpdated?(color)
                             })
                             
                             strongSelf.frameUpdated(frame.index, frame.totalFrames)
                             strongSelf.currentFrameIndex = frame.index
+                            strongSelf.currentFrameCount = frame.totalFrames
+                            strongSelf.currentFrameRate = frameRate
                             
                             if frame.isLastFrame {
                                 var stopped = false
@@ -484,8 +577,13 @@ public final class AnimatedStickerNode: ASDisplayNode {
                     frameQueue.with { frameQueue in
                         frameQueue.generateFramesIfNeeded()
                     }
+                }
+                
+                let timer = SwiftSignalKit.Timer(timeout: 1.0 / Double(frameRate), repeat: !firstFrame, completion: {
+                    timerEvent()
                 }, queue: queue)
                 let _ = timerHolder.swap(timer)
+                timerEvent()
                 timer.start()
             }
         } else {
@@ -499,6 +597,7 @@ public final class AnimatedStickerNode: ASDisplayNode {
             let timerHolder = self.timer
             let frameSourceHolder = self.frameSource
             let useMetalCache = self.useMetalCache
+            let lottieSettings = self.lottieSettings
             self.queue.async { [weak self] in
                 var maybeFrameSource: AnimatedStickerFrameSource?
                 let notifyUpdated: (() -> Void)? = nil
@@ -506,7 +605,7 @@ public final class AnimatedStickerNode: ASDisplayNode {
                     if directData.6 {
                         maybeFrameSource = VideoStickerDirectFrameSource(queue: queue, path: directData.1, width: directData.2, height: directData.3, cachePathPrefix: directData.4)
                     } else {
-                        maybeFrameSource = AnimatedStickerDirectFrameSource(queue: queue, data: directData.0, width: directData.2, height: directData.3, cachePathPrefix: directData.4, useMetalCache: useMetalCache, fitzModifier: directData.5)
+                        maybeFrameSource = AnimatedStickerDirectFrameSource(queue: queue, data: directData.0, width: directData.2, height: directData.3, cachePathPrefix: directData.4, useMetalCache: useMetalCache, fitzModifier: directData.5, lottieSettings: lottieSettings)
                     }
                 } else if let (cachedData, cachedDataComplete, _) = cachedData {
                     if #available(iOS 9.0, *) {
@@ -552,10 +651,17 @@ public final class AnimatedStickerNode: ASDisplayNode {
                                     strongSelf.reportedStarted = true
                                     strongSelf.started()
                                 }
+                            }, averageColor: strongSelf.frameColorUpdated == nil ? nil : { color in
+                                guard let strongSelf = self else {
+                                    return
+                                }
+                                strongSelf.frameColorUpdated?(color)
                             })
                             
                             strongSelf.frameUpdated(frame.index, frame.totalFrames)
                             strongSelf.currentFrameIndex = frame.index
+                            strongSelf.currentFrameCount = frame.totalFrames
+                            strongSelf.currentFrameRate = frameRate
                             
                             if frame.isLastFrame {
                                 var stopped = false
@@ -617,7 +723,9 @@ public final class AnimatedStickerNode: ASDisplayNode {
         let frameSourceHolder = self.frameSource
         let timerHolder = self.timer
         let useMetalCache = self.useMetalCache
-        self.queue.async { [weak self] in
+        let lottieSettings = self.lottieSettings
+        
+        let action = { [weak self] in
             var maybeFrameSource: AnimatedStickerFrameSource? = frameSourceHolder.with { $0 }?.syncWith { $0 }.value
             if case .timestamp = position {
             } else {
@@ -625,7 +733,7 @@ public final class AnimatedStickerNode: ASDisplayNode {
                     if directData.6 {
                         maybeFrameSource = VideoStickerDirectFrameSource(queue: queue, path: directData.1, width: directData.2, height: directData.3, cachePathPrefix: directData.4)
                     } else {
-                        maybeFrameSource = AnimatedStickerDirectFrameSource(queue: queue, data: directData.0, width: directData.2, height: directData.3, cachePathPrefix: directData.4, useMetalCache: useMetalCache, fitzModifier: directData.5)
+                        maybeFrameSource = AnimatedStickerDirectFrameSource(queue: queue, data: directData.0, width: directData.2, height: directData.3, cachePathPrefix: directData.4, useMetalCache: useMetalCache, fitzModifier: directData.5, lottieSettings: lottieSettings)
                     }
                     if case .end = position {
                         maybeFrameSource?.skipToEnd()
@@ -705,6 +813,11 @@ public final class AnimatedStickerNode: ASDisplayNode {
                             strongSelf.reportedStarted = true
                             strongSelf.started()
                         }
+                    }, averageColor: strongSelf.frameColorUpdated == nil ? nil : { color in
+                        guard let strongSelf = self else {
+                            return
+                        }
+                        strongSelf.frameColorUpdated?(color)
                     })
 
                     strongSelf.playbackStatus.set(.single(AnimatedStickerStatus(playing: false, duration: duration, timestamp: 0.0)))
@@ -713,6 +826,11 @@ public final class AnimatedStickerNode: ASDisplayNode {
             frameQueue.with { frameQueue in
                 frameQueue.generateFramesIfNeeded()
             }
+        }
+        if self.forceSynchronous {
+            action()
+        } else {
+            self.queue.async(action)
         }
     }
     

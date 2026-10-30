@@ -20,7 +20,15 @@ swift_library(
         "//submodules/Postbox:Postbox",
         "//submodules/TelegramCore:TelegramCore",
         "//submodules/MusicAlbumArtResources:MusicAlbumArtResources",
-        "//submodules/MeshAnimationCache:MeshAnimationCache"
+        "//submodules/Utils/RangeSet:RangeSet",
+        "//submodules/InAppPurchaseManager:InAppPurchaseManager",
+        "//submodules/TextFormat:TextFormat",
+        "//submodules/TelegramUI/Components/AnimationCache:AnimationCache",
+        "//submodules/TelegramUI/Components/MultiAnimationRenderer:MultiAnimationRenderer",
+        "//submodules/WalletContext",
+        "//submodules/LottieSettings:LottieSettings",
+        "//submodules/TelegramCore/FlatBuffers",
+        "//submodules/TelegramCore/FlatSerialization",
     ],
     visibility = [
         "//visibility:public",

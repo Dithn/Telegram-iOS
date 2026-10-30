@@ -89,7 +89,7 @@ extension CGSize {
 }
 
 private let springAnimationIn: CABasicAnimation = {
-    let animation = makeSpringAnimation("")
+    let animation = makeSpringAnimation("", duration: 0.5)
     return animation
 }()
 
@@ -117,6 +117,10 @@ public let listViewAnimationCurveEaseInOut: (CGFloat) -> CGFloat = { t in
     return bezierPoint(0.42, 0.0, 0.58, 1.0, t)
 }
 
+public let listViewAnimationCurveEaseIn: (CGFloat) -> CGFloat = { t in
+    return bezierPoint(0.42, 0.0, 1.0, 1.0, t)
+}
+
 #if os(iOS)
 public func listViewAnimationCurveFromAnimationOptions(animationOptions: UIView.AnimationOptions) -> (CGFloat) -> CGFloat {
     if animationOptions.rawValue == UInt(7 << 16) {
@@ -129,18 +133,20 @@ public func listViewAnimationCurveFromAnimationOptions(animationOptions: UIView.
 
 public final class ListViewAnimation {
     let from: Interpolatable
-    let to: Interpolatable
+    public let to: Interpolatable
     let duration: Double
     let startTime: Double
+    let invertOffsetDirection: Bool
     private let curve: (CGFloat) -> CGFloat
     private let interpolator: (Interpolatable, Interpolatable, CGFloat) -> Interpolatable
     private let update: (CGFloat, Interpolatable) -> Void
     private let completed: (Bool) -> Void
     
-    public init<T: Interpolatable>(from: T, to: T, duration: Double, curve: @escaping (CGFloat) -> CGFloat, beginAt: Double, update: @escaping (CGFloat, T) -> Void, completed: @escaping (Bool) -> Void = { _ in }) {
+    public init<T: Interpolatable>(from: T, to: T, duration: Double, invertOffsetDirection: Bool = false, curve: @escaping (CGFloat) -> CGFloat, beginAt: Double, update: @escaping (CGFloat, T) -> Void, completed: @escaping (Bool) -> Void = { _ in }) {
         self.from = from
         self.to = to
         self.duration = duration
+        self.invertOffsetDirection = invertOffsetDirection
         self.curve = curve
         self.startTime = beginAt
         self.interpolator = T.interpolator()
@@ -157,6 +163,7 @@ public final class ListViewAnimation {
         self.curve = copying.curve
         self.startTime = copying.startTime
         self.interpolator = copying.interpolator
+        self.invertOffsetDirection = copying.invertOffsetDirection
         self.update = { progress, value in
             update(progress, value as! T)
         }
@@ -212,10 +219,19 @@ public func listViewAnimationDurationAndCurve(transition: ContainedViewLayoutTra
                 return (animationDuration, .Default(duration: animationDuration))
             case .easeInOut:
                 return (animationDuration, .Default(duration: animationDuration))
-            case .spring, .customSpring:
+            case .easeIn:
+                return (animationDuration, .Default(duration: animationDuration))
+            case .spring:
                 return (animationDuration, .Spring(duration: animationDuration))
+            case let .customSpring(mass, stiffness, damping, initialVelocity):
+                return (animationDuration, .CustomSpring(duration: animationDuration, mass: mass, stiffness: stiffness, damping: damping, initialVelocity: initialVelocity))
             case let .custom(c1x, c1y, c2x, c2y):
                 return (animationDuration, .Custom(duration: animationDuration, c1x, c1y, c2x, c2y))
             }
     }
+}
+
+public func scrollingRubberBandingOffset(offset: CGFloat, bandingStart: CGFloat, range: CGFloat, coefficient: CGFloat = 0.4) -> CGFloat {
+    let bandedOffset = offset - bandingStart
+    return bandingStart + (1.0 - (1.0 / ((bandedOffset * coefficient / range) + 1.0))) * range
 }

@@ -2,7 +2,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 
@@ -23,7 +23,7 @@ public struct TelegramPeerPhoto {
     }
 }
 
-func _internal_requestPeerPhotos(postbox: Postbox, network: Network, peerId: PeerId) -> Signal<[TelegramPeerPhoto], NoError> {
+func _internal_requestPeerPhotos(accountPeerId: PeerId, postbox: Postbox, network: Network, peerId: PeerId) -> Signal<[TelegramPeerPhoto], NoError> {
     return postbox.transaction{ transaction -> Peer? in
         return transaction.getPeer(peerId)
     }
@@ -40,10 +40,12 @@ func _internal_requestPeerPhotos(postbox: Postbox, network: Network, peerId: Pee
                     let totalCount:Int
                     let photos: [Api.Photo]
                     switch result {
-                        case let .photos(photosValue, _):
+                        case let .photos(photosData):
+                            let (photosValue, _) = (photosData.photos, photosData.users)
                             photos = photosValue
                             totalCount = photos.count
-                        case let .photosSlice(count, photosValue, _):
+                        case let .photosSlice(photosSliceData):
+                            let (count, photosValue, _) = (photosSliceData.count, photosSliceData.photos, photosSliceData.users)
                             photos = photosValue
                             totalCount = Int(count)
                     }
@@ -53,7 +55,8 @@ func _internal_requestPeerPhotos(postbox: Postbox, network: Network, peerId: Pee
                         if let image = telegramMediaImageFromApiPhoto(photos[i]), let reference = image.reference {
                             var date: Int32 = 0
                             switch photos[i] {
-                                case let .photo(_, _, _, _, apiDate, _, _, _):
+                                case let .photo(photoData):
+                                    let apiDate = photoData.date
                                     date = apiDate
                                 case .photoEmpty:
                                     break
@@ -68,7 +71,7 @@ func _internal_requestPeerPhotos(postbox: Postbox, network: Network, peerId: Pee
                 }
             }
         } else if let peer = peer, let inputPeer = apiInputPeer(peer) {
-            return network.request(Api.functions.messages.search(flags: 0, peer: inputPeer, q: "", fromId: nil, topMsgId: nil, filter: .inputMessagesFilterChatPhotos, minDate: 0, maxDate: 0, offsetId: 0, addOffset: 0, limit: 1000, maxId: 0, minId: 0, hash: 0))
+            return network.request(Api.functions.messages.search(flags: 0, peer: inputPeer, q: "", fromId: nil, savedPeerId: nil, savedReaction: nil, topMsgId: nil, filter: .inputMessagesFilterChatPhotos, minDate: 0, maxDate: 0, offsetId: 0, addOffset: 0, limit: 1000, maxId: 0, minId: 0, hash: 0))
             |> map(Optional.init)
             |> `catch` { _ -> Signal<Api.messages.Messages?, NoError> in
                 return .single(nil)
@@ -79,15 +82,18 @@ func _internal_requestPeerPhotos(postbox: Postbox, network: Network, peerId: Pee
                     let chats: [Api.Chat]
                     let users: [Api.User]
                     switch result {
-                        case let .channelMessages(_, _, _, _, apiMessages, apiChats, apiUsers):
+                        case let .channelMessages(channelMessagesData):
+                            let (apiMessages, apiChats, apiUsers) = (channelMessagesData.messages, channelMessagesData.chats, channelMessagesData.users)
                             messages = apiMessages
                             chats = apiChats
                             users = apiUsers
-                        case let .messages(apiMessages, apiChats, apiUsers):
+                        case let .messages(messagesData):
+                            let (apiMessages, apiChats, apiUsers) = (messagesData.messages, messagesData.chats, messagesData.users)
                             messages = apiMessages
                             chats = apiChats
                             users = apiUsers
-                        case let .messagesSlice(_, _, _, _, apiMessages, apiChats, apiUsers):
+                        case let .messagesSlice(messagesSliceData):
+                            let (apiMessages, apiChats, apiUsers) = (messagesSliceData.messages, messagesSliceData.chats, messagesSliceData.users)
                             messages = apiMessages
                             chats = apiChats
                             users = apiUsers
@@ -114,7 +120,7 @@ func _internal_requestPeerPhotos(postbox: Postbox, network: Network, peerId: Pee
                         
                         var renderedMessages: [Message] = []
                         for message in messages {
-                            if let message = StoreMessage(apiMessage: message), let renderedMessage = locallyRenderedMessage(message: message, peers: peers) {
+                            if let message = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: peer.isForumOrMonoForum), let renderedMessage = locallyRenderedMessage(message: message, peers: peers) {
                                 renderedMessages.append(renderedMessage)
                             }
                         }

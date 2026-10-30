@@ -1,10 +1,11 @@
 import Foundation
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import SwiftSignalKit
 
 
 public func loadedPeerFromMessage(account: Account, peerId: PeerId, messageId: MessageId) -> Signal<Peer?, NoError> {
+    let accountPeerId = account.peerId
     return account.postbox.transaction { transaction -> Signal<Peer?, NoError> in
         if let peer = transaction.getPeer(peerId) {
             if let user = peer as? TelegramUser {
@@ -13,13 +14,13 @@ public func loadedPeerFromMessage(account: Account, peerId: PeerId, messageId: M
                 } else {
                     let messageSignal: Signal<Api.messages.Messages?, NoError>?
                     if messageId.peerId.namespace == Namespaces.Peer.CloudUser || messageId.peerId.namespace == Namespaces.Peer.CloudGroup {
-                        messageSignal = account.network.request(Api.functions.messages.getMessages(id: [Api.InputMessage.inputMessageID(id: messageId.id)]))
+                        messageSignal = account.network.request(Api.functions.messages.getMessages(id: [Api.InputMessage.inputMessageID(.init(id: messageId.id))]))
                             |> map(Optional.init)
                             |> `catch` { _ -> Signal<Api.messages.Messages?, NoError> in
                                 return .single(nil)
                             }
                     } else if messageId.peerId.namespace == Namespaces.Peer.CloudChannel, let channelPeer = transaction.getPeer(messageId.peerId), let inputChannel = apiInputChannel(channelPeer) {
-                        messageSignal = account.network.request(Api.functions.channels.getMessages(channel: inputChannel, id: [Api.InputMessage.inputMessageID(id: messageId.id)]))
+                        messageSignal = account.network.request(Api.functions.channels.getMessages(channel: inputChannel, id: [Api.InputMessage.inputMessageID(.init(id: messageId.id))]))
                             |> map(Optional.init)
                             |> `catch` { _ -> Signal<Api.messages.Messages?, NoError> in
                                 return .single(nil)
@@ -34,29 +35,24 @@ public func loadedPeerFromMessage(account: Account, peerId: PeerId, messageId: M
                                 if let result = result {
                                     let apiUsers: [Api.User]
                                     switch result {
-                                        case let .messages(_, _, users):
-                                            apiUsers = users
-                                        case let .messagesSlice(_, _, _, _, _, _, users):
-                                            apiUsers = users
-                                        case let .channelMessages(_, _, _, _, _, _, users):
-                                            apiUsers = users
-                                        case .messagesNotModified:
-                                            apiUsers = []
+                                    case let .messages(messagesData):
+                                        let users = messagesData.users
+                                        apiUsers = users
+                                    case let .messagesSlice(messagesSliceData):
+                                        let users = messagesSliceData.users
+                                        apiUsers = users
+                                    case let .channelMessages(channelMessagesData):
+                                        let users = channelMessagesData.users
+                                        apiUsers = users
+                                    case .messagesNotModified:
+                                        apiUsers = []
                                     }
                                     
-                                    for user in apiUsers {
-                                        let telegramUser = TelegramUser(user: user)
-                                        if telegramUser.id == peerId, let accessHash =  telegramUser.accessHash, accessHash.value != 0 {
-                                            if let presence = TelegramUserPresence(apiUser: user) {
-                                                updatePeerPresences(transaction: transaction, accountPeerId: account.peerId, peerPresences: [telegramUser.id: presence])
-                                            }
-                                            
-                                            updatePeers(transaction: transaction, peers: [telegramUser], update: { _, updated -> Peer in
-                                                return updated
-                                            })
-                                            
-                                            return telegramUser
-                                        }
+                                    let parsedPeers = AccumulatedPeers(users: apiUsers)
+                                    updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: parsedPeers)
+                                    
+                                    if let peer = transaction.getPeer(peerId) {
+                                        return peer
                                     }
                                 }
                                 return nil

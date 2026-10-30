@@ -1,9 +1,11 @@
 import Foundation
+import LottieSettings
 import UIKit
 import AppBundle
 import AsyncDisplayKit
 import Display
-import SolidRoundedButtonNode
+import ComponentFlow
+import ButtonComponent
 import SwiftSignalKit
 import OverlayStatusController
 import AccountContext
@@ -35,7 +37,7 @@ public enum TwoFactorDataInputMode {
         case authorized
     }
 
-    case password(doneText: String)
+    case password(phoneNumber: String?, doneText: String)
     case passwordRecoveryEmail(emailPattern: String, mode: PasswordRecoveryEmailMode, doneText: String)
     case passwordRecovery(recovery: Recovery, doneText: String)
     case emailAddress(password: String, hint: String, doneText: String)
@@ -70,10 +72,9 @@ public final class TwoFactorDataInputScreen: ViewController {
         
         self.presentationData = self.sharedContext.currentPresentationData.with { $0 }
         
-        let defaultTheme = NavigationBarTheme(rootControllerTheme: self.presentationData.theme)
-        let navigationBarTheme = NavigationBarTheme(buttonColor: defaultTheme.buttonColor, disabledButtonColor: defaultTheme.disabledButtonColor, primaryTextColor: defaultTheme.primaryTextColor, backgroundColor: .clear, enableBackgroundBlur: false, separatorColor: .clear, badgeBackgroundColor: defaultTheme.badgeBackgroundColor, badgeStrokeColor: defaultTheme.badgeStrokeColor, badgeTextColor: defaultTheme.badgeTextColor)
+        let navigationBarTheme = NavigationBarTheme(rootControllerTheme: self.presentationData.theme, edgeEffectColor: .clear)
         
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: navigationBarTheme, strings: NavigationBarStrings(back: self.presentationData.strings.Common_Back, close: self.presentationData.strings.Common_Close)))
+        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: navigationBarTheme, strings: NavigationBarStrings(back: self.presentationData.strings.Common_Back, close: self.presentationData.strings.Common_Close, more: self.presentationData.strings.Common_More)))
         
         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
         self.navigationPresentation = presentation
@@ -99,8 +100,11 @@ public final class TwoFactorDataInputScreen: ViewController {
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         
-        if case .rememberPassword = self.mode {
+        switch self.mode {
+        case .rememberPassword, .password, .passwordHint, .emailAddress:
             (self.displayNode as? TwoFactorDataInputScreenNode)?.focus()
+        default:
+            break
         }
     }
     
@@ -110,13 +114,13 @@ public final class TwoFactorDataInputScreen: ViewController {
                 return
             }
             switch strongSelf.mode {
-            case let .password(doneText):
+            case let .password(_, doneText):
                 let values = (strongSelf.displayNode as! TwoFactorDataInputScreenNode).inputText
                 if values.count != 2 {
                     return
                 }
                 if values[0] != values[1] {
-                    strongSelf.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: strongSelf.presentationData), title: nil, text: strongSelf.presentationData.strings.TwoStepAuth_SetupPasswordConfirmFailed, actions: [
+                    strongSelf.present(textAlertController(sharedContext: strongSelf.sharedContext, title: nil, text: strongSelf.presentationData.strings.TwoStepAuth_SetupPasswordConfirmFailed, actions: [
                         TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_OK, action: {})
                     ]), in: .window(.root))
                     return
@@ -164,7 +168,7 @@ public final class TwoFactorDataInputScreen: ViewController {
                         text = strongSelf.presentationData.strings.Login_UnknownError
                     }
 
-                    strongSelf.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: strongSelf.presentationData), title: nil, text: text, actions: [TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_OK, action: {})]), in: .window(.root))
+                    strongSelf.present(textAlertController(sharedContext: strongSelf.sharedContext, title: nil, text: text, actions: [TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_OK, action: {})]), in: .window(.root))
                 }, completed: { [weak statusController] in
                     statusController?.dismiss()
 
@@ -193,7 +197,7 @@ public final class TwoFactorDataInputScreen: ViewController {
                     return
                 }
                 if values[0] != values[1] {
-                    strongSelf.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: strongSelf.presentationData), title: nil, text: strongSelf.presentationData.strings.TwoStepAuth_SetupPasswordConfirmFailed, actions: [
+                    strongSelf.present(textAlertController(sharedContext: strongSelf.sharedContext, title: nil, text: strongSelf.presentationData.strings.TwoStepAuth_SetupPasswordConfirmFailed, actions: [
                         TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_OK, action: {})
                     ]), in: .window(.root))
                     return
@@ -207,6 +211,7 @@ public final class TwoFactorDataInputScreen: ViewController {
                 navigationController.replaceController(strongSelf, with: TwoFactorDataInputScreen(sharedContext: strongSelf.sharedContext, engine: strongSelf.engine, mode: .passwordHint(recovery: recovery, password: values[0], doneText: doneText), stateUpdated: strongSelf.stateUpdated, presentation: strongSelf.navigationPresentation), animated: true)
             case let .emailAddress(password, hint, doneText):
                 guard let text = (strongSelf.displayNode as! TwoFactorDataInputScreenNode).inputText.first, !text.isEmpty else {
+                    (strongSelf.displayNode as? TwoFactorDataInputScreenNode)?.onAction(success: false)
                     return
                 }
                 let statusController = OverlayStatusController(theme: strongSelf.presentationData.theme, type: .loading(cancelled: nil))
@@ -477,7 +482,7 @@ public final class TwoFactorDataInputScreen: ViewController {
             }
             switch strongSelf.mode {
             case let .emailAddress(password, hint, doneText):
-                strongSelf.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: strongSelf.presentationData), title: strongSelf.presentationData.strings.TwoFactorSetup_Email_SkipConfirmationTitle, text: strongSelf.presentationData.strings.TwoFactorSetup_Email_SkipConfirmationText, actions: [
+                strongSelf.present(textAlertController(sharedContext: strongSelf.sharedContext, title: strongSelf.presentationData.strings.TwoFactorSetup_Email_SkipConfirmationTitle, text: strongSelf.presentationData.strings.TwoFactorSetup_Email_SkipConfirmationText, actions: [
                     TextAlertAction(type: .destructiveAction, title: strongSelf.presentationData.strings.TwoFactorSetup_Email_SkipConfirmationSkip, action: {
                         guard let strongSelf = self else {
                             return
@@ -530,7 +535,7 @@ public final class TwoFactorDataInputScreen: ViewController {
                             strongSelf.present(textAlertController(sharedContext: strongSelf.sharedContext, title: nil, text: alertText, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), in: .window(.root))
                         })
                     }),
-                    TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_Cancel, action: {})
+                    TextAlertAction(type: .genericAction, title: strongSelf.presentationData.strings.Common_Cancel, action: {})
                 ]), in: .window(.root))
             case let .passwordHint(recovery, password, doneText):
                 if let recovery = recovery {
@@ -539,14 +544,14 @@ public final class TwoFactorDataInputScreen: ViewController {
                     strongSelf.push(TwoFactorDataInputScreen(sharedContext: strongSelf.sharedContext, engine: strongSelf.engine, mode: .emailAddress(password: password, hint: "", doneText: doneText), stateUpdated: strongSelf.stateUpdated, presentation: strongSelf.navigationPresentation))
                 }
             case let .passwordRecovery(recovery, _):
-                strongSelf.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: strongSelf.presentationData), title: strongSelf.presentationData.strings.TwoFactorSetup_PasswordRecovery_SkipAlertTitle, text: strongSelf.presentationData.strings.TwoFactorSetup_PasswordRecovery_SkipAlertText, actions: [
+                strongSelf.present(textAlertController(sharedContext: strongSelf.sharedContext, title: strongSelf.presentationData.strings.TwoFactorSetup_PasswordRecovery_SkipAlertTitle, text: strongSelf.presentationData.strings.TwoFactorSetup_PasswordRecovery_SkipAlertText, actions: [
                     TextAlertAction(type: .destructiveAction, title: strongSelf.presentationData.strings.TwoFactorSetup_PasswordRecovery_SkipAlertAction, action: {
                         guard let strongSelf = self else {
                             return
                         }
                         strongSelf.performRecovery(recovery: recovery, password: "", hint: "")
                     }),
-                    TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_Cancel, action: {})
+                    TextAlertAction(type: .genericAction, title: strongSelf.presentationData.strings.Common_Cancel, action: {})
                 ]), in: .window(.root))
             case let .rememberPassword(doneText):
                 guard case let .authorized(engine) = strongSelf.engine else {
@@ -924,7 +929,7 @@ public final class TwoFactorDataInputScreen: ViewController {
 }
 
 private enum TwoFactorDataInputTextNodeType {
-    case password(confirmation: Bool)
+    case password(phoneNumber: String?, confirmation: Bool)
     case email
     case code
     case hint
@@ -984,6 +989,7 @@ private final class TwoFactorDataInputTextNode: ASDisplayNode, UITextFieldDelega
     private let toggleTextHidden: (TwoFactorDataInputTextNode) -> Void
     
     private let backgroundNode: ASImageNode
+    private var shadowInputNode: TextFieldNode?
     private let inputNode: TextFieldNode
     private let hideButtonNode: HighlightableButtonNode
     private let clearButtonNode: HighlightableButtonNode
@@ -1016,7 +1022,7 @@ private final class TwoFactorDataInputTextNode: ASDisplayNode, UITextFieldDelega
                 UIView.transition(with: self.view, duration: 0.2, options: [.transitionCrossDissolve, .curveEaseInOut]) {
                     self.inputNode.textField.textColor = self.isFailed ? self.theme.list.itemDestructiveColor : self.theme.list.freePlainInputField.primaryColor
                     self.hideButtonNode.setImage(generateTextHiddenImage(color: self.isFailed ? self.theme.list.itemDestructiveColor : self.theme.list.freePlainInputField.controlColor, on: !self.inputNode.textField.isSecureTextEntry), for: [])
-                    self.backgroundNode.image = self.isFailed ? generateStretchableFilledCircleImage(diameter: 20.0, color: self.theme.list.itemDestructiveColor.withAlphaComponent(0.1)) : generateStretchableFilledCircleImage(diameter: 20.0, color: self.theme.list.freePlainInputField.backgroundColor)
+                    self.backgroundNode.image = self.isFailed ? generateStretchableFilledCircleImage(diameter: 52.0, color: self.theme.list.itemDestructiveColor.withAlphaComponent(0.1)) : generateStretchableFilledCircleImage(diameter: 52.0, color: self.theme.list.freePlainInputField.backgroundColor)
                 } completion: { _ in
                     
                 }
@@ -1058,7 +1064,7 @@ private final class TwoFactorDataInputTextNode: ASDisplayNode, UITextFieldDelega
         self.backgroundNode = ASImageNode()
         self.backgroundNode.displaysAsynchronously = false
         self.backgroundNode.displayWithoutProcessing = true
-        self.backgroundNode.image = generateStretchableFilledCircleImage(diameter: 20.0, color: theme.list.freePlainInputField.backgroundColor)
+        self.backgroundNode.image = generateStretchableFilledCircleImage(diameter: 52.0, color: theme.list.freePlainInputField.backgroundColor)
         
         self.inputNode = TextFieldNode()
         self.inputNode.textField.font = Font.regular(17.0)
@@ -1068,7 +1074,7 @@ private final class TwoFactorDataInputTextNode: ASDisplayNode, UITextFieldDelega
         self.hideButtonNode = HighlightableButtonNode()
         
         switch mode {
-        case let .password(confirmation):
+        case let .password(phoneNumber, confirmation):
             self.inputNode.textField.keyboardType = .default
             self.inputNode.textField.isSecureTextEntry = true
             if confirmation {
@@ -1076,29 +1082,72 @@ private final class TwoFactorDataInputTextNode: ASDisplayNode, UITextFieldDelega
             } else {
                 self.inputNode.textField.returnKeyType = .next
             }
+            if #available(iOS 12.0, *) {
+                #if DEBUG
+                if !confirmation, let phoneNumber {
+                    let shadowInputNode = TextFieldNode()
+                    shadowInputNode.textField.font = Font.regular(17.0)
+                    shadowInputNode.textField.textColor = theme.list.freePlainInputField.primaryColor
+                    shadowInputNode.textField.attributedPlaceholder = NSAttributedString(string: placeholder, font: Font.regular(17.0), textColor: theme.list.freePlainInputField.placeholderColor)
+                    self.shadowInputNode = shadowInputNode
+                    
+                    
+                    shadowInputNode.textField.textContentType = .username
+                    shadowInputNode.textField.text = phoneNumber
+                }
+                #endif
+                
+                #if DEBUG
+                self.inputNode.textField.textContentType = .newPassword
+                self.inputNode.textField.passwordRules = UITextInputPasswordRules(descriptor: "minlength: 8;")
+                #endif
+            }
             self.hideButtonNode.isHidden = confirmation
         case .email:
             self.inputNode.textField.keyboardType = .emailAddress
-            self.inputNode.textField.returnKeyType = .done
+            self.inputNode.textField.returnKeyType = .next
             self.hideButtonNode.isHidden = true
+            
+            if #available(iOS 12.0, *) {
+                self.inputNode.textField.textContentType = .emailAddress
+            }
+            
+            self.inputNode.textField.autocorrectionType = .no
+            self.inputNode.textField.autocapitalizationType = .none
+            self.inputNode.textField.spellCheckingType = .no
+            if #available(iOS 11.0, *) {
+                self.inputNode.textField.smartQuotesType = .no
+                self.inputNode.textField.smartDashesType = .no
+                self.inputNode.textField.smartInsertDeleteType = .no
+            }
         case .code:
             self.inputNode.textField.keyboardType = .numberPad
             self.inputNode.textField.returnKeyType = .done
             self.hideButtonNode.isHidden = true
+            
+            self.inputNode.textField.autocorrectionType = .no
+            self.inputNode.textField.autocapitalizationType = .none
+            self.inputNode.textField.spellCheckingType = .no
+            if #available(iOS 11.0, *) {
+                self.inputNode.textField.smartQuotesType = .no
+                self.inputNode.textField.smartDashesType = .no
+                self.inputNode.textField.smartInsertDeleteType = .no
+            }
         case .hint:
             self.inputNode.textField.keyboardType = .asciiCapable
-            self.inputNode.textField.returnKeyType = .done
+            self.inputNode.textField.returnKeyType = .next
             self.hideButtonNode.isHidden = true
+            
+            self.inputNode.textField.autocorrectionType = .no
+            self.inputNode.textField.autocapitalizationType = .none
+            self.inputNode.textField.spellCheckingType = .no
+            if #available(iOS 11.0, *) {
+                self.inputNode.textField.smartQuotesType = .no
+                self.inputNode.textField.smartDashesType = .no
+                self.inputNode.textField.smartInsertDeleteType = .no
+            }
         }
         
-        self.inputNode.textField.autocorrectionType = .no
-        self.inputNode.textField.autocapitalizationType = .none
-        self.inputNode.textField.spellCheckingType = .no
-        if #available(iOS 11.0, *) {
-            self.inputNode.textField.smartQuotesType = .no
-            self.inputNode.textField.smartDashesType = .no
-            self.inputNode.textField.smartInsertDeleteType = .no
-        }
         self.inputNode.textField.keyboardAppearance = theme.rootController.keyboardColor.keyboardAppearance
         
         self.hideButtonNode.setImage(generateTextHiddenImage(color: theme.list.freePlainInputField.controlColor, on: false), for: [])
@@ -1110,6 +1159,10 @@ private final class TwoFactorDataInputTextNode: ASDisplayNode, UITextFieldDelega
         super.init()
         
         self.addSubnode(self.backgroundNode)
+        if let shadowInputNode = self.shadowInputNode {
+            shadowInputNode.alpha = 0.001
+            self.addSubnode(shadowInputNode)
+        }
         self.addSubnode(self.inputNode)
         self.addSubnode(self.hideButtonNode)
         
@@ -1179,6 +1232,10 @@ private final class TwoFactorDataInputTextNode: ASDisplayNode, UITextFieldDelega
         let leftInset: CGFloat = 16.0
         let rightInset: CGFloat = 38.0
         
+        if let shadowInputNode = self.shadowInputNode {
+            transition.updateFrame(node: shadowInputNode, frame: CGRect(origin: CGPoint(x: leftInset, y: 0.0), size: CGSize(width: size.width - leftInset - rightInset, height: size.height)))
+        }
+        
         transition.updateFrame(node: self.backgroundNode, frame: CGRect(origin: CGPoint(), size: size))
         transition.updateFrame(node: self.inputNode, frame: CGRect(origin: CGPoint(x: leftInset, y: 0.0), size: CGSize(width: size.width - leftInset - rightInset, height: size.height)))
         transition.updateFrame(node: self.hideButtonNode, frame: CGRect(origin: CGPoint(x: size.width - rightInset - 4.0, y: 0.0), size: CGSize(width: rightInset + 4.0, height: size.height)))
@@ -1212,7 +1269,7 @@ private final class TwoFactorDataInputTextNode: ASDisplayNode, UITextFieldDelega
     }
 }
 
-private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIScrollViewDelegate {
+private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, ASScrollViewDelegate {
     private var presentationData: PresentationData
     private let mode: TwoFactorDataInputMode
     private let action: () -> Void
@@ -1234,7 +1291,10 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
     private let resendCodeActionTitleNode: ImmediateTextNode
     private let resendCodeActionButtonNode: HighlightTrackingButtonNode
     private let inputNodes: [TwoFactorDataInputTextNode]
-    private let buttonNode: SolidRoundedButtonNode
+    private let button = ComponentView<Empty>()
+    private let buttonText: String
+    private var buttonIsHidden = false
+    private var buttonAlpha: CGFloat = 1.0
     
     private var validLayout: (ContainerViewLayout, CGFloat)?
     
@@ -1247,6 +1307,8 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
             self.inputNodes.first?.isLoading = self.isLoading
         }
     }
+    
+    private var skipIsHiddenUntilError = false
     
     init(sharedContext: SharedAccountContext, presentationData: PresentationData, mode: TwoFactorDataInputMode, action: @escaping () -> Void, skipAction: @escaping () -> Void, changeEmailAction: @escaping () -> Void, resendCodeAction: @escaping () -> Void) {
         self.presentationData = presentationData
@@ -1267,19 +1329,19 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         
         switch mode {
         case .password, .passwordRecovery, .emailAddress, .updateEmailAddress:
-            self.monkeyNode = ManagedMonkeyAnimationNode()
+            self.monkeyNode = ManagedMonkeyAnimationNode(lottieSettings: .noAccountFallback)
         case .emailConfirmation, .passwordRecoveryEmail:
-            let animatedStickerNode = AnimatedStickerNode()
+            let animatedStickerNode = DefaultAnimatedStickerNodeImpl(lottieSettings: .noAccountFallback)
             animatedStickerNode.setup(source: AnimatedStickerNodeLocalFileSource(name: "TwoFactorSetupMail"), width: 272, height: 272, playbackMode: .once, mode: .direct(cachePathPrefix: nil))
                 animatedStickerNode.visibility = true
             self.animatedStickerNode = animatedStickerNode
         case .passwordHint:
-            let animatedStickerNode = AnimatedStickerNode()
+            let animatedStickerNode = DefaultAnimatedStickerNodeImpl(lottieSettings: .noAccountFallback)
             animatedStickerNode.setup(source: AnimatedStickerNodeLocalFileSource(name: "TwoFactorSetupHint"), width: 272, height: 272, playbackMode: .once, mode: .direct(cachePathPrefix: nil))
             animatedStickerNode.visibility = true
             self.animatedStickerNode = animatedStickerNode
         case .rememberPassword:
-            let animatedStickerNode = AnimatedStickerNode()
+            let animatedStickerNode = DefaultAnimatedStickerNodeImpl(lottieSettings: .noAccountFallback)
             animatedStickerNode.setup(source: AnimatedStickerNodeLocalFileSource(name: "TwoFactorSetupRemember"), width: 272, height: 272, playbackMode: .count(3), mode: .direct(cachePathPrefix: nil))
             animatedStickerNode.visibility = true
             self.animatedStickerNode = animatedStickerNode
@@ -1299,7 +1361,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         var toggleTextHidden: ((TwoFactorDataInputTextNode) -> Void)?
         
         switch mode {
-        case .password:
+        case let .password(phoneNumber, _):
             title = presentationData.strings.TwoFactorSetup_Password_Title
             text = NSAttributedString(string: "", font: Font.regular(16.0), textColor: presentationData.theme.list.itemPrimaryTextColor)
             buttonText = presentationData.strings.TwoFactorSetup_Password_Action
@@ -1307,7 +1369,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
             changeEmailActionText = ""
             resendCodeActionText = ""
             inputNodes = [
-                TwoFactorDataInputTextNode(theme: presentationData.theme, mode: .password(confirmation: false), placeholder: presentationData.strings.TwoFactorSetup_Password_PlaceholderPassword, focusUpdated: { node, focused in
+                TwoFactorDataInputTextNode(theme: presentationData.theme, mode: .password(phoneNumber: phoneNumber, confirmation: false), placeholder: presentationData.strings.TwoFactorSetup_Password_PlaceholderPassword, focusUpdated: { node, focused in
                     focusUpdated?(node, focused)
                 }, next: { node in
                     next?(node)
@@ -1316,7 +1378,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
                 }, toggleTextHidden: { node in
                     toggleTextHidden?(node)
                 }),
-                TwoFactorDataInputTextNode(theme: presentationData.theme, mode: .password(confirmation: true), placeholder: presentationData.strings.TwoFactorSetup_Password_PlaceholderConfirmPassword, focusUpdated: { node, focused in
+                TwoFactorDataInputTextNode(theme: presentationData.theme, mode: .password(phoneNumber: phoneNumber, confirmation: true), placeholder: presentationData.strings.TwoFactorSetup_Password_PlaceholderConfirmPassword, focusUpdated: { node, focused in
                     focusUpdated?(node, focused)
                 }, next: { node in
                     next?(node)
@@ -1334,7 +1396,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
             changeEmailActionText = ""
             resendCodeActionText = ""
             inputNodes = [
-                TwoFactorDataInputTextNode(theme: presentationData.theme, mode: .password(confirmation: false), placeholder: presentationData.strings.TwoFactorSetup_PasswordRecovery_PlaceholderPassword, focusUpdated: { node, focused in
+                TwoFactorDataInputTextNode(theme: presentationData.theme, mode: .password(phoneNumber: nil, confirmation: false), placeholder: presentationData.strings.TwoFactorSetup_PasswordRecovery_PlaceholderPassword, focusUpdated: { node, focused in
                     focusUpdated?(node, focused)
                 }, next: { node in
                     next?(node)
@@ -1343,7 +1405,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
                 }, toggleTextHidden: { node in
                     toggleTextHidden?(node)
                 }),
-                TwoFactorDataInputTextNode(theme: presentationData.theme, mode: .password(confirmation: true), placeholder: presentationData.strings.TwoFactorSetup_PasswordRecovery_PlaceholderConfirmPassword, focusUpdated: { node, focused in
+                TwoFactorDataInputTextNode(theme: presentationData.theme, mode: .password(phoneNumber: nil, confirmation: true), placeholder: presentationData.strings.TwoFactorSetup_PasswordRecovery_PlaceholderConfirmPassword, focusUpdated: { node, focused in
                     focusUpdated?(node, focused)
                 }, next: { node in
                     next?(node)
@@ -1358,6 +1420,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
             text = NSAttributedString(string: presentationData.strings.TwoFactorSetup_Email_Text, font: Font.regular(16.0), textColor: presentationData.theme.list.itemPrimaryTextColor)
             buttonText = presentationData.strings.TwoFactorSetup_Email_Action
             skipActionText = presentationData.strings.TwoFactorSetup_Email_SkipAction
+            self.skipIsHiddenUntilError = true
             changeEmailActionText = ""
             resendCodeActionText = ""
             inputNodes = [
@@ -1453,7 +1516,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
             changeEmailActionText = ""
             resendCodeActionText = ""
             inputNodes = [
-                TwoFactorDataInputTextNode(theme: presentationData.theme, mode: .password(confirmation: false), placeholder: presentationData.strings.TwoFactorRemember_Placeholder, focusUpdated: { node, focused in
+                TwoFactorDataInputTextNode(theme: presentationData.theme, mode: .password(phoneNumber: nil, confirmation: false), placeholder: presentationData.strings.TwoFactorRemember_Placeholder, focusUpdated: { node, focused in
                     focusUpdated?(node, focused)
                 }, next: { node in
                     next?(node)
@@ -1483,8 +1546,8 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         self.skipActionTitleNode.displaysAsynchronously = false
         self.skipActionTitleNode.attributedText = NSAttributedString(string: skipActionText, font: Font.regular(16.0), textColor: self.presentationData.theme.list.itemAccentColor)
         self.skipActionButtonNode = HighlightTrackingButtonNode()
-        self.skipActionTitleNode.isHidden = skipActionText.isEmpty
-        self.skipActionButtonNode.isHidden = skipActionText.isEmpty
+        self.skipActionTitleNode.isHidden = skipActionText.isEmpty || self.skipIsHiddenUntilError
+        self.skipActionButtonNode.isHidden = skipActionText.isEmpty || self.skipIsHiddenUntilError
         
         self.changeEmailActionTitleNode = ImmediateTextNode()
         self.changeEmailActionTitleNode.isUserInteractionEnabled = false
@@ -1502,13 +1565,12 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         self.resendCodeActionButtonNode.isHidden = resendCodeActionText.isEmpty
         
         self.inputNodes = inputNodes
-        
-        self.buttonNode = SolidRoundedButtonNode(title: buttonText, theme: SolidRoundedButtonTheme(backgroundColor: self.presentationData.theme.list.itemCheckColors.fillColor, foregroundColor: self.presentationData.theme.list.itemCheckColors.foregroundColor), height: 50.0, cornerRadius: 10.0, gloss: false)
+        self.buttonText = buttonText
         
         super.init()
         
         if case .rememberPassword = mode {
-            self.buttonNode.alpha = 0.0
+            self.buttonAlpha = 0.0
         }
         
         self.backgroundColor = self.presentationData.theme.list.plainBackgroundColor
@@ -1525,7 +1587,6 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         self.scrollNode.addSubnode(self.changeEmailActionButtonNode)
         self.scrollNode.addSubnode(self.resendCodeActionTitleNode)
         self.scrollNode.addSubnode(self.resendCodeActionButtonNode)
-        self.scrollNode.addSubnode(self.buttonNode)
         
         for (inputNode) in self.inputNodes {
             self.scrollNode.addSubnode(inputNode)
@@ -1533,10 +1594,6 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         
         self.navigationBackgroundNode.addSubnode(self.navigationSeparatorNode)
         self.addSubnode(self.navigationBackgroundNode)
-        
-        self.buttonNode.pressed = {
-            action()
-        }
         
         self.skipActionButtonNode.highligthedChanged = { [weak self] highlighted in
             guard let strongSelf = self else {
@@ -1587,7 +1644,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
             if let index = strongSelf.inputNodes.firstIndex(where: { $0 === node }) {
                 if index == strongSelf.inputNodes.count - 1 {
                     strongSelf.action()
-                } else if strongSelf.buttonNode.isUserInteractionEnabled {
+                } else if strongSelf.button.view?.isUserInteractionEnabled != false {
                     strongSelf.inputNodes[index + 1].focus()
                 }
             }
@@ -1651,13 +1708,13 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
             switch strongSelf.mode {
             case .emailAddress, .updateEmailAddress, .passwordRecovery:
                 let hasText = strongSelf.inputNodes.contains(where: { !$0.text.isEmpty })
-                strongSelf.buttonNode.isHidden = !hasText
-                strongSelf.skipActionTitleNode.isHidden = hasText
-                strongSelf.skipActionButtonNode.isHidden = hasText
+                strongSelf.updateButtonIsHidden(!hasText)
+                strongSelf.skipActionTitleNode.isHidden = hasText || strongSelf.skipIsHiddenUntilError
+                strongSelf.skipActionButtonNode.isHidden = hasText || strongSelf.skipIsHiddenUntilError
             case let .emailConfirmation(_, _, codeLength, _):
                 let text = strongSelf.inputNodes[0].text
                 let hasText = !text.isEmpty
-                strongSelf.buttonNode.isHidden = !hasText
+                strongSelf.updateButtonIsHidden(!hasText)
                 strongSelf.changeEmailActionTitleNode.isHidden = hasText
                 strongSelf.changeEmailActionButtonNode.isHidden = hasText
                 strongSelf.resendCodeActionTitleNode.isHidden = hasText
@@ -1669,7 +1726,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
             case .passwordRecoveryEmail:
                 let text = strongSelf.inputNodes[0].text
                 let hasText = !text.isEmpty
-                strongSelf.buttonNode.isHidden = !hasText
+                strongSelf.updateButtonIsHidden(!hasText)
                 strongSelf.changeEmailActionTitleNode.isHidden = hasText
                 strongSelf.changeEmailActionButtonNode.isHidden = hasText
                 strongSelf.resendCodeActionTitleNode.isHidden = hasText
@@ -1680,7 +1737,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
                 }
             case .passwordHint:
                 let hasText = strongSelf.inputNodes.contains(where: { !$0.text.isEmpty })
-                strongSelf.buttonNode.isHidden = !hasText
+                strongSelf.updateButtonIsHidden(!hasText)
                 strongSelf.skipActionTitleNode.isHidden = hasText
                 strongSelf.skipActionButtonNode.isHidden = hasText
             case .password:
@@ -1688,7 +1745,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
             case .rememberPassword:
                 let hasText = strongSelf.inputNodes.contains(where: { !$0.text.isEmpty })
                 let transition = ContainedViewLayoutTransition.animated(duration: 0.2, curve: .easeInOut)
-                transition.updateAlpha(node: strongSelf.buttonNode, alpha: hasText ? 1.0 : 0.0)
+                strongSelf.updateButtonAlpha(hasText ? 1.0 : 0.0, transition: transition)
                 transition.updateAlpha(node: strongSelf.skipActionTitleNode, alpha: hasText ? 0.0 : 1.0)
                 strongSelf.skipActionButtonNode.isHidden = hasText
                 
@@ -1733,6 +1790,18 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
     func focus() {
         self.inputNodes.first?.isFocused = true
     }
+
+    private func updateButtonIsHidden(_ isHidden: Bool) {
+        self.buttonIsHidden = isHidden
+        self.button.view?.isHidden = isHidden
+    }
+
+    private func updateButtonAlpha(_ alpha: CGFloat, transition: ContainedViewLayoutTransition) {
+        self.buttonAlpha = alpha
+        if let buttonView = self.button.view {
+            transition.updateAlpha(layer: buttonView.layer, alpha: alpha)
+        }
+    }
     
     @objc private func skipActionPressed() {
         self.skipAction()
@@ -1759,7 +1828,8 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         if #available(iOSApplicationExtension 11.0, iOS 11.0, *) {
             self.scrollNode.view.contentInsetAdjustmentBehavior = .never
         }
-        self.scrollNode.view.delegate = self
+        self.scrollNode.view.delegate = self.wrappedScrollViewDelegate
+        self.scrollNode.view.scrollsToTop = false
     }
     
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -1767,35 +1837,48 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
     
     func onAction(success: Bool) {
         switch self.mode {
-            case .rememberPassword:
-                if !success {
+        case .emailAddress:
+            if !success {
+                self.inputNodes.first?.layer.addShakeAnimation()
+                HapticFeedback().error()
+                
+                if self.skipIsHiddenUntilError {
+                    self.skipIsHiddenUntilError = false
+                    self.skipActionTitleNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+                    self.skipActionTitleNode.layer.animateScale(from: 0.1, to: 1.0, duration: 0.2)
                     self.skipActionTitleNode.isHidden = false
                     self.skipActionButtonNode.isHidden = false
-                    
-                    let transition = ContainedViewLayoutTransition.animated(duration: 0.2, curve: .easeInOut)
-                    transition.updateAlpha(node: self.buttonNode, alpha: 0.0)
-                    transition.updateAlpha(node: self.skipActionTitleNode, alpha: 1.0)
-                    
-                    if let snapshotView = self.textNode.view.snapshotContentTree() {
-                        snapshotView.frame = self.textNode.view.frame
-                        self.textNode.view.superview?.addSubview(snapshotView)
-                        
-                        snapshotView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false, completion:  { [weak snapshotView] _ in
-                            snapshotView?.removeFromSuperview()
-                        })
-                        
-                        self.textNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
-                    }
-                    
-                    self.textNode.attributedText = NSAttributedString(string: self.presentationData.strings.TwoFactorRemember_WrongPassword, font: Font.regular(16.0), textColor: self.presentationData.theme.list.itemDestructiveColor)
-                    self.inputNodes.first?.isFailed = true
-                    
-                    if let (layout, navigationHeight) = self.validLayout {
-                        self.containerLayoutUpdated(layout: layout, navigationHeight: navigationHeight, transition: .immediate)
-                    }
                 }
-            default:
-                break
+            }
+        case .rememberPassword:
+            if !success {
+                self.skipActionTitleNode.isHidden = false
+                self.skipActionButtonNode.isHidden = false
+                
+                let transition = ContainedViewLayoutTransition.animated(duration: 0.2, curve: .easeInOut)
+                self.updateButtonAlpha(0.0, transition: transition)
+                transition.updateAlpha(node: self.skipActionTitleNode, alpha: 1.0)
+                
+                if let snapshotView = self.textNode.view.snapshotContentTree() {
+                    snapshotView.frame = self.textNode.view.frame
+                    self.textNode.view.superview?.addSubview(snapshotView)
+                    
+                    snapshotView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false, completion:  { [weak snapshotView] _ in
+                        snapshotView?.removeFromSuperview()
+                    })
+                    
+                    self.textNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+                }
+                
+                self.textNode.attributedText = NSAttributedString(string: self.presentationData.strings.TwoFactorRemember_WrongPassword, font: Font.regular(16.0), textColor: self.presentationData.theme.list.itemDestructiveColor)
+                self.inputNodes.first?.isFailed = true
+                
+                if let (layout, navigationHeight) = self.validLayout {
+                    self.containerLayoutUpdated(layout: layout, navigationHeight: navigationHeight, transition: .immediate)
+                }
+            }
+        default:
+            break
         }
     }
     
@@ -1804,6 +1887,17 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         
         let contentAreaSize = layout.size
         let availableAreaSize = CGSize(width: layout.size.width, height: layout.size.height - layout.insets(options: [.input]).bottom)
+        
+        // The content above the button lays out in the band between the side insets when they differ (iPhone Duo's
+        // side strip: the fields ran under it); across the screen otherwise.
+        let insetsDiffer = layout.safeInsets.left != layout.safeInsets.right
+        let bandMinX: CGFloat = insetsDiffer ? layout.safeInsets.left : 0.0
+        let bandWidth: CGFloat = insetsDiffer ? contentAreaSize.width - layout.safeInsets.left - layout.safeInsets.right : contentAreaSize.width
+        // The button and the actions in its rows span iPhone Duo's side strip; they keep clear only of a corner block
+        // at the bottom.
+        let bottomSideInsets = layout.bottomEdgeSideInsets()
+        let bottomBandMinX: CGFloat = insetsDiffer ? bottomSideInsets.left : 0.0
+        let bottomBandWidth: CGFloat = insetsDiffer ? contentAreaSize.width - bottomSideInsets.left - bottomSideInsets.right : contentAreaSize.width
         
         let sideInset: CGFloat = 32.0
         let buttonSideInset: CGFloat = 48.0
@@ -1817,7 +1911,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         let titleSpacing: CGFloat = 19.0
         let titleInputSpacing: CGFloat = 26.0
         let textSpacing: CGFloat = 30.0
-        let buttonHeight: CGFloat = 50.0
+        let buttonHeight: CGFloat = 52.0
         let buttonSpacing: CGFloat = 20.0
         let rowSpacing: CGFloat = 20.0
         
@@ -1835,11 +1929,11 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
             iconSize = CGSize(width: 100.0, height: 100.0)
         }
         
-        let titleSize = self.titleNode.updateLayout(CGSize(width: contentAreaSize.width - sideInset * 2.0, height: contentAreaSize.height))
-        let textSize = self.textNode.updateLayout(CGSize(width: contentAreaSize.width - sideInset * 2.0, height: contentAreaSize.height))
-        let skipActionSize = self.skipActionTitleNode.updateLayout(CGSize(width: contentAreaSize.width - sideInset * 2.0, height: contentAreaSize.height))
-        let changeEmailActionSize = self.changeEmailActionTitleNode.updateLayout(CGSize(width: contentAreaSize.width - sideInset * 2.0, height: contentAreaSize.height))
-        let resendCodeActionSize = self.resendCodeActionTitleNode.updateLayout(CGSize(width: contentAreaSize.width - sideInset * 2.0, height: contentAreaSize.height))
+        let titleSize = self.titleNode.updateLayout(CGSize(width: bandWidth - sideInset * 2.0, height: contentAreaSize.height))
+        let textSize = self.textNode.updateLayout(CGSize(width: bandWidth - sideInset * 2.0, height: contentAreaSize.height))
+        let skipActionSize = self.skipActionTitleNode.updateLayout(CGSize(width: bottomBandWidth - sideInset * 2.0, height: contentAreaSize.height))
+        let changeEmailActionSize = self.changeEmailActionTitleNode.updateLayout(CGSize(width: bottomBandWidth - sideInset * 2.0, height: contentAreaSize.height))
+        let resendCodeActionSize = self.resendCodeActionTitleNode.updateLayout(CGSize(width: bottomBandWidth - sideInset * 2.0, height: contentAreaSize.height))
         
         var calculatedContentHeight = iconSize.height + iconSpacing + titleSize.height
         if textSize.width.isZero {
@@ -1861,20 +1955,20 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         let areaHeight = layout.size.height - insets.top - insets.bottom
         let contentVerticalOrigin = max(layout.statusBarHeight ?? 0.0, floor((areaHeight - calculatedContentHeight) / 2.0))
         
-        let iconFrame = CGRect(origin: CGPoint(x: floor((contentAreaSize.width - iconSize.width) / 2.0), y: contentVerticalOrigin), size: iconSize)
+        let iconFrame = CGRect(origin: CGPoint(x: bandMinX + floor((bandWidth - iconSize.width) / 2.0), y: contentVerticalOrigin), size: iconSize)
         if let animatedStickerNode = self.animatedStickerNode {
             animatedStickerNode.updateLayout(size: iconFrame.size)
             transition.updateFrame(node: animatedStickerNode, frame: iconFrame)
         } else if let monkeyNode = self.monkeyNode {
             transition.updateFrame(node: monkeyNode, frame: iconFrame)
         }
-        let titleFrame = CGRect(origin: CGPoint(x: floor((contentAreaSize.width - titleSize.width) / 2.0), y: iconFrame.maxY + iconSpacing), size: titleSize)
+        let titleFrame = CGRect(origin: CGPoint(x: bandMinX + floor((bandWidth - titleSize.width) / 2.0), y: iconFrame.maxY + iconSpacing), size: titleSize)
         transition.updateFrameAdditive(node: self.titleNode, frame: titleFrame)
         let textFrame: CGRect
         if textSize.width.isZero {
-            textFrame = CGRect(origin: CGPoint(x: floor((contentAreaSize.width - textSize.width) / 2.0), y: titleFrame.maxY), size: textSize)
+            textFrame = CGRect(origin: CGPoint(x: bandMinX + floor((bandWidth - textSize.width) / 2.0), y: titleFrame.maxY), size: textSize)
         } else {
-            textFrame = CGRect(origin: CGPoint(x: floor((contentAreaSize.width - textSize.width) / 2.0), y: titleFrame.maxY + titleSpacing), size: textSize)
+            textFrame = CGRect(origin: CGPoint(x: bandMinX + floor((bandWidth - textSize.width) / 2.0), y: titleFrame.maxY + titleSpacing), size: textSize)
         }
         transition.updateFrameAdditive(node: self.textNode, frame: textFrame)
         
@@ -1885,15 +1979,15 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
             contentHeight += textSpacing
         }
         
-        let rowWidth = contentAreaSize.width - buttonSideInset * 2.0
+        let rowWidth = bandWidth - buttonSideInset * 2.0
         
         for i in 0 ..< self.inputNodes.count {
             let inputNode = self.inputNodes[i]
             if i != 0 {
                 contentHeight += rowSpacing
             }
-            let inputNodeSize = CGSize(width: rowWidth, height: 50.0)
-            transition.updateFrame(node: inputNode, frame: CGRect(origin: CGPoint(x: buttonSideInset, y: contentHeight), size: inputNodeSize))
+            let inputNodeSize = CGSize(width: rowWidth, height: 52.0)
+            transition.updateFrame(node: inputNode, frame: CGRect(origin: CGPoint(x: bandMinX + buttonSideInset, y: contentHeight), size: inputNodeSize))
             inputNode.updateLayout(size: inputNodeSize, transition: transition)
             contentHeight += inputNodeSize.height
         }
@@ -1902,17 +1996,49 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         let buttonBottomInset = layout.intrinsicInsets.bottom + minimalBottomInset
         let bottomInset = layout.intrinsicInsets.bottom + buttonSpacing
         
-        let buttonWidth = contentAreaSize.width - buttonSideInset * 2.0
+        let buttonWidth = bottomBandWidth - buttonSideInset * 2.0
         
         let maxButtonY = min(areaHeight - buttonSpacing, layout.size.height - buttonBottomInset) - buttonHeight * 2.0
         
-        let buttonFrame = CGRect(origin: CGPoint(x: floor((contentAreaSize.width - buttonWidth) / 2.0), y: max(contentHeight + buttonSpacing, maxButtonY)), size: CGSize(width: buttonWidth, height: buttonHeight))
-        transition.updateFrame(node: self.buttonNode, frame: buttonFrame)
-        let _ = self.buttonNode.updateLayout(width: buttonFrame.width, transition: transition)
+        let buttonFrame = CGRect(origin: CGPoint(x: bottomBandMinX + floor((bottomBandWidth - buttonWidth) / 2.0), y: max(contentHeight + buttonSpacing, maxButtonY)), size: CGSize(width: buttonWidth, height: buttonHeight))
+        let _ = self.button.update(
+            transition: ComponentTransition(transition),
+            component: AnyComponent(ButtonComponent(
+                background: ButtonComponent.Background(
+                    style: .glass,
+                    color: self.presentationData.theme.list.itemCheckColors.fillColor,
+                    foreground: self.presentationData.theme.list.itemCheckColors.foregroundColor,
+                    pressedColor: self.presentationData.theme.list.itemCheckColors.fillColor.withMultipliedAlpha(0.9),
+                    cornerRadius: 26.0
+                ),
+                content: AnyComponentWithIdentity(
+                    id: AnyHashable("button"),
+                    component: AnyComponent(Text(
+                        text: self.buttonText,
+                        font: Font.semibold(17.0),
+                        color: self.presentationData.theme.list.itemCheckColors.foregroundColor
+                    ))
+                ),
+                action: self.action
+            )),
+            environment: {},
+            containerSize: buttonFrame.size
+        )
+        if let buttonView = self.button.view {
+            let isButtonViewAdded = buttonView.superview == nil
+            if isButtonViewAdded {
+                self.scrollNode.view.addSubview(buttonView)
+            }
+            transition.updateFrame(view: buttonView, frame: buttonFrame)
+            buttonView.isHidden = self.buttonIsHidden
+            if isButtonViewAdded {
+                buttonView.alpha = self.buttonAlpha
+            }
+        }
 
         var skipButtonFrame = buttonFrame
         if case .rememberPassword = self.mode {
-        } else if !self.buttonNode.isHidden {
+        } else if !self.buttonIsHidden {
             skipButtonFrame.origin.y += skipButtonFrame.height
         }
 
@@ -1923,7 +2049,7 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         let changeEmailActionButtonFrame: CGRect
         let resendCodeActionFrame: CGRect
         let resendCodeActionButtonFrame: CGRect
-        if changeEmailActionSize.width + resendCodeActionSize.width > layout.size.width - buttonFrame.minX * 2.0 {
+        if changeEmailActionSize.width + resendCodeActionSize.width > bottomBandWidth - (buttonFrame.minX - bottomBandMinX) * 2.0 - 32.0 {
             changeEmailActionButtonFrame = CGRect(origin: CGPoint(x: buttonFrame.minX, y: buttonFrame.minY), size: CGSize(width: buttonFrame.width, height: buttonFrame.height))
             changeEmailActionFrame = CGRect(origin: CGPoint(x: changeEmailActionButtonFrame.minX + floor((changeEmailActionButtonFrame.width - changeEmailActionSize.width) / 2.0), y: changeEmailActionButtonFrame.minY + floor((changeEmailActionButtonFrame.height - changeEmailActionSize.height) / 2.0)), size: changeEmailActionSize)
             resendCodeActionButtonFrame = CGRect(origin: CGPoint(x: buttonFrame.minX, y: buttonFrame.maxY), size: CGSize(width: buttonFrame.width, height: buttonFrame.height))
@@ -1947,4 +2073,3 @@ private final class TwoFactorDataInputScreenNode: ViewControllerTracingNode, UIS
         }
     }
 }
-

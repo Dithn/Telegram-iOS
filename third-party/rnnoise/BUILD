@@ -1,4 +1,6 @@
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 replace_symbol_list = [
     "_celt_autocorr",
     "celt_fir",
@@ -24,11 +26,9 @@ replace_symbol_list = [
     "pitch_search",
     "remove_doubling",
 ]
- 
-objc_library(
+
+cc_library(
     name = "rnnoise",
-    enable_modules = True,
-    module_name = "rnnoise",
     srcs = glob([
         "Sources/*.c",
         "Sources/*.h",

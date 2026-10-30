@@ -1,6 +1,7 @@
 import Foundation
 import TelegramCore
 import TelegramPresentationData
+import TextFormat
 
 public func stringForTimestamp(day: Int32, month: Int32, year: Int32, dateTimeFormat: PresentationDateTimeFormat) -> String {
     let separator = dateTimeFormat.dateSeparator
@@ -41,6 +42,37 @@ public func shortStringForDayOfWeek(strings: PresentationStrings, day: Int32) ->
         return strings.Weekday_ShortFriday
     case 6:
         return strings.Weekday_ShortSaturday
+    default:
+        return ""
+    }
+}
+
+public func stringForNominativeMonth(strings: PresentationStrings, month: Int32) -> String {
+    switch month {
+    case 0:
+        return strings.Month_NomJanuary
+    case 1:
+        return strings.Month_NomFebruary
+    case 2:
+        return strings.Month_NomMarch
+    case 3:
+        return strings.Month_NomApril
+    case 4:
+        return strings.Month_NomMay
+    case 5:
+        return strings.Month_NomJune
+    case 6:
+        return strings.Month_NomJuly
+    case 7:
+        return strings.Month_NomAugust
+    case 8:
+        return strings.Month_NomSeptember
+    case 9:
+        return strings.Month_NomOctober
+    case 10:
+        return strings.Month_NomNovember
+    case 11:
+        return strings.Month_NomDecember
     default:
         return ""
     }
@@ -107,6 +139,91 @@ public func stringForMonth(strings: PresentationStrings, month: Int32, ofYear ye
     }
 }
 
+func monthAtIndex(_ index: Int, strings: PresentationStrings) -> String {
+    switch index {
+    case 0:
+        return strings.Month_ShortJanuary
+    case 1:
+        return strings.Month_ShortFebruary
+    case 2:
+        return strings.Month_ShortMarch
+    case 3:
+        return strings.Month_ShortApril
+    case 4:
+        return strings.Month_ShortMay
+    case 5:
+        return strings.Month_ShortJune
+    case 6:
+        return strings.Month_ShortJuly
+    case 7:
+        return strings.Month_ShortAugust
+    case 8:
+        return strings.Month_ShortSeptember
+    case 9:
+        return strings.Month_ShortOctober
+    case 10:
+        return strings.Month_ShortNovember
+    case 11:
+        return strings.Month_ShortDecember
+    default:
+        return ""
+    }
+}
+
+public func stringForCompactDate(timestamp: Int32, strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat) -> String {
+    var t: time_t = time_t(timestamp)
+    var timeinfo: tm = tm()
+    localtime_r(&t, &timeinfo)
+    
+    return "\(shortStringForDayOfWeek(strings: strings, day: timeinfo.tm_wday)) \(timeinfo.tm_mday) \(monthAtIndex(Int(timeinfo.tm_mon), strings: strings))"
+}
+
+func gregorianCalendarForBirthdayCalculations() -> Calendar {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone.current
+    return calendar
+}
+
+public func stringForCompactBirthday(_ birthday: TelegramBirthday, strings: PresentationStrings, showAge: Bool = false) -> String {
+    var components: [String] = []
+    components.append("\(birthday.day)")
+    components.append(monthAtIndex(Int(birthday.month) - 1, strings: strings))
+    if let year = birthday.year {
+        components.append("\(year)")
+        
+        if showAge {
+            if let age = ageForBirthday(birthday), age > 0 {
+                components.append("(\(strings.UserInfo_Age(Int32(age))))")
+            }
+        }
+    }
+
+    return components.joined(separator: " ")
+}
+
+public func ageForBirthday(_ birthday: TelegramBirthday) -> Int? {
+    return ageForBirthday(birthday, now: Date(), calendar: gregorianCalendarForBirthdayCalculations())
+}
+
+func ageForBirthday(_ birthday: TelegramBirthday, now: Date, calendar: Calendar) -> Int? {
+    guard let year = birthday.year else {
+        return nil
+    }
+    var dateComponents = DateComponents()
+    dateComponents.calendar = calendar
+    dateComponents.timeZone = calendar.timeZone
+    dateComponents.day = Int(birthday.day)
+    dateComponents.month = Int(birthday.month)
+    dateComponents.year = Int(year)
+     
+    if let birthDate = calendar.date(from: dateComponents) {
+        if let age = calendar.dateComponents([.year], from: birthDate, to: now).year {
+            return age
+        }
+    }
+    return nil
+}
+
 public enum RelativeTimestampFormatDay {
     case today
     case yesterday
@@ -127,15 +244,15 @@ public func stringForUserPresence(strings: PresentationStrings, day: RelativeTim
 private func humanReadableStringForTimestamp(strings: PresentationStrings, day: RelativeTimestampFormatDay, dateTimeFormat: PresentationDateTimeFormat, hours: Int32, minutes: Int32, format: HumanReadableStringFormat? = nil) -> PresentationStrings.FormattedString {
     let result: PresentationStrings.FormattedString
     switch day {
-        case .today:
-            let string = stringForShortTimestamp(hours: hours, minutes: minutes, dateTimeFormat: dateTimeFormat)
-            result = format?.todayFormatString(string) ?? strings.Time_TodayAt(string)
-        case .yesterday:
-            let string = stringForShortTimestamp(hours: hours, minutes: minutes, dateTimeFormat: dateTimeFormat)
-            result = format?.yesterdayFormatString(string) ?? strings.Time_YesterdayAt(string)
-        case .tomorrow:
-            let string = stringForShortTimestamp(hours: hours, minutes: minutes, dateTimeFormat: dateTimeFormat)
-            result = format?.tomorrowFormatString(string) ?? strings.Time_TomorrowAt(string)
+    case .today:
+        let string = stringForShortTimestamp(hours: hours, minutes: minutes, dateTimeFormat: dateTimeFormat)
+        result = format?.todayFormatString(string) ?? strings.Time_TodayAt(string)
+    case .yesterday:
+        let string = stringForShortTimestamp(hours: hours, minutes: minutes, dateTimeFormat: dateTimeFormat)
+        result = format?.yesterdayFormatString(string) ?? strings.Time_YesterdayAt(string)
+    case .tomorrow:
+        let string = stringForShortTimestamp(hours: hours, minutes: minutes, dateTimeFormat: dateTimeFormat)
+        result = format?.tomorrowFormatString(string) ?? strings.Time_TomorrowAt(string)
         
     }
     return result
@@ -146,17 +263,20 @@ public struct HumanReadableStringFormat {
     let tomorrowFormatString: (String) -> PresentationStrings.FormattedString
     let todayFormatString: (String) -> PresentationStrings.FormattedString
     let yesterdayFormatString: (String) -> PresentationStrings.FormattedString
+    let daysFormatString: ((Int) -> PresentationStrings.FormattedString)?
     
     public init(
         dateFormatString: @escaping (String) -> PresentationStrings.FormattedString,
         tomorrowFormatString: @escaping (String) -> PresentationStrings.FormattedString,
         todayFormatString: @escaping (String) -> PresentationStrings.FormattedString,
-        yesterdayFormatString: @escaping (String) -> PresentationStrings.FormattedString = { PresentationStrings.FormattedString(string: $0, ranges: []) }
+        yesterdayFormatString: @escaping (String) -> PresentationStrings.FormattedString = { PresentationStrings.FormattedString(string: $0, ranges: []) },
+        daysFormatString: ((Int) -> PresentationStrings.FormattedString)? = nil
     ) {
         self.dateFormatString = dateFormatString
         self.tomorrowFormatString = tomorrowFormatString
         self.todayFormatString = todayFormatString
         self.yesterdayFormatString = yesterdayFormatString
+        self.daysFormatString = daysFormatString
     }
 }
 
@@ -191,6 +311,8 @@ public func humanReadableStringForTimestamp(strings: PresentationStrings, dateTi
             day = .tomorrow
         }
         return humanReadableStringForTimestamp(strings: strings, day: day, dateTimeFormat: dateTimeFormat, hours: timeinfo.tm_hour, minutes: timeinfo.tm_min, format: format)
+    } else if dayDifference < 7, let daysFormatString = format?.daysFormatString {
+        return daysFormatString(Int(dayDifference))
     } else {
         let string: String
         if alwaysShowTime {
@@ -362,7 +484,7 @@ public func stringForRelativeLiveLocationUpdateTimestamp(strings: PresentationSt
     }
 }
 
-public func stringForRelativeActivityTimestamp(strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat, relativeTimestamp: Int32, relativeTo timestamp: Int32) -> String {
+public func stringForRelativeActivityTimestamp(strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat, preciseTime: Bool = false, relativeTimestamp: Int32, relativeTo timestamp: Int32) -> String {
     let difference = timestamp - relativeTimestamp
     if difference < 60 {
         return strings.Time_JustNow
@@ -392,6 +514,57 @@ public func stringForRelativeActivityTimestamp(strings: PresentationStrings, dat
                 day = .yesterday
             }
             return humanReadableStringForTimestamp(strings: strings, day: day, dateTimeFormat: dateTimeFormat, hours: timeinfo.tm_hour, minutes: timeinfo.tm_min).string
+        } else if preciseTime {
+            return strings.Time_AtPreciseDate(stringForTimestamp(day: timeinfo.tm_mday, month: timeinfo.tm_mon + 1, year: timeinfo.tm_year, dateTimeFormat: dateTimeFormat), stringForShortTimestamp(hours: timeinfo.tm_hour, minutes: timeinfo.tm_min, dateTimeFormat: dateTimeFormat)).string
+        } else {
+            return strings.Time_AtDate(stringForTimestamp(day: timeinfo.tm_mday, month: timeinfo.tm_mon + 1, year: timeinfo.tm_year, dateTimeFormat: dateTimeFormat)).string
+        }
+    }
+}
+
+public func stringForStoryActivityTimestamp(strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat, preciseTime: Bool = false, relativeTimestamp: Int32, relativeTo timestamp: Int32, short: Bool = false) -> String {
+    let difference = timestamp - relativeTimestamp
+    if difference < 60 {
+        return short ? strings.ShortTime_JustNow : strings.Time_JustNow
+    } else if difference < 60 * 60 {
+        let minutes = difference / 60
+        return short ? strings.ShortTime_MinutesAgo(minutes) : strings.Time_MinutesAgo(minutes)
+    } else {
+        var t: time_t = time_t(relativeTimestamp)
+        var timeinfo: tm = tm()
+        localtime_r(&t, &timeinfo)
+        
+        var now: time_t = time_t(timestamp)
+        var timeinfoNow: tm = tm()
+        localtime_r(&now, &timeinfoNow)
+        
+        if timeinfo.tm_year != timeinfoNow.tm_year {
+            return strings.Time_AtDate(stringForTimestamp(day: timeinfo.tm_mday, month: timeinfo.tm_mon + 1, year: timeinfo.tm_year, dateTimeFormat: dateTimeFormat)).string
+        }
+        
+        let dayDifference = timeinfo.tm_yday - timeinfoNow.tm_yday
+        if dayDifference == 0 || dayDifference == -1 {
+            let day: RelativeTimestampFormatDay
+            if dayDifference == 0 || short {
+                let hours = difference / (60 * 60)
+                return short ? strings.ShortTime_HoursAgo(hours) : strings.Time_HoursAgo(hours)
+            } else {
+                day = .yesterday
+            }
+            return humanReadableStringForTimestamp(strings: strings, day: day, dateTimeFormat: dateTimeFormat, hours: timeinfo.tm_hour, minutes: timeinfo.tm_min).string
+        } else if preciseTime {
+            let yearDate: String
+            if timeinfo.tm_year == timeinfoNow.tm_year {
+                if timeinfo.tm_yday == timeinfoNow.tm_yday {
+                    yearDate = strings.Weekday_Today
+                } else {
+                    yearDate = strings.Date_ChatDateHeader(monthAtIndex(Int(timeinfo.tm_mon), strings: strings), "\(timeinfo.tm_mday)").string
+                }
+            } else {
+                yearDate = strings.Date_ChatDateHeaderYear(monthAtIndex(Int(timeinfo.tm_mon), strings: strings), "\(timeinfo.tm_mday)", "\(1900 + timeinfo.tm_year)").string
+            }
+            
+            return strings.Time_AtPreciseDate(yearDate, stringForShortTimestamp(hours: timeinfo.tm_hour, minutes: timeinfo.tm_min, dateTimeFormat: dateTimeFormat)).string
         } else {
             return strings.Time_AtDate(stringForTimestamp(day: timeinfo.tm_mday, month: timeinfo.tm_mon + 1, year: timeinfo.tm_year, dateTimeFormat: dateTimeFormat)).string
         }
@@ -458,6 +631,30 @@ public func stringAndActivityForUserPresence(strings: PresentationStrings, dateT
     }
 }
 
+public func peerStatusExpirationString(statusTimestamp: Int32, relativeTo timestamp: Int32, strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat) -> String {
+    let difference = max(statusTimestamp - timestamp, 60)
+    if difference < 60 * 60 {
+        return strings.PeerStatusExpiration_Minutes(Int32(round(Double(difference) / Double(60))))
+    } else if difference < 24 * 60 * 60 {
+        return strings.PeerStatusExpiration_Hours(Int32(round(Double(difference) / Double(60 * 60))))
+    } else {
+        var t: time_t = time_t(statusTimestamp)
+        var timeinfo: tm = tm()
+        localtime_r(&t, &timeinfo)
+        
+        var now: time_t = time_t(timestamp)
+        var timeinfoNow: tm = tm()
+        localtime_r(&now, &timeinfoNow)
+        
+        let dayDifference = timeinfo.tm_yday - timeinfoNow.tm_yday
+        if dayDifference == 1 {
+            return strings.PeerStatusExpiration_TomorrowAt(stringForShortTimestamp(hours: timeinfo.tm_hour, minutes: timeinfo.tm_min, dateTimeFormat: dateTimeFormat)).string
+        } else {
+            return strings.PeerStatusExpiration_AtDate(stringForTimestamp(day: timeinfo.tm_mday, month: timeinfo.tm_mon + 1, dateTimeFormat: dateTimeFormat)).string
+        }
+    }
+}
+
 public func userPresenceStringRefreshTimeout(_ presence: TelegramUserPresence, relativeTo timestamp: Int32) -> Double {
     switch presence.status {
     case let .present(statusTimestamp):
@@ -496,4 +693,27 @@ public func stringForRemainingMuteInterval(strings: PresentationStrings, muteInt
     } else {
         return strings.MuteExpires_Days(Int32(round(Float(value) / (24 * 60 * 60))))
     }
+}
+
+public func stringForIntervalSinceUpdateAction(strings: PresentationStrings, value: Int32) -> String {
+    let timestamp = Int32(CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970)
+    let value = max(1 * 60, timestamp - value)
+    if value <= 1 * 60 * 60 {
+        return strings.Chat_NonContactUser_UpdatedMinutes(Int32(round(Float(value) / 60)))
+    } else if value <= 24 * 60 * 60 {
+        return strings.Chat_NonContactUser_UpdatedHours(Int32(round(Float(value) / (60 * 60))))
+    } else {
+        return strings.Chat_NonContactUser_UpdatedDays(Int32(round(Float(value) / (24 * 60 * 60))))
+    }
+}
+
+public func stringForGiftUpgradeTimestamp(strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat, timestamp: Int32) -> String {
+    var t: time_t = time_t(timestamp)
+    var timeinfo: tm = tm()
+    localtime_r(&t, &timeinfo)
+
+    let time = stringForShortTimestamp(hours: timeinfo.tm_hour, minutes: timeinfo.tm_min, dateTimeFormat: dateTimeFormat)
+    let date = strings.Date_ChatDateHeader(monthAtIndex(Int(timeinfo.tm_mon), strings: strings), "\(timeinfo.tm_mday)").string
+    
+    return "\(time), \(date)"
 }

@@ -1,6 +1,26 @@
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
+import Foundation
+
+public func smallestVideoRepresentation(_ representations: [TelegramMediaImage.VideoRepresentation]) -> TelegramMediaImage.VideoRepresentation? {
+    if representations.count == 0 {
+        return nil
+    } else {
+        var dimensions = representations[0].dimensions
+        var index = 0
+        
+        for i in 1 ..< representations.count {
+            let representationDimensions = representations[i].dimensions
+            if representationDimensions.width < dimensions.width && representationDimensions.height < dimensions.height {
+                dimensions = representationDimensions
+                index = i
+            }
+        }
+        
+        return representations[index]
+    }
+}
 
 public func smallestImageRepresentation(_ representations: [TelegramMediaImageRepresentation]) -> TelegramMediaImageRepresentation? {
     if representations.count == 0 {
@@ -93,7 +113,7 @@ public func parseMediaData(data: Data) -> Media? {
         if let photo = object as? Api.Photo {
             return telegramMediaImageFromApiPhoto(photo)
         } else if let document = object as? Api.Document {
-            return telegramMediaFileFromApiDocument(document)
+            return telegramMediaFileFromApiDocument(document, altDocuments: [])
         }
     }
     return nil

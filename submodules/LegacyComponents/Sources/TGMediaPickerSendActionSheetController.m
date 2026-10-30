@@ -1,10 +1,10 @@
-#import "TGMediaPickerSendActionSheetController.h"
+#import <LegacyComponents/TGMediaPickerSendActionSheetController.h>
 #import "LegacyComponentsInternal.h"
 
-#import "TGFont.h"
-#import "TGImageUtils.h"
-#import "TGModernButton.h"
-#import "TGMediaAssetsController.h"
+#import <LegacyComponents/TGFont.h>
+#import <LegacyComponents/TGImageUtils.h>
+#import <LegacyComponents/TGModernButton.h>
+#import <LegacyComponents/TGMediaAssetsController.h>
 
 @interface TGMediaPickerSendActionSheetItemView : UIView
 {
@@ -25,7 +25,10 @@
     self = [super init];
     if (self != nil) {
         _buttonView = [[TGModernButton alloc] init];
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations" // legacy non-configuration UIButton: property is still honored
         _buttonView.adjustsImageWhenHighlighted = false;
+        #pragma clang diagnostic pop
         
         __weak TGMediaPickerSendActionSheetItemView *weakSelf = self;
         _buttonView.highlitedChanged = ^(bool highlighted) {
@@ -105,6 +108,7 @@
     bool _isDark;
     CGRect _sendButtonFrame;
     bool _canSendSilently;
+    bool _canSendWhenOnline;
     bool _canSchedule;
     bool _reminder;
     bool _hasTimer;
@@ -117,6 +121,7 @@
     UIView *_containerView;
     UIView *_separatorView;
     TGMediaPickerSendActionSheetItemView *_sendSilentlyButton;
+    TGMediaPickerSendActionSheetItemView *_sendWhenOnlineButton;
     TGMediaPickerSendActionSheetItemView *_scheduleButton;
     TGMediaPickerSendActionSheetItemView *_timerButton;
 }
@@ -124,13 +129,14 @@
 
 @implementation TGMediaPickerSendActionSheetController
 
-- (instancetype)initWithContext:(id<LegacyComponentsContext>)context isDark:(bool)isDark sendButtonFrame:(CGRect)sendButtonFrame canSendSilently:(bool)canSendSilently canSchedule:(bool)canSchedule reminder:(bool)reminder hasTimer:(bool)hasTimer {
+- (instancetype)initWithContext:(id<LegacyComponentsContext>)context isDark:(bool)isDark sendButtonFrame:(CGRect)sendButtonFrame canSendSilently:(bool)canSendSilently canSendWhenOnline:(bool)canSendWhenOnline canSchedule:(bool)canSchedule reminder:(bool)reminder hasTimer:(bool)hasTimer {
     self = [super initWithContext:context];
     if (self != nil) {
         _context = context;
         _isDark = isDark;
         _sendButtonFrame = sendButtonFrame;
         _canSendSilently = canSendSilently;
+        _canSendWhenOnline = canSendWhenOnline;
         _canSchedule = canSchedule;
         _reminder = reminder;
         _hasTimer = hasTimer;
@@ -163,7 +169,7 @@
     
     __weak TGMediaPickerSendActionSheetController *weakSelf = self;
     if (_canSendSilently) {
-        _sendSilentlyButton = [[TGMediaPickerSendActionSheetItemView alloc] initWithTitle:TGLocalized(@"Conversation.SendMessage.SendSilently") icon:TGComponentsImageNamed(@"MediaMute") isDark:_isDark isLast:!_canSchedule && !_hasTimer];
+        _sendSilentlyButton = [[TGMediaPickerSendActionSheetItemView alloc] initWithTitle:TGLocalized(@"Conversation.SendMessage.SendSilently") icon:TGComponentsImageNamed(@"Editor/Silently") isDark:_isDark isLast:!_canSchedule && !_hasTimer && !_canSendWhenOnline];
         _sendSilentlyButton.pressed = ^{
             __strong TGMediaPickerSendActionSheetController *strongSelf = weakSelf;
             [strongSelf sendSilentlyPressed];
@@ -171,8 +177,17 @@
         [_containerView addSubview:_sendSilentlyButton];
     }
     
+    if (_canSendWhenOnline) {
+        _sendWhenOnlineButton = [[TGMediaPickerSendActionSheetItemView alloc] initWithTitle:TGLocalized(@"Conversation.SendMessage.SendWhenOnline") icon:TGComponentsImageNamed(@"Editor/WhenOnline") isDark:_isDark isLast:!_canSchedule && !_hasTimer];
+        _sendWhenOnlineButton.pressed = ^{
+            __strong TGMediaPickerSendActionSheetController *strongSelf = weakSelf;
+            [strongSelf sendWhenOnlinePressed];
+        };
+        [_containerView addSubview:_sendWhenOnlineButton];
+    }
+    
     if (_canSchedule) {
-        _scheduleButton = [[TGMediaPickerSendActionSheetItemView alloc] initWithTitle:TGLocalized(_reminder ? @"Conversation.SendMessage.SetReminder" : @"Conversation.SendMessage.ScheduleMessage") icon:TGComponentsImageNamed(@"MediaSchedule") isDark:_isDark isLast:!_hasTimer];
+        _scheduleButton = [[TGMediaPickerSendActionSheetItemView alloc] initWithTitle:TGLocalized(_reminder ? @"Conversation.SendMessage.SetReminder" : @"Conversation.SendMessage.ScheduleMessage") icon:TGComponentsImageNamed(@"Editor/Schedule") isDark:_isDark isLast:!_hasTimer];
         _scheduleButton.pressed = ^{
             __strong TGMediaPickerSendActionSheetController *strongSelf = weakSelf;
             [strongSelf schedulePressed];
@@ -196,8 +211,11 @@
     UIImage *doneImage = pallete != nil ? pallete.sendIconImage : TGComponentsImageNamed(@"PhotoPickerSendIcon");
     
     _sendButton = [[TGModernButton alloc] initWithFrame:CGRectMake(0.0, 0.0, 33.0, 33.0)];
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdeprecated-declarations" // legacy non-configuration UIButton: property is still honored
     _sendButton.adjustsImageWhenDisabled = false;
     _sendButton.adjustsImageWhenHighlighted = false;
+    #pragma clang diagnostic pop
     [_sendButton setImage:doneImage forState:UIControlStateNormal];
     [_sendButton addTarget:self action:@selector(sendPressed) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:_sendButton];
@@ -295,8 +313,8 @@
     
     CGFloat itemHeight = 44.0;
     CGFloat containerWidth = 240.0;
-    CGFloat containerHeight = (_canSendSilently + _canSchedule + _hasTimer) * itemHeight;
-    containerWidth = MAX(containerWidth, MAX(_timerButton.buttonLabel.frame.size.width, MAX(_sendSilentlyButton.buttonLabel.frame.size.width, _scheduleButton.buttonLabel.frame.size.width)) + 84.0);
+    CGFloat containerHeight = (_canSendSilently + _canSchedule + _hasTimer + _canSendWhenOnline) * itemHeight;
+    containerWidth = MAX(containerWidth, MAX(_timerButton.buttonLabel.frame.size.width, MAX(_sendSilentlyButton.buttonLabel.frame.size.width, MAX(_sendWhenOnlineButton.buttonLabel.frame.size.width, _scheduleButton.buttonLabel.frame.size.width))) + 84.0);
     if (!_dismissed) {
         _containerView.frame = CGRectMake(CGRectGetMaxX(_sendButtonFrame) - containerWidth - 8.0, _sendButtonFrame.origin.y - containerHeight - 4.0, containerWidth, containerHeight);
     }
@@ -304,6 +322,9 @@
     CGFloat offset = 0.0f;
     _sendSilentlyButton.frame = CGRectMake(0.0, offset, containerWidth, itemHeight);
     offset += _sendSilentlyButton.frame.size.height;
+    
+    _sendWhenOnlineButton.frame = CGRectMake(0.0, offset, containerWidth, itemHeight);
+    offset += _sendWhenOnlineButton.frame.size.height;
     
     _scheduleButton.frame = CGRectMake(0.0, offset, containerWidth, itemHeight);
     offset += _scheduleButton.frame.size.height;
@@ -326,6 +347,14 @@
     if (self.sendSilently != nil)
         self.sendSilently();
 }
+
+- (void)sendWhenOnlinePressed {
+    [self animateOut:false];
+    
+    if (self.sendWhenOnline != nil)
+        self.sendWhenOnline();
+}
+
 
 - (void)schedulePressed {
     [self animateOut:false];

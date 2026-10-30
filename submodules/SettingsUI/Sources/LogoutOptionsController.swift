@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import LegacyComponents
 import TelegramPresentationData
@@ -13,6 +12,11 @@ import AccountContext
 import AlertUI
 import PresentationDataUtils
 import UrlHandling
+import AccountUtils
+import PremiumUI
+import StorageUsageScreen
+import TelegramStringFormatting
+import WalletContext
 
 private struct LogoutOptionsItemArguments {
     let addAccount: () -> Void
@@ -78,27 +82,27 @@ private enum LogoutOptionsEntry: ItemListNodeEntry, Equatable {
             case let .alternativeHeader(_, title):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: title, sectionId: self.section)
             case let .addAccount(_, title, text):
-                return ItemListDisclosureItem(presentationData: presentationData, icon: PresentationResourcesSettings.addAccount, title: title, label: text, labelStyle: .multilineDetailText, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.deleteAddAccount, title: title, label: text, labelStyle: .multilineDetailText, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                     arguments.addAccount()
                 })
             case let .setPasscode(_, title, text):
-                return ItemListDisclosureItem(presentationData: presentationData, icon: PresentationResourcesSettings.setPasscode, title: title, label: text, labelStyle: .multilineDetailText, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.permissions, title: title, label: text, labelStyle: .multilineDetailText, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                     arguments.setPasscode()
                 })
             case let .clearCache(_, title, text):
-                return ItemListDisclosureItem(presentationData: presentationData, icon: PresentationResourcesSettings.clearCache, title: title, label: text, labelStyle: .multilineDetailText, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.dataAndStorage, title: title, label: text, labelStyle: .multilineDetailText, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                     arguments.clearCache()
                 })
             case let .changePhoneNumber(_, title, text):
-                return ItemListDisclosureItem(presentationData: presentationData, icon: PresentationResourcesSettings.changePhoneNumber, title: title, label: text, labelStyle: .multilineDetailText, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.changePhoneNumber, title: title, label: text, labelStyle: .multilineDetailText, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                     arguments.changePhoneNumber()
                 })
             case let .contactSupport(_, title, text):
-                return ItemListDisclosureItem(presentationData: presentationData, icon: PresentationResourcesSettings.support, title: title, label: text, labelStyle: .multilineDetailText, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.support, title: title, label: text, labelStyle: .multilineDetailText, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                     arguments.contactSupport()
                 })
             case let .logout(_, title):
-                return ItemListActionItem(presentationData: presentationData, title: title, kind: .destructive, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .destructive, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                     arguments.logout()
                 })
             case let .logoutInfo(_, title):
@@ -107,7 +111,7 @@ private enum LogoutOptionsEntry: ItemListNodeEntry, Equatable {
     }
 }
 
-private func logoutOptionsEntries(presentationData: PresentationData, canAddAccounts: Bool, hasPasscode: Bool, hasWallets: Bool) -> [LogoutOptionsEntry] {
+private func logoutOptionsEntries(presentationData: PresentationData, canAddAccounts: Bool, hasPasscode: Bool) -> [LogoutOptionsEntry] {
     var entries: [LogoutOptionsEntry] = []
     entries.append(.alternativeHeader(presentationData.theme, presentationData.strings.LogoutOptions_AlternativeOptionsSection))
     if canAddAccounts {
@@ -131,17 +135,51 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
     var dismissImpl: (() -> Void)?
     
     let supportPeerDisposable = MetaDisposable()
+    let logoutConfirmationDisposable = MetaDisposable()
     
     let arguments = LogoutOptionsItemArguments(addAccount: {
-        let isTestingEnvironment = context.account.testingEnvironment
-        context.sharedContext.beginNewAuth(testingEnvironment: isTestingEnvironment)
-        
-        dismissImpl?()
+        let _ = (activeAccountsAndPeers(context: context)
+        |> take(1)
+        |> deliverOnMainQueue
+        ).start(next: { accountAndPeer, accountsAndPeers in
+            var maximumAvailableAccounts: Int = 3
+            if accountAndPeer?.1.isPremium == true && !context.account.testingEnvironment {
+                maximumAvailableAccounts = 4
+            }
+            var count: Int = 1
+            for (accountContext, peer, _) in accountsAndPeers {
+                if !accountContext.account.testingEnvironment {
+                    if peer.isPremium {
+                        maximumAvailableAccounts = 4
+                    }
+                    count += 1
+                }
+            }
+            
+            if count >= maximumAvailableAccounts {
+                var replaceImpl: ((ViewController) -> Void)?
+                let controller = PremiumLimitScreen(context: context, subject: .accounts, count: Int32(count), action: {
+                    let controller = PremiumIntroScreen(context: context, source: .accounts)
+                    replaceImpl?(controller)
+                    return true
+                })
+                replaceImpl = { [weak controller] c in
+                    controller?.replace(with: c)
+                }
+                pushControllerImpl?(controller)
+            } else {
+                context.sharedContext.beginNewAuth(testingEnvironment: context.account.testingEnvironment)
+                
+                dismissImpl?()
+            }
+        })
     }, setPasscode: {
-        let _ = passcodeOptionsAccessController(context: context, pushController: { controller in
+        let _ = passcodeOptionsAccessController(context: context, replaceController: { controller in
             replaceTopControllerImpl?(controller)
-        }, completion: { _ in
-            replaceTopControllerImpl?(passcodeOptionsController(context: context))
+        }, authorizationCompleted: { result in
+            guard case let .success(session) = result else { return }
+            guard let replaceTopControllerImpl else { session.invalidate(); return }
+            replaceTopControllerImpl(passcodeOptionsController(context: context, settingsSession: session))
         }).start(next: { controller in
             if let controller = controller {
                 pushControllerImpl?(controller)
@@ -149,7 +187,9 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
         })
         dismissImpl?()
     }, clearCache: {
-        pushControllerImpl?(storageUsageController(context: context))
+        pushControllerImpl?(StorageUsageScreen(context: context, makeStorageUsageExceptionsScreen: { category in
+            return storageUsageExceptionsScreen(context: context, category: category)
+        }))
         dismissImpl?()
     }, changePhoneNumber: {
         let introController = PrivacyIntroController(context: context, mode: .changePhoneNumber(phoneNumber), proceedAction: {
@@ -158,7 +198,7 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
         pushControllerImpl?(introController)
         dismissImpl?()
     }, contactSupport: { [weak navigationController] in
-        let supportPeer = Promise<PeerId?>()
+        let supportPeer = Promise<EnginePeer.Id?>()
         supportPeer.set(context.engine.peers.supportPeerId())
         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
         
@@ -167,6 +207,12 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
             faqUrl = "https://telegram.org/faq#general"
         }
         let resolvedUrl = resolveInstantViewUrl(account: context.account, url: faqUrl)
+        |> mapToSignal { result -> Signal<ResolvedUrl, NoError> in
+            guard case let .result(result) = result else {
+                return .complete()
+            }
+            return .single(result)
+        }
         
         let resolvedUrlPromise = Promise<ResolvedUrl>()
         resolvedUrlPromise.set(resolvedUrl)
@@ -181,10 +227,10 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
                 controller?.dismiss()
                 dismissImpl?()
                 
-                context.sharedContext.openResolvedUrl(resolvedUrl, context: context, urlContext: .generic, navigationController: navigationController, forceExternal: false, openPeer: { peer, navigation in
-                }, sendFile: nil, sendSticker: nil, requestMessageActionUrlAuth: nil, joinVoiceChat: nil, present: { controller, arguments in
-                    pushControllerImpl?(controller)
-                }, dismissInput: {}, contentContext: nil)
+                context.sharedContext.openResolvedUrl(resolvedUrl, context: context, urlContext: .generic, navigationController: navigationController, forceExternal: false, forceUpdate: false, openPeer: { peer, navigation in
+                }, sendFile: nil, sendSticker: nil, sendEmoji: nil, requestMessageActionUrlAuth: nil, joinVoiceChat: nil, present: { controller, arguments in
+                    presentControllerImpl?(controller, nil)
+                }, dismissInput: {}, contentContext: nil, progress: nil, completion: nil)
             })
         }
         
@@ -197,63 +243,71 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
                 supportPeerDisposable.set((supportPeer.get()
                 |> take(1)
                 |> deliverOnMainQueue).start(next: { peerId in
-                    if let peerId = peerId, let navigationController = navigationController {
-                        dismissImpl?()
-                        context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(id: peerId)))
+                    guard let peerId = peerId else {
+                        return
                     }
+                    let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+                    |> deliverOnMainQueue).start(next: { peer in
+                        guard let peer = peer else {
+                            return
+                        }
+                        if let navigationController = navigationController {
+                            dismissImpl?()
+                            context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer)))
+                        }
+                    })
                 }))
             })
         ]), nil)
     }, logout: {
         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-        let alertController = textAlertController(context: context, title: presentationData.strings.Settings_LogoutConfirmationTitle, text: presentationData.strings.Settings_LogoutConfirmationText, actions: [
-            TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {
-            }),
-            TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {
-                let _ = logoutFromAccount(id: context.account.id, accountManager: context.sharedContext.accountManager, alreadyLoggedOutRemotely: false).start()
-                dismissImpl?()
-            })
-        ])
-        presentControllerImpl?(alertController, nil)
+        logoutConfirmationDisposable.set(nil)
+        logoutConfirmationDisposable.set((logoutConfirmationText(context: context, presentationData: presentationData)
+        |> deliverOnMainQueue).start(next: { text in
+            let alertController = textAlertController(context: context, title: presentationData.strings.Settings_LogoutConfirmationTitle, text: text, actions: [
+                TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {
+                }),
+                TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {
+                    let _ = logoutFromAccount(id: context.account.id, accountManager: context.sharedContext.accountManager, alreadyLoggedOutRemotely: false).start()
+                    dismissImpl?()
+                })
+            ], parseMarkdown: true)
+            presentControllerImpl?(alertController, nil)
+        }))
     })
-    
-    #if ENABLE_WALLET
-    let hasWallets = context.hasWallets
-    #else
-    let hasWallets: Signal<Bool, NoError> = .single(false)
-    #endif
-    
+        
     let signal = combineLatest(queue: .mainQueue(),
         context.sharedContext.presentationData,
-        context.sharedContext.accountManager.accessChallengeData(),
-        hasWallets
+        context.sharedContext.accountManager.accessChallengeData()
     )
-    |> map { presentationData, accessChallengeData, hasWallets -> (ItemListControllerState, (ItemListNodeState, Any)) in
-        let leftNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Cancel), style: .regular, enabled: true, action: {
-            dismissImpl?()
-        })
-        
+    |> map { presentationData, accessChallengeData -> (ItemListControllerState, (ItemListNodeState, Any)) in
         var hasPasscode = false
         switch accessChallengeData.data {
-            case .numericalPassword, .plaintextPassword:
+            case .numericalPassword, .plaintextPassword, .secured:
                 hasPasscode = true
             default:
                 break
         }
         
-        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.LogoutOptions_Title), leftNavigationButton: leftNavigationButton, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: logoutOptionsEntries(presentationData: presentationData, canAddAccounts: canAddAccounts, hasPasscode: hasPasscode, hasWallets: hasWallets), style: .blocks)
+        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.LogoutOptions_Title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: logoutOptionsEntries(presentationData: presentationData, canAddAccounts: canAddAccounts, hasPasscode: hasPasscode), style: .blocks)
         
         return (controllerState, (listState, arguments))
+    }
+    |> afterDisposed {
+        logoutConfirmationDisposable.dispose()
     }
     
     let controller = ItemListController(context: context, state: signal, tabBarItem: nil)
     controller.navigationPresentation = .modal
+    controller.didDisappear = { _ in
+        logoutConfirmationDisposable.set(nil)
+    }
     pushControllerImpl = { [weak navigationController] value in
         navigationController?.pushViewController(value, animated: false)
     }
     presentControllerImpl = { [weak controller] value, arguments in
-        controller?.present(value, in: .window(.root), with: arguments ?? ViewControllerPresentationArguments(presentationAnimation: .modalSheet))
+        controller?.present(value, in: .window(.root), with: arguments)
     }
     replaceTopControllerImpl = { [weak navigationController] c in
         navigationController?.replaceTopController(c, animated: true)
@@ -265,3 +319,22 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
     return controller
 }
 
+public func logoutConfirmationText(context: AccountContext, presentationData: PresentationData) -> Signal<String, NoError> {
+    guard WalletConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 }).isAvailable,
+          let walletContext = context.walletContext else {
+        return .single(presentationData.strings.Settings_LogoutConfirmationText)
+    }
+    return walletContext.logoutWarningBalance()
+    |> map { balance in
+        guard let balance else {
+            return presentationData.strings.Settings_LogoutConfirmationText
+        }
+        let amount = formatTonAmountText(
+            balance,
+            dateTimeFormat: presentationData.dateTimeFormat,
+            maxDecimalPositions: 1,
+            formatString: presentationData.strings.Currency_Grams
+        )
+        return presentationData.strings.Settings_LogoutConfirmationTextWithWallets(amount).string
+    }
+}

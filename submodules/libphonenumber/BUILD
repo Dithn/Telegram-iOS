@@ -1,4 +1,6 @@
 
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
 objc_library(
     name = "libphonenumber",
     enable_modules = True,
@@ -15,6 +17,9 @@ objc_library(
     ],
     sdk_frameworks = [
       "Foundation",
+    ],
+    copts = [
+        "-Werror",
     ],
     visibility = [
         "//visibility:public",

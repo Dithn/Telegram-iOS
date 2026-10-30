@@ -1,4 +1,4 @@
-#import "TGVideoCameraGLView.h"
+#import <LegacyComponents/TGVideoCameraGLView.h>
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES2/glext.h>
 #import <QuartzCore/CAEAGLLayer.h>
@@ -6,6 +6,10 @@
 #import <LegacyComponents/TGPaintShader.h>
 
 #import "LegacyComponentsInternal.h"
+#import "TGVideoCameraPipeline.h"
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
 @interface TGVideoCameraGLView ()
 {
@@ -134,7 +138,7 @@ bail:
 	[self reset];
 }
 
-- (void)displayPixelBuffer:(CVPixelBufferRef)pixelBuffer
+- (void)displayPixelBuffer:(TGVideoCameraRendererBuffer *)pixelBuffer
 {
 	static const GLfloat squareVertices[] =
     {
@@ -161,10 +165,10 @@ bail:
 			return;
 	}
 	
-	size_t frameWidth = CVPixelBufferGetWidth(pixelBuffer);
-	size_t frameHeight = CVPixelBufferGetHeight(pixelBuffer);
+	size_t frameWidth = CVPixelBufferGetWidth(pixelBuffer.buffer);
+	size_t frameHeight = CVPixelBufferGetHeight(pixelBuffer.buffer);
 	CVOpenGLESTextureRef texture = NULL;
-	CVReturn err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, _textureCache, pixelBuffer, NULL, GL_TEXTURE_2D, GL_RGBA, (GLsizei)frameWidth, (GLsizei)frameHeight, GL_BGRA, GL_UNSIGNED_BYTE, 0, &texture);
+	CVReturn err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, _textureCache, pixelBuffer.buffer, NULL, GL_TEXTURE_2D, GL_RGBA, (GLsizei)frameWidth, (GLsizei)frameHeight, GL_BGRA, GL_UNSIGNED_BYTE, 0, &texture);
 	
 	if (!texture || err)
 		return;
@@ -229,3 +233,5 @@ bail:
 }
 
 @end
+
+#pragma clang diagnostic pop

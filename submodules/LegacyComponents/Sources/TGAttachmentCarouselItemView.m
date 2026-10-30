@@ -1,4 +1,5 @@
-#import "TGAttachmentCarouselItemView.h"
+#import <LegacyComponents/LegacyComponents.h>
+#import <LegacyComponents/TGAttachmentCarouselItemView.h>
 
 #import "LegacyComponentsInternal.h"
 
@@ -13,7 +14,7 @@
 
 #import "TGTransitionLayout.h"
 
-#import "TGAttachmentCameraView.h"
+#import <LegacyComponents/TGAttachmentCameraView.h>
 
 #import "TGAttachmentPhotoCell.h"
 #import "TGAttachmentVideoCell.h"
@@ -28,7 +29,7 @@
 #import <LegacyComponents/TGMediaPickerGalleryItem.h>
 #import <LegacyComponents/TGMediaAssetsUtils.h>
 
-#import "TGMediaAvatarEditorTransition.h"
+#import <LegacyComponents/TGMediaAvatarEditorTransition.h>
 #import <LegacyComponents/TGPhotoEditorController.h>
 #import <LegacyComponents/TGVideoEditAdjustments.h>
 #import <LegacyComponents/TGMediaAsset+TGMediaEditableItem.h>
@@ -83,7 +84,6 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
     TGMenuSheetButtonItemView *_sendFileItemView;
     
     TGMediaPickerModernGalleryMixin *_galleryMixin;
-    TGMediaPickerModernGalleryMixin *_previewGalleryMixin;
     TGMediaAsset *_hiddenItem;
     
     bool _zoomedIn;
@@ -174,7 +174,7 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
                     return [SSignal complete];
                 
                 return [[strongSelf->_collectionView noOngoingTransitionSignal] then:[SSignal single:value]];
-            }] startWithNext:^(__unused TGMediaSelectionChange *change)
+            }] startStrictWithNext:^(__unused TGMediaSelectionChange *change)
             {
                 __strong TGAttachmentCarouselItemView *strongSelf = weakSelf;
                 if (strongSelf == nil)
@@ -190,7 +190,7 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
                 [strongSelf updateSendButtonsFromIndex:index];
                 
                 [strongSelf updateSelectionIndexes];
-            }]];
+            } file:__FILE_NAME__ line:__LINE__]];
         }
         
         if (allowEditing)
@@ -198,7 +198,7 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
             _editingContext = [[TGMediaEditingContext alloc] init];
             
             _itemsSizeChangedDisposable = [[SMetaDisposable alloc] init];
-            [_itemsSizeChangedDisposable setDisposable:[[[_editingContext cropAdjustmentsUpdatedSignal] deliverOn:[SQueue mainQueue]] startWithNext:^(__unused id next)
+            [_itemsSizeChangedDisposable setDisposable:[[[_editingContext cropAdjustmentsUpdatedSignal] deliverOn:[SQueue mainQueue]] startStrictWithNext:^(__unused id next)
             {
                 __strong TGAttachmentCarouselItemView *strongSelf = weakSelf;
                 if (strongSelf == nil)
@@ -217,7 +217,7 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
                             [strongSelf centerOnItemWithIndex:indexPath.row animated:false];
                     }
                 }
-            }]];
+            } file:__FILE_NAME__ line:__LINE__]];
         }
         
         _smallLayout = [[UICollectionViewFlowLayout alloc] init];
@@ -230,7 +230,7 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
         
         if (hasCamera)
         {
-            _cameraView = [[TGAttachmentCameraView alloc] initForSelfPortrait:selfPortrait];
+            _cameraView = [[TGAttachmentCameraView alloc] initForSelfPortrait:selfPortrait videoModeByDefault:false];
             _cameraView.frame = CGRectMake(_smallLayout.minimumLineSpacing, 0, TGAttachmentCellSize.width, TGAttachmentCellSize.height);
             [_cameraView startPreview];
             
@@ -430,7 +430,7 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
             return [SSignal complete];
         
         return [[strongSelf->_collectionView noOngoingTransitionSignal] then:[SSignal single:value]];
-    }] deliverOn:[SQueue mainQueue]] startWithNext:^(id next)
+    }] deliverOn:[SQueue mainQueue]] startStrictWithNext:^(id next)
     {
         __strong TGAttachmentCarouselItemView *strongSelf = weakSelf;
         if (strongSelf == nil)
@@ -456,7 +456,7 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
         
         if (strongSelf->_galleryMixin != nil && strongSelf->_fetchResult != nil)
             [strongSelf->_galleryMixin updateWithFetchResult:strongSelf->_fetchResult];
-    }]];
+    } file:__FILE_NAME__ line:__LINE__]];
 }
 
 - (SSignal *)_signalForItem:(TGMediaAsset *)asset
@@ -839,7 +839,7 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
     if ([cell isKindOfClass:[TGAttachmentAssetCell class]])
         thumbnailImage = cell.imageView.image;
     
-    TGMediaPickerModernGalleryMixin *mixin = [[TGMediaPickerModernGalleryMixin alloc] initWithContext:_context item:asset fetchResult:_fetchResult parentController:self.parentController thumbnailImage:thumbnailImage selectionContext:_selectionContext editingContext:_editingContext hasCaptions:(_allowCaptions && !_forProfilePhoto) allowCaptionEntities:self.allowCaptionEntities hasTimer:self.hasTimer onlyCrop:self.onlyCrop inhibitDocumentCaptions:_inhibitDocumentCaptions inhibitMute:self.inhibitMute asFile:self.asFile itemsLimit:TGAttachmentDisplayedAssetLimit recipientName:self.recipientName hasSilentPosting:self.hasSilentPosting hasSchedule:self.hasSchedule reminder:self.reminder stickersContext:self.stickersContext];
+    TGMediaPickerModernGalleryMixin *mixin = [[TGMediaPickerModernGalleryMixin alloc] initWithContext:_context item:asset fetchResult:_fetchResult parentController:self.parentController thumbnailImage:thumbnailImage selectionContext:_selectionContext editingContext:_editingContext hasCaptions:(_allowCaptions && !_forProfilePhoto) allowCaptionEntities:self.allowCaptionEntities hasTimer:self.hasTimer onlyCrop:self.onlyCrop inhibitDocumentCaptions:_inhibitDocumentCaptions inhibitMute:self.inhibitMute asFile:self.asFile itemsLimit:TGAttachmentDisplayedAssetLimit recipientName:self.recipientName hasSilentPosting:self.hasSilentPosting hasSchedule:self.hasSchedule reminder:self.reminder hasCoverButton:false stickersContext:self.stickersContext];
     mixin.presentScheduleController = self.presentScheduleController;
     mixin.presentTimerController = self.presentTimerController;
     __weak TGAttachmentCarouselItemView *weakSelf = self;
@@ -908,7 +908,19 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
             editableItem = [[TGCameraCapturedVideo alloc] initWithAsset:asset livePhoto:false];
         }
         
-        TGPhotoEditorController *controller = [[TGPhotoEditorController alloc] initWithContext:[windowManager context] item:editableItem intent:_disableStickers ? TGPhotoEditorControllerSignupAvatarIntent : TGPhotoEditorControllerAvatarIntent adjustments:nil caption:nil screenImage:thumbnailImage availableTabs:[TGPhotoEditorController defaultTabsForAvatarIntent] selectedTab:TGPhotoEditorCropTab];
+        TGPhotoEditorControllerIntent intent = TGPhotoEditorControllerAvatarIntent;
+        if (_disableStickers) {
+            intent = TGPhotoEditorControllerSignupAvatarIntent;
+        }
+        if (_forum) {
+            intent |= TGPhotoEditorControllerForumAvatarIntent;
+        }
+        if (_isSuggesting) {
+            intent |= TGPhotoEditorControllerSuggestingAvatarIntent;
+        }
+        
+        TGPhotoEditorController *controller = [[TGPhotoEditorController alloc] initWithContext:[windowManager context] item:editableItem intent:intent adjustments:nil caption:nil screenImage:thumbnailImage availableTabs:[TGPhotoEditorController defaultTabsForAvatarIntent:!_disableStickers] selectedTab:TGPhotoEditorCropTab];
+        controller.modalPresentationStyle = UIModalPresentationFullScreen;
         controller.editingContext = _editingContext;
         controller.stickersContext = _stickersContext;
         controller.dontHideStatusBar = true;
@@ -925,11 +937,10 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
         };
         
         __weak TGPhotoEditorController *weakController = controller;
-        controller.didFinishEditing = ^(id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, __unused UIImage *thumbnailImage, __unused bool hasChanges)
+        controller.didFinishEditing = ^(id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, __unused UIImage *thumbnailImage, __unused bool hasChanges, void(^commit)(void))
         {
             if (!hasChanges)
                 return;
-            
             __strong TGAttachmentCarouselItemView *strongSelf = weakSelf;
             if (strongSelf == nil)
                 return;
@@ -962,13 +973,13 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
                     }
                 }
                 if (strongSelf.avatarVideoCompletionBlock != nil)
-                    strongSelf.avatarVideoCompletionBlock(previewImage, [NSURL fileURLWithPath:filePath], videoAdjustments);
+                    strongSelf.avatarVideoCompletionBlock(previewImage, [NSURL fileURLWithPath:filePath], videoAdjustments, commit);
             } else {
                 if (strongSelf.avatarCompletionBlock != nil)
-                    strongSelf.avatarCompletionBlock(resultImage);
+                    strongSelf.avatarCompletionBlock(resultImage, commit);
             }
         };
-        controller.didFinishEditingVideo = ^(AVAsset *asset, id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, UIImage *thumbnailImage, bool hasChanges) {
+        controller.didFinishEditingVideo = ^(AVAsset *asset, id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, UIImage *thumbnailImage, bool hasChanges, void(^commit)(void)) {
             if (!hasChanges)
                 return;
             
@@ -981,7 +992,7 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
                 return;
             
             if (strongSelf.avatarVideoCompletionBlock != nil)
-                strongSelf.avatarVideoCompletionBlock(resultImage, asset, adjustments);
+                strongSelf.avatarVideoCompletionBlock(resultImage, asset, adjustments, commit);
         };
         controller.requestThumbnailImage = ^(id<TGMediaEditableItem> editableItem)
         {
@@ -1302,45 +1313,6 @@ const NSUInteger TGAttachmentDisplayedAssetLimit = 500;
 {
     _sendMediaItemView.frame = CGRectMake(0, [self preferredHeightForWidth:self.frame.size.width screenHeight:self.screenHeight], self.frame.size.width, [_sendMediaItemView preferredHeightForWidth:self.frame.size.width screenHeight:self.screenHeight]);
     _sendFileItemView.frame = CGRectMake(0, CGRectGetMaxY(_sendMediaItemView.frame), self.frame.size.width, [_sendFileItemView preferredHeightForWidth:self.frame.size.width screenHeight:self.screenHeight]);
-}
-
-#pragma mark - 
-
-- (UIView *)previewSourceView
-{
-    return _collectionView;
-}
-
-- (UIViewController *)previewingContext:(id<UIViewControllerPreviewing>)previewingContext viewControllerForLocation:(CGPoint)location
-{
-    if (self.openEditor) {
-        return nil;
-    }
-    
-    NSIndexPath *indexPath = [_collectionView indexPathForItemAtPoint:location];
-    if (indexPath == nil)
-        return nil;
-    
-    CGRect cellFrame = [_collectionView.collectionViewLayout layoutAttributesForItemAtIndexPath:indexPath].frame;
-    previewingContext.sourceRect = cellFrame;
-    
-    TGMediaAsset *asset = nil;
-    _previewGalleryMixin = [self galleryMixinForIndexPath:indexPath previewMode:true outAsset:&asset];
-    UIViewController *controller = [_previewGalleryMixin galleryController];
-    
-    CGSize screenSize = TGScreenSize();
-    controller.preferredContentSize = TGFitSize(asset.dimensions, screenSize);
-    [_previewGalleryMixin setPreviewMode];
-    return controller;
-}
-
-- (void)previewingContext:(id<UIViewControllerPreviewing>)__unused previewingContext commitViewController:(UIViewController *)__unused viewControllerToCommit
-{
-    _galleryMixin = _previewGalleryMixin;
-    _previewGalleryMixin = nil;
-    
-    [self _setupGalleryMixin:_galleryMixin];
-    [_galleryMixin present];
 }
 
 @end

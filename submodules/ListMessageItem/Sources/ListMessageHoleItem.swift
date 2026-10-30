@@ -4,13 +4,16 @@ import AsyncDisplayKit
 import Display
 import TelegramCore
 import SwiftSignalKit
-import Postbox
 
 final class ListMessageHoleItem: ListViewItem {
+    var neighborDescriptor: AnyEquatable {
+        return AnyEquatable.noNeighborInfluence
+    }
+
     public init() {
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         let configure = { () -> Void in
             let node = ListMessageHoleItemNode()
             
@@ -38,7 +41,7 @@ final class ListMessageHoleItem: ListViewItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? ListMessageHoleItemNode {
                 nodeValue.updateSelectionState(animated: false)
@@ -66,13 +69,13 @@ final class ListMessageHoleItemNode: ListViewItemNode {
     private var activityIndicator: UIActivityIndicatorView?
     
     init() {
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
     }
     
     override func didLoad() {
         super.didLoad()
         
-        let activityIndicator = UIActivityIndicatorView(style: .gray)
+        let activityIndicator = UIActivityIndicatorView(style: .medium)
         self.activityIndicator = activityIndicator
         self.view.addSubview(activityIndicator)
         let size = activityIndicator.bounds.size
@@ -80,7 +83,7 @@ final class ListMessageHoleItemNode: ListViewItemNode {
         activityIndicator.startAnimating()
     }
     
-    override public func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, previousItem: ListViewItem?, nextItem: ListViewItem?) {
+    override public func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, neighbors: ListViewItemNeighbors) {
         if let item = item as? ListMessageHoleItem {
             let doLayout = self.asyncLayout()
             let merged = (top: false, bottom: false, dateAtBottom: false)
@@ -103,7 +106,7 @@ final class ListMessageHoleItemNode: ListViewItemNode {
         }
     }
     
-    func transitionNode(id: MessageId, media: Media) -> ASDisplayNode? {
+    func transitionNode(id: EngineMessage.Id, media: EngineMedia) -> ASDisplayNode? {
         return nil
     }
     

@@ -10,13 +10,6 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
         ]
     }
     
-    var messageThreadHoles: [PeerId.Namespace: [MessageId.Namespace]] = [:]
-    for peerNamespace in peerIdNamespacesWithInitialCloudMessageHoles {
-        messageThreadHoles[peerNamespace] = [
-            Namespaces.Message.Cloud
-        ]
-    }
-    
     // To avoid upgrading the database, **new** tags can be added here
     // Uninitialized peers will fill the info using messageHoles
     var upgradedMessageHoles: [PeerId.Namespace: [MessageId.Namespace: Set<MessageTags>]] = [:]
@@ -42,9 +35,18 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
         ),
         messageHoles: messageHoles,
         upgradedMessageHoles: upgradedMessageHoles,
-        messageThreadHoles: messageThreadHoles,
+        messageThreadHoles: { peerIdNamespace, threadId in
+            if threadId == Message.newTopicThreadId {
+                return nil
+            }
+            if peerIdNamespacesWithInitialCloudMessageHoles.contains(peerIdNamespace) {
+                return [Namespaces.Message.Cloud]
+            }
+            return nil
+        },
         existingMessageTags: MessageTags.all,
-        messageTagsWithSummary: [.unseenPersonalMessage, .pinned, .video, .photo, .gif, .music, .voiceOrInstantVideo, .webPage, .file, .unseenReaction],
+        messageTagsWithSummary: [.unseenPersonalMessage, .pinned, .video, .photo, .gif, .music, .voiceOrInstantVideo, .webPage, .file, .unseenReaction, .unseenPollVote],
+        messageTagsWithThreadSummary: [.unseenPersonalMessage, .unseenReaction, .unseenPollVote],
         existingGlobalMessageTags: GlobalMessageTags.all,
         peerNamespacesRequiringMessageTextIndex: [Namespaces.Peer.SecretChat],
         peerSummaryCounterTags: { peer, isContact in
@@ -59,21 +61,48 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
             } else if let _ = peer as? TelegramGroup {
                 return .group
             } else if let _ = peer as? TelegramSecretChat {
-                return .nonContact
+                // isContact is resolved through the associated cloud user, matching what
+                // ChatListFilterPredicate does, so a folder counts the chats it actually shows.
+                if isContact {
+                    return .contact
+                } else {
+                    return .nonContact
+                }
             } else if let channel = peer as? TelegramChannel {
                 switch channel.info {
                 case .broadcast:
                     return .channel
                 case .group:
-                    if channel.username != nil {
-                        return .group
-                    } else {
-                        return .group
-                    }
+                    return .group
                 }
+            } else if let _ = peer as? TelegramCommunity {
+                return .nonContact
             } else {
                 assertionFailure()
                 return .nonContact
+            }
+        },
+        peerSummaryIsThreadBased: { peer, associatedPeer in
+            if let channel = peer as? TelegramChannel {
+                if channel.flags.contains(.isForum) {
+                    if channel.flags.contains(.displayForumAsTabs) {
+                        return (false, false)
+                    } else {
+                        return (true, false)
+                    }
+                } else if channel.flags.contains(.isMonoforum) {
+                    if let associatedPeer = associatedPeer as? TelegramChannel, associatedPeer.hasPermission(.manageDirect) {
+                        return (true, true)
+                    } else {
+                        return (false, false)
+                    }
+                } else {
+                    return (false, false)
+                }
+            } else if let user = peer as? TelegramUser, let botInfo = user.botInfo, botInfo.flags.contains(.hasForum) {
+                return (true, false)
+            } else {
+                return (false, false)
             }
         },
         additionalChatListIndexNamespace: Namespaces.Message.Cloud,
@@ -89,7 +118,165 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
         },
         defaultGlobalNotificationSettings: PostboxGlobalNotificationSettings(defaultIncludePeer: { peer in
             return GlobalNotificationSettings.defaultSettings.defaultIncludePeer(peer: peer)
-        })
+        }),
+        mergeMessageAttributes: { previous, updated in
+            if previous.isEmpty {
+                return
+            }
+            var audioTranscription: AudioTranscriptionMessageAttribute?
+            for attribute in previous {
+                if let attribute = attribute as? AudioTranscriptionMessageAttribute {
+                    audioTranscription = attribute
+                    break
+                }
+            }
+            var previousDerivedData: DerivedDataMessageAttribute?
+            for attribute in previous {
+                if let attribute = attribute as? DerivedDataMessageAttribute {
+                    previousDerivedData = attribute
+                    break
+                }
+            }
+            var previousRichText: RichTextMessageAttribute?
+            var previousEphemeralReplacement: EphemeralReplacementMessageAttribute?
+            for attribute in previous {
+                if let attribute = attribute as? RichTextMessageAttribute {
+                    previousRichText = attribute
+                } else if let attribute = attribute as? EphemeralReplacementMessageAttribute {
+                    previousEphemeralReplacement = attribute
+                }
+            }
+            
+            if let audioTranscription {
+                var found = false
+                for i in 0 ..< updated.count {
+                    if let attribute = updated[i] as? AudioTranscriptionMessageAttribute {
+                        updated[i] = attribute.merge(withPrevious: audioTranscription)
+                        found = true
+                        break
+                    }
+                }
+                if !found {
+                    updated.append(audioTranscription)
+                }
+            }
+            if let previousDerivedData {
+                var found = false
+                for i in 0 ..< updated.count {
+                    if let _ = updated[i] as? DerivedDataMessageAttribute {
+                        found = true
+                        break
+                    }
+                }
+                if !found {
+                    updated.append(previousDerivedData)
+                }
+            }
+            if let previousRichText, previousRichText.fullInstantPage != nil {
+                for i in 0 ..< updated.count {
+                    if let attribute = updated[i] as? RichTextMessageAttribute {
+                        if attribute.fullInstantPage == nil {
+                            if attribute.instantPage == previousRichText.instantPage {
+                                updated[i] = previousRichText
+                            }
+                        }
+                        break
+                    }
+                }
+            }
+            if let previousEphemeralReplacement, !updated.contains(where: { $0 is EphemeralReplacementMessageAttribute }) {
+                updated.append(previousEphemeralReplacement)
+            }
+        },
+        decodeMessageThreadInfo: { entry in
+            guard let data = entry.get(MessageHistoryThreadData.self) else {
+                return nil
+            }
+            return Message.AssociatedThreadInfo(title: data.info.title, icon: data.info.icon, iconColor: data.info.iconColor, isClosed: data.isClosed)
+        },
+        decodeAutoremoveTimeout: { cachedData in
+            if let cachedData = cachedData as? CachedUserData {
+                if case let .known(value) = cachedData.autoremoveTimeout {
+                    return value?.effectiveValue
+                }
+            } else if let cachedData = cachedData as? CachedGroupData {
+                if case let .known(value) = cachedData.autoremoveTimeout {
+                    return value?.effectiveValue
+                }
+            } else if let cachedData = cachedData as? CachedChannelData {
+                if case let .known(value) = cachedData.autoremoveTimeout {
+                    return value?.effectiveValue
+                }
+            }
+            return nil
+        },
+        decodeDisplayPeerAsRegularChat: { cachedData in
+            if let cachedData = cachedData as? CachedChannelData {
+                if case let .known(value) = cachedData.viewForumAsMessages {
+                    return value
+                }
+            }
+            return false
+        },
+        isPeerUpgradeMessage: { message in
+            for media in message.media {
+                if let action = media as? TelegramMediaAction {
+                    switch action.action {
+                    case .groupMigratedToChannel, .channelMigratedFromGroup:
+                        return true
+                    default:
+                        break
+                    }
+                }
+            }
+            return false
+        },
+        automaticThreadIndexInfo: { peerId, _ in
+            if peerId.namespace == Namespaces.Peer.CloudUser {
+                return StoredMessageHistoryThreadInfo(data: CodableEntry(data: Data()), summary: StoredMessageHistoryThreadInfo.Summary(totalUnreadCount: 0, isMarkedUnread: false, mutedUntil: nil, maxOutgoingReadId: 0))
+            } else {
+                return nil
+            }
+        },
+        customTagsFromAttributes: { attributes in
+            var isTags = false
+            
+            for attribute in attributes {
+                if let attribute = attribute as? PendingReactionsMessageAttribute, attribute.isTags {
+                    isTags = true
+                    break
+                } else if let attribute = attribute as? ReactionsMessageAttribute, attribute.isTags {
+                    isTags = true
+                    break
+                }
+            }
+            
+            if !isTags {
+                return []
+            }
+            
+            guard let reactions = mergedMessageReactions(attributes: attributes, isTags: isTags), !reactions.reactions.isEmpty else {
+                return []
+            }
+            
+            var result: [MemoryBuffer] = []
+            
+            for reaction in reactions.reactions {
+                if reaction.isSelected {
+                    let tag = ReactionsMessageAttribute.messageTag(reaction: reaction.value)
+                    if !result.contains(tag) {
+                        result.append(tag)
+                    }
+                }
+            }
+            
+            if !result.isEmpty {
+                result.sort()
+            }
+            
+            return result
+        },
+        displaySavedMessagesAsTopicListPreferencesKey: PreferencesKeys.displaySavedChatsAsTopics()
     )
 }()
 
@@ -99,7 +286,7 @@ public enum AccountTransactionError {
 
 public func accountTransaction<T>(rootPath: String, id: AccountRecordId, encryptionParameters: ValueBoxEncryptionParameters, isReadOnly: Bool, useCopy: Bool = false, useCaches: Bool = true, removeDatabaseOnError: Bool = true, transaction: @escaping (Postbox, Transaction) -> T) -> Signal<T, AccountTransactionError> {
     let path = "\(rootPath)/\(accountRecordIdPathName(id))"
-    let postbox = openPostbox(basePath: path + "/postbox", seedConfiguration: telegramPostboxSeedConfiguration, encryptionParameters: encryptionParameters, timestampForAbsoluteTimeBasedOperations: Int32(CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970), isTemporary: true, isReadOnly: isReadOnly, useCopy: useCopy, useCaches: useCaches, removeDatabaseOnError: removeDatabaseOnError)
+    let postbox = openPostbox(basePath: path + "/postbox", seedConfiguration: telegramPostboxSeedConfiguration, encryptionParameters: encryptionParameters, timestampForAbsoluteTimeBasedOperations: Int32(CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970), isMainProcess: false, isTemporary: true, isReadOnly: isReadOnly, useCopy: useCopy, useCaches: useCaches, removeDatabaseOnError: removeDatabaseOnError)
     return postbox
     |> castError(AccountTransactionError.self)
     |> mapToSignal { value -> Signal<T, AccountTransactionError> in

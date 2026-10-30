@@ -12,6 +12,7 @@ import AppBundle
 
 public final class ItemListAddressItem: ListViewItem, ItemListItem {
     let theme: PresentationTheme
+    let systemStyle: ItemListSystemStyle
     let label: String
     let text: String
     let imageSignal: Signal<(TransformImageArguments) -> DrawingContext?, NoError>?
@@ -20,13 +21,14 @@ public final class ItemListAddressItem: ListViewItem, ItemListItem {
     let style: ItemListStyle
     let displayDecorations: Bool
     let action: (() -> Void)?
-    let longTapAction: (() -> Void)?
+    let longTapAction: ((ASDisplayNode, String) -> Void)?
     let linkItemAction: ((TextLinkItemActionType, TextLinkItem) -> Void)?
     
     public let tag: Any?
     
-    public init(theme: PresentationTheme, label: String, text: String, imageSignal: Signal<(TransformImageArguments) -> DrawingContext?, NoError>?, selected: Bool? = nil, sectionId: ItemListSectionId, style: ItemListStyle, displayDecorations: Bool = true, action: (() -> Void)?, longTapAction: (() -> Void)? = nil, linkItemAction: ((TextLinkItemActionType, TextLinkItem) -> Void)? = nil, tag: Any? = nil) {
+    public init(theme: PresentationTheme, systemStyle: ItemListSystemStyle = .legacy, label: String, text: String, imageSignal: Signal<(TransformImageArguments) -> DrawingContext?, NoError>?, selected: Bool? = nil, sectionId: ItemListSectionId, style: ItemListStyle, displayDecorations: Bool = true, action: (() -> Void)?, longTapAction: ((ASDisplayNode, String) -> Void)? = nil, linkItemAction: ((TextLinkItemActionType, TextLinkItem) -> Void)? = nil, tag: Any? = nil) {
         self.theme = theme
+        self.systemStyle = systemStyle
         self.label = label
         self.text = text
         self.imageSignal = imageSignal
@@ -40,10 +42,10 @@ public final class ItemListAddressItem: ListViewItem, ItemListItem {
         self.tag = tag
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = ItemListAddressItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -56,13 +58,13 @@ public final class ItemListAddressItem: ListViewItem, ItemListItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? ItemListAddressItemNode {
                 let makeLayout = nodeValue.asyncLayout()
                 
                 async {
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply(animation)
@@ -140,7 +142,7 @@ public class ItemListAddressItemNode: ListViewItemNode {
         
         self.iconNode = ASImageNode()
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
         
         self.addSubnode(self.labelNode)
         self.addSubnode(self.textNode)
@@ -157,7 +159,7 @@ public class ItemListAddressItemNode: ListViewItemNode {
         
         let selectionNodeLayout = ItemListSelectableControlNode.asyncLayout(self.selectionNode)
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             var updatedTheme: PresentationTheme?
             if currentItem?.theme !== item.theme {
                 updatedTheme = item.theme
@@ -167,6 +169,7 @@ public class ItemListAddressItemNode: ListViewItemNode {
             let leftInset: CGFloat = 16.0 + params.leftInset
             let rightInset: CGFloat = 8.0 + params.rightInset
             let separatorHeight = UIScreenPixel
+            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
             
             let itemBackgroundColor: UIColor
             let itemSeparatorColor: UIColor
@@ -188,7 +191,7 @@ public class ItemListAddressItemNode: ListViewItemNode {
             var leftOffset: CGFloat = 0.0
             var selectionNodeWidthAndApply: (CGFloat, (CGSize, Bool) -> ItemListSelectableControlNode)?
             if let selected = item.selected {
-                let (selectionWidth, selectionApply) = selectionNodeLayout(item.theme.list.itemCheckColors.strokeColor, item.theme.list.itemCheckColors.fillColor, item.theme.list.itemCheckColors.foregroundColor, selected, false)
+                let (selectionWidth, selectionApply) = selectionNodeLayout(item.theme.list.itemCheckColors.strokeColor, item.theme.list.itemCheckColors.fillColor, item.theme.list.itemCheckColors.foregroundColor, selected, .regular, nil)
                 selectionNodeWidthAndApply = (selectionWidth, selectionApply)
                 leftOffset += selectionWidth - 8.0
             }
@@ -197,16 +200,21 @@ public class ItemListAddressItemNode: ListViewItemNode {
             let (labelLayout, labelApply) = makeLabelLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.label, font: labelFont, textColor: labelColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftOffset - leftInset - rightInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
             let baseColor = item.theme.list.itemPrimaryTextColor
-            let string = stringWithAppliedEntities(item.text, entities: [], baseColor: baseColor, linkColor: item.theme.list.itemAccentColor, baseFont: textFont, linkFont: textFont, boldFont: textBoldFont, italicFont: textItalicFont, boldItalicFont: textBoldItalicFont, fixedFont: textFixedFont, blockQuoteFont: textFont)
+            let string = stringWithAppliedEntities(item.text, entities: [], baseColor: baseColor, linkColor: item.theme.list.itemAccentColor, baseFont: textFont, linkFont: textFont, boldFont: textBoldFont, italicFont: textItalicFont, boldItalicFont: textBoldItalicFont, fixedFont: textFixedFont, blockQuoteFont: textFont, message: nil)
             
             let (textLayout, textApply) = makeTextLayout(TextNodeLayoutArguments(attributedString: string, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - leftOffset - leftInset - rightInset - 98.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             let padding: CGFloat = !item.label.isEmpty ? 39.0 : 20.0
             
-            let imageSide = min(90.0, max(46.0, textLayout.size.height + padding - 18.0))
-            let imageSize = CGSize(width: imageSide, height: imageSide)
-            let imageApply = makeImageLayout(TransformImageArguments(corners: ImageCorners(radius: 4.0), imageSize: imageSize, boundingSize: imageSize, intrinsicInsets: UIEdgeInsets()))
+            var verticalInset: CGFloat = 0.0
+            if case .glass = item.systemStyle {
+                verticalInset = 4.0
+            }
             
-            let contentSize = CGSize(width: params.width, height: max(textLayout.size.height + padding, imageSize.height + 18.0))
+            let imageSide = min(90.0, max(66.0, textLayout.size.height + padding - 18.0))
+            let imageSize = CGSize(width: imageSide, height: imageSide)
+            let imageApply = makeImageLayout(TransformImageArguments(corners: ImageCorners(radius: item.systemStyle == .glass ? 18.0 : 4.0), imageSize: imageSize, boundingSize: imageSize, intrinsicInsets: UIEdgeInsets()))
+            
+            let contentSize = CGSize(width: params.width, height: max(textLayout.size.height + padding, imageSize.height + 14.0) + verticalInset * 2.0)
             
             let nodeLayout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
             return (nodeLayout, { [weak self] animation in
@@ -264,11 +272,11 @@ public class ItemListAddressItemNode: ListViewItemNode {
                             selectionNode?.removeFromSupernode()
                         })
                     }
+                                        
+                    strongSelf.labelNode.frame = CGRect(origin: CGPoint(x: leftOffset + leftInset, y: verticalInset + 11.0), size: labelLayout.size)
+                    strongSelf.textNode.frame = CGRect(origin: CGPoint(x: leftOffset + leftInset, y: verticalInset + (item.label.isEmpty ? 11.0 : 31.0)), size: textLayout.size)
                     
-                    strongSelf.labelNode.frame = CGRect(origin: CGPoint(x: leftOffset + leftInset, y: 11.0), size: labelLayout.size)
-                    strongSelf.textNode.frame = CGRect(origin: CGPoint(x: leftOffset + leftInset, y: item.label.isEmpty ? 11.0 : 31.0), size: textLayout.size)
-                    
-                    let imageFrame = CGRect(origin: CGPoint(x: params.width - imageSize.width - rightInset, y: floorToScreenPixels((contentSize.height - imageSize.height) / 2.0)), size: imageSize)
+                    let imageFrame = CGRect(origin: CGPoint(x: params.width - imageSize.width - rightInset - 3.0, y: verticalInset + 7.0), size: imageSize)
                     strongSelf.imageNode.frame = imageFrame
                     
                     if let icon = strongSelf.iconNode.image {
@@ -316,7 +324,7 @@ public class ItemListAddressItemNode: ListViewItemNode {
                             var hasBottomCorners = false
                             switch neighbors.top {
                                 case .sameSection(false):
-                                    strongSelf.topStripeNode.isHidden = true
+                                    strongSelf.topStripeNode.isHidden = !item.displayDecorations
                                 default:
                                     hasTopCorners = true
                                     strongSelf.topStripeNode.isHidden = hasCorners || !item.displayDecorations
@@ -327,20 +335,20 @@ public class ItemListAddressItemNode: ListViewItemNode {
                                 case .sameSection(false):
                                     bottomStripeInset = 16.0 + params.leftInset
                                     bottomStripeOffset = -separatorHeight
-                                    strongSelf.bottomStripeNode.isHidden = false
+                                    strongSelf.bottomStripeNode.isHidden = !item.displayDecorations
                                 default:
                                     bottomStripeInset = 0.0
                                     bottomStripeOffset = 0.0
                                     hasBottomCorners = true
-                                    strongSelf.bottomStripeNode.isHidden = hasCorners
+                                    strongSelf.bottomStripeNode.isHidden = hasCorners || !item.displayDecorations
                             }
                         
-                            strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                            strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                         
                             strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
-                            strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                            strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                             strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: separatorHeight))
-                            strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: params.width - bottomStripeInset, height: separatorHeight))
+                            strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: params.width - bottomStripeInset - params.rightInset - separatorRightInset, height: separatorHeight))
                     }
                     
                     strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: contentSize.height + UIScreenPixel + UIScreenPixel))
@@ -387,7 +395,7 @@ public class ItemListAddressItemNode: ListViewItemNode {
         }
     }
     
-    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
@@ -396,7 +404,10 @@ public class ItemListAddressItemNode: ListViewItemNode {
     }
     
     override public func longTapped() {
-        self.item?.longTapAction?()
+        guard let item = self.item else {
+            return
+        }
+        item.longTapAction?(self, item.text)
     }
     
     public var tag: Any? {

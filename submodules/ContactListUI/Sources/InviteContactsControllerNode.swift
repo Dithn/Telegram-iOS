@@ -48,16 +48,16 @@ private enum InviteContactsEntry: Comparable, Identifiable {
     func item(context: AccountContext, presentationData: PresentationData, interaction: InviteContactsInteraction) -> ListViewItem {
         switch self {
             case let .option(_, option, _, _):
-                return ContactListActionItem(presentationData: ItemListPresentationData(presentationData), title: option.title, icon: option.icon, header: nil, action: option.action)
+                return ContactListActionItem(presentationData: ItemListPresentationData(presentationData), systemStyle: .glass, title: option.title, icon: option.icon, header: nil, action: option.action)
             case let .peer(_, id, contact, count, selection, theme, strings, nameSortOrder, nameDisplayOrder):
                 let status: ContactsPeerItemStatus
                 if count != 0 {
-                    status = .custom(string: strings.Contacts_ImportersCount(count), multiline: false)
+                    status = .custom(string: NSAttributedString(string: strings.Contacts_ImportersCount(count)), multiline: false, isActive: false, icon: nil)
                 } else {
                     status = .none
                 }
-                let peer: EnginePeer = .user(TelegramUser(id: EnginePeer.Id(namespace: .max, id: EnginePeer.Id.Id._internalFromInt64Value(0)), accessHash: nil, firstName: contact.firstName, lastName: contact.lastName, username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: []))
-                return ContactsPeerItem(presentationData: ItemListPresentationData(presentationData), sortOrder: nameSortOrder, displayOrder: nameDisplayOrder, context: context, peerMode: .peer, peer: .peer(peer: peer, chatPeer: peer), status: status, enabled: true, selection: selection, editing: ContactsPeerItemEditing(editable: false, editing: false, revealed: false), index: nil, header: ChatListSearchItemHeader(type: .contacts, theme: theme, strings: strings, actionTitle: nil, action: nil), action: { _ in
+                let peer: EnginePeer = .user(TelegramUser(id: EnginePeer.Id(namespace: .max, id: EnginePeer.Id.Id._internalFromInt64Value(0)), accessHash: nil, firstName: contact.firstName, lastName: contact.lastName, username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: [], storiesHidden: nil, nameColor: nil, backgroundEmojiId: nil, profileColor: nil, profileBackgroundEmojiId: nil, subscriberCount: nil, verificationIconFileId: nil))
+                return ContactsPeerItem(presentationData: ItemListPresentationData(presentationData), systemStyle: .glass, sortOrder: nameSortOrder, displayOrder: nameDisplayOrder, context: context, peerMode: .peer, peer: .peer(peer: peer, chatPeer: peer), status: status, enabled: true, selection: selection, editing: ContactsPeerItemEditing(editable: false, editing: false, revealed: false), index: nil, header: ChatListSearchItemHeader(type: .contacts, theme: theme, strings: strings, actionTitle: nil, action: nil), action: { _ in
                     interaction.toggleContact(id)
                 })
         }
@@ -290,7 +290,7 @@ final class InviteContactsControllerNode: ASDisplayNode {
         
         self.presentationDataPromise = Promise(self.presentationData)
         
-        self.listNode = ListView()
+        self.listNode = ListViewImpl()
         self.listNode.accessibilityPageScrolledString = { row, count in
             return presentationData.strings.VoiceOver_ScrollStatus(row, count).string
         }
@@ -325,7 +325,7 @@ final class InviteContactsControllerNode: ASDisplayNode {
                     strongSelf.updateThemeAndStrings()
                 }
             }
-        })
+        }).strict()
         
         let selectionStateSignal = self.selectionStatePromise.get()
         let transition: Signal<InviteContactsTransition, NoError>
@@ -428,7 +428,7 @@ final class InviteContactsControllerNode: ASDisplayNode {
         
         self.disposable = transition.start(next: { [weak self] transition in
             self?.enqueueTransition(transition)
-        })
+        }).strict()
         
         shareImpl = { [weak self] in
             if let strongSelf = self {
@@ -477,7 +477,9 @@ final class InviteContactsControllerNode: ASDisplayNode {
         var headerInsets = layout.insets(options: [.input])
         headerInsets.top += actualNavigationBarHeight
         
-        let countPanelHeight = self.countPanelNode.updateLayout(width: layout.size.width, sideInset: layout.safeInsets.left, bottomInset: layout.intrinsicInsets.bottom, transition: transition)
+        // The bottom count panel spans iPhone Duo's side strip; it keeps clear only of a corner block at the bottom.
+        let bottomInsets = layout.bottomEdgeSideInsets()
+        let countPanelHeight = self.countPanelNode.updateLayout(width: layout.size.width, leftInset: bottomInsets.left, rightInset: bottomInsets.right, bottomInset: layout.intrinsicInsets.bottom, transition: transition)
         if self.selectionState.selectedContactIndices.isEmpty {
             transition.updateFrame(node: self.countPanelNode, frame: CGRect(origin: CGPoint(x: 0.0, y: layout.size.height), size: CGSize(width: layout.size.width, height: countPanelHeight)))
         } else {
@@ -508,16 +510,17 @@ final class InviteContactsControllerNode: ASDisplayNode {
             return
         }
         
-        self.searchDisplayController = SearchDisplayController(presentationData: self.presentationData, contentNode: ContactsSearchContainerNode(context: self.context, onlyWriteable: false, categories: [.deviceContacts], addContact: nil, openPeer: { [weak self] peer in
+        self.searchDisplayController = SearchDisplayController(presentationData: self.presentationData, contentNode: ContactsSearchContainerNode(context: self.context, onlyWriteable: false, categories: [.deviceContacts], addContact: nil, openPeer: { [weak self] peer, _ in
             if let strongSelf = self, case let .deviceContact(id, _) = peer {
                 strongSelf.selectionState = strongSelf.selectionState.withSelectedContactId(id)
                 strongSelf.requestDeactivateSearch?()
             }
+        }, openDisabledPeer: { _, _ in
         }, contextAction: nil), cancel: { [weak self] in
             if let requestDeactivateSearch = self?.requestDeactivateSearch {
                 requestDeactivateSearch()
             }
-        })
+        }, fieldStyle: placeholderNode.fieldStyle)
         
         self.searchDisplayController?.containerLayoutUpdated(containerLayout, navigationBarHeight: navigationBarHeight, transition: .immediate)
         self.searchDisplayController?.activate(insertSubnode: { [weak self, weak placeholderNode] subnode, isSearchBar in

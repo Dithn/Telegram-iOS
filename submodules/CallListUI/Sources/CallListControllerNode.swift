@@ -1,4 +1,5 @@
 import Foundation
+import LottieSettings
 import UIKit
 import AsyncDisplayKit
 import Display
@@ -14,6 +15,11 @@ import ChatListSearchItemHeader
 import AnimatedStickerNode
 import TelegramAnimatedStickerNode
 import AppBundle
+import ItemListPeerActionItem
+import EdgeEffect
+import ComponentFlow
+import ComponentDisplayAdapters
+import SideColumnLayout
 
 private struct CallListNodeListViewTransition {
     let callListView: CallListNodeView
@@ -61,19 +67,21 @@ private extension EngineCallList.Item {
 
 final class CallListNodeInteraction {
     let setMessageIdWithRevealedOptions: (EngineMessage.Id?, EngineMessage.Id?) -> Void
-    let call: (EnginePeer.Id, Bool) -> Void
+    let call: (EngineMessage) -> Void
     let openInfo: (EnginePeer.Id, [EngineMessage]) -> Void
     let delete: ([EngineMessage.Id]) -> Void
     let updateShowCallsTab: (Bool) -> Void
     let openGroupCall: (EnginePeer.Id) -> Void
+    let openNewCall: () -> Void
     
-    init(setMessageIdWithRevealedOptions: @escaping (EngineMessage.Id?, EngineMessage.Id?) -> Void, call: @escaping (EnginePeer.Id, Bool) -> Void, openInfo: @escaping (EnginePeer.Id, [EngineMessage]) -> Void, delete: @escaping ([EngineMessage.Id]) -> Void, updateShowCallsTab: @escaping (Bool) -> Void, openGroupCall: @escaping (EnginePeer.Id) -> Void) {
+    init(setMessageIdWithRevealedOptions: @escaping (EngineMessage.Id?, EngineMessage.Id?) -> Void, call: @escaping (EngineMessage) -> Void, openInfo: @escaping (EnginePeer.Id, [EngineMessage]) -> Void, delete: @escaping ([EngineMessage.Id]) -> Void, updateShowCallsTab: @escaping (Bool) -> Void, openGroupCall: @escaping (EnginePeer.Id) -> Void, openNewCall: @escaping () -> Void) {
         self.setMessageIdWithRevealedOptions = setMessageIdWithRevealedOptions
         self.call = call
         self.openInfo = openInfo
         self.delete = delete
         self.updateShowCallsTab = updateShowCallsTab
         self.openGroupCall = openGroupCall
+        self.openNewCall = openNewCall
     }
 }
 
@@ -117,15 +125,20 @@ private func mappedInsertEntries(context: AccountContext, presentationData: Item
     return entries.map { entry -> ListViewInsertItem in
         switch entry.entry {
             case let .displayTab(_, text, value):
-                return ListViewInsertItem(index: entry.index, previousIndex: entry.previousIndex, item: ItemListSwitchItem(presentationData: presentationData, title: text, value: value, enabled: true, noCorners: false, sectionId: 0, style: .blocks, updated: { value in
+                return ListViewInsertItem(index: entry.index, previousIndex: entry.previousIndex, item: ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, enabled: true, noCorners: false, sectionId: 0, style: .blocks, updated: { value in
                     nodeInteraction.updateShowCallsTab(value)
-                }), directionHint: entry.directionHint)
+                }, tag: CallListEntryTag.showTab), directionHint: entry.directionHint)
             case let .displayTabInfo(_, text):
                 return ListViewInsertItem(index: entry.index, previousIndex: entry.previousIndex, item: ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: 0), directionHint: entry.directionHint)
+            case .openNewCall:
+                let item = ItemListPeerActionItem(presentationData: presentationData, style: showSettings ? .blocks : .plain, systemStyle: .glass, icon: PresentationResourcesRootController.callListCallIcon(presentationData.theme), title: presentationData.strings.CallList_NewCall, hasSeparator: false, sectionId: 1, height: .generic, noInsets: !showSettings, editing: false, action: {
+                    nodeInteraction.openNewCall()
+                })
+                return ListViewInsertItem(index: entry.index, previousIndex: entry.previousIndex, item: item, directionHint: entry.directionHint)
             case let .groupCall(peer, _, isActive):
-                return ListViewInsertItem(index: entry.index, previousIndex: entry.previousIndex, item: CallListGroupCallItem(presentationData: presentationData, context: context, style: showSettings ? .blocks : .plain, peer: peer, isActive: isActive, editing: false, interaction: nodeInteraction), directionHint: entry.directionHint)
+                return ListViewInsertItem(index: entry.index, previousIndex: entry.previousIndex, item: CallListGroupCallItem(presentationData: presentationData, systemStyle: .glass, context: context, style: showSettings ? .blocks : .plain, peer: peer, isActive: isActive, editing: false, interaction: nodeInteraction), directionHint: entry.directionHint)
             case let .messageEntry(topMessage, messages, _, _, dateTimeFormat, editing, hasActiveRevealControls, displayHeader, _):
-                return ListViewInsertItem(index: entry.index, previousIndex: entry.previousIndex, item: CallListCallItem(presentationData: presentationData, dateTimeFormat: dateTimeFormat, context: context, style: showSettings ? .blocks : .plain, topMessage: topMessage, messages: messages, editing: editing, revealed: hasActiveRevealControls, displayHeader: displayHeader, interaction: nodeInteraction), directionHint: entry.directionHint)
+                return ListViewInsertItem(index: entry.index, previousIndex: entry.previousIndex, item: CallListCallItem(presentationData: presentationData, systemStyle: .glass, dateTimeFormat: dateTimeFormat, context: context, style: showSettings ? .blocks : .plain, topMessage: topMessage, messages: messages, editing: editing, revealed: hasActiveRevealControls, displayHeader: displayHeader, interaction: nodeInteraction), directionHint: entry.directionHint)
             case let .holeEntry(_, theme):
                 return ListViewInsertItem(index: entry.index, previousIndex: entry.previousIndex, item: CallListHoleItem(theme: theme), directionHint: entry.directionHint)
         }
@@ -136,15 +149,20 @@ private func mappedUpdateEntries(context: AccountContext, presentationData: Item
     return entries.map { entry -> ListViewUpdateItem in
         switch entry.entry {
             case let .displayTab(_, text, value):
-                return ListViewUpdateItem(index: entry.index, previousIndex: entry.previousIndex, item: ItemListSwitchItem(presentationData: presentationData, title: text, value: value, enabled: true, noCorners: false, sectionId: 0, style: .blocks, updated: { value in
+                return ListViewUpdateItem(index: entry.index, previousIndex: entry.previousIndex, item: ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, enabled: true, noCorners: false, sectionId: 0, style: .blocks, updated: { value in
                     nodeInteraction.updateShowCallsTab(value)
-                }), directionHint: entry.directionHint)
+                }, tag: CallListEntryTag.showTab), directionHint: entry.directionHint)
             case let .displayTabInfo(_, text):
                 return ListViewUpdateItem(index: entry.index, previousIndex: entry.previousIndex, item: ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: 0), directionHint: entry.directionHint)
+            case .openNewCall:
+                let item = ItemListPeerActionItem(presentationData: presentationData, style: showSettings ? .blocks : .plain, systemStyle: .glass, icon: PresentationResourcesRootController.callListCallIcon(presentationData.theme), title: presentationData.strings.CallList_NewCall, hasSeparator: false, sectionId: 1, height: .generic, noInsets: !showSettings, editing: false, action: {
+                    nodeInteraction.openNewCall()
+                })
+                return ListViewUpdateItem(index: entry.index, previousIndex: entry.previousIndex, item: item, directionHint: entry.directionHint)
             case let .groupCall(peer, _, isActive):
-                return ListViewUpdateItem(index: entry.index, previousIndex: entry.previousIndex, item: CallListGroupCallItem(presentationData: presentationData, context: context, style: showSettings ? .blocks : .plain, peer: peer, isActive: isActive, editing: false, interaction: nodeInteraction), directionHint: entry.directionHint)
+                return ListViewUpdateItem(index: entry.index, previousIndex: entry.previousIndex, item: CallListGroupCallItem(presentationData: presentationData, systemStyle: .glass, context: context, style: showSettings ? .blocks : .plain, peer: peer, isActive: isActive, editing: false, interaction: nodeInteraction), directionHint: entry.directionHint)
             case let .messageEntry(topMessage, messages, _, _, dateTimeFormat, editing, hasActiveRevealControls, displayHeader, _):
-                return ListViewUpdateItem(index: entry.index, previousIndex: entry.previousIndex, item: CallListCallItem(presentationData: presentationData, dateTimeFormat: dateTimeFormat, context: context, style: showSettings ? .blocks : .plain, topMessage: topMessage, messages: messages, editing: editing, revealed: hasActiveRevealControls, displayHeader: displayHeader, interaction: nodeInteraction), directionHint: entry.directionHint)
+                return ListViewUpdateItem(index: entry.index, previousIndex: entry.previousIndex, item: CallListCallItem(presentationData: presentationData, systemStyle: .glass, dateTimeFormat: dateTimeFormat, context: context, style: showSettings ? .blocks : .plain, topMessage: topMessage, messages: messages, editing: editing, revealed: hasActiveRevealControls, displayHeader: displayHeader, interaction: nodeInteraction), directionHint: entry.directionHint)
             case let .holeEntry(_, theme):
                 return ListViewUpdateItem(index: entry.index, previousIndex: entry.previousIndex, item: CallListHoleItem(theme: theme), directionHint: entry.directionHint)
         }
@@ -168,11 +186,12 @@ final class CallListControllerNode: ASDisplayNode {
     private let context: AccountContext
     private let mode: CallListControllerMode
     private var presentationData: PresentationData
+    private var focusOnItemTag: CallListEntryTag?
     
     private var containerLayout: (ContainerViewLayout, CGFloat)?
     
     private let _ready = ValuePromise<Bool>()
-    private var didSetReady = false
+    private(set) var didSetReady = false
     var ready: Signal<Bool, NoError> {
         return _ready.get()
     }
@@ -183,6 +202,10 @@ final class CallListControllerNode: ASDisplayNode {
     var activateSearch: (() -> Void)?
     var deletePeerChat: ((EnginePeer.Id) -> Void)?
     var startNewCall: (() -> Void)?
+    
+    /// iPhone Duo: the new-call button in the side strip, created the first time a layout has one.
+    private var sideColumnView: CallListSideColumnView?
+    private var appliedSideColumn: SideColumnRegion?
     
     private let viewProcessingQueue = Queue()
     private var callListView: CallListNodeView?
@@ -207,19 +230,25 @@ final class CallListControllerNode: ASDisplayNode {
     private let emptyButtonIconNode: ASImageNode
     private let emptyButtonTextNode: ImmediateTextNode
     
-    private let call: (EnginePeer.Id, Bool) -> Void
+    private let edgeEffectView: EdgeEffectView
+    
+    private let call: (EngineMessage) -> Void
     private let joinGroupCall: (EnginePeer.Id, EngineGroupCallDescription) -> Void
+    private let openNewCall: () -> Void
     private let openInfo: (EnginePeer.Id, [EngineMessage]) -> Void
     private let emptyStateUpdated: (Bool) -> Void
-    
     private let emptyStatePromise = Promise<Bool>()
     private let emptyStateDisposable = MetaDisposable()
     
     private let openGroupCallDisposable = MetaDisposable()
     
+    var navigationEdgeEffectExtension: CGFloat {
+        return max(0.0, self.listNode.edgeEffectExtension)
+    }
+    
     private var previousContentOffset: ListViewVisibleContentOffset?
     
-    init(controller: CallListController, context: AccountContext, mode: CallListControllerMode, presentationData: PresentationData, call: @escaping (EnginePeer.Id, Bool) -> Void, joinGroupCall: @escaping (EnginePeer.Id, EngineGroupCallDescription) -> Void, openInfo: @escaping (EnginePeer.Id, [EngineMessage]) -> Void, emptyStateUpdated: @escaping (Bool) -> Void) {
+    init(controller: CallListController, context: AccountContext, mode: CallListControllerMode, presentationData: PresentationData, call: @escaping (EngineMessage) -> Void, joinGroupCall: @escaping (EnginePeer.Id, EngineGroupCallDescription) -> Void, openInfo: @escaping (EnginePeer.Id, [EngineMessage]) -> Void, emptyStateUpdated: @escaping (Bool) -> Void, openNewCall: @escaping () -> Void, focusOnItemTag: CallListEntryTag?) {
         self.controller = controller
         self.context = context
         self.mode = mode
@@ -228,11 +257,12 @@ final class CallListControllerNode: ASDisplayNode {
         self.joinGroupCall = joinGroupCall
         self.openInfo = openInfo
         self.emptyStateUpdated = emptyStateUpdated
-        
+        self.openNewCall = openNewCall
         self.currentState = CallListNodeState(presentationData: ItemListPresentationData(presentationData), dateTimeFormat: presentationData.dateTimeFormat, disableAnimations: true, editing: false, messageIdWithRevealedOptions: nil)
         self.statePromise = ValuePromise(self.currentState, ignoreRepeated: true)
+        self.focusOnItemTag = focusOnItemTag
         
-        self.listNode = ListView()
+        self.listNode = ListViewImpl()
         self.listNode.verticalScrollIndicatorColor = self.presentationData.theme.list.scrollIndicatorColor
         self.listNode.accessibilityPageScrolledString = { row, count in
             return presentationData.strings.VoiceOver_ScrollStatus(row, count).string
@@ -250,7 +280,7 @@ final class CallListControllerNode: ASDisplayNode {
         self.emptyTextNode.textAlignment = .center
         self.emptyTextNode.maximumNumberOfLines = 3
         
-        self.emptyAnimationNode = AnimatedStickerNode()
+        self.emptyAnimationNode = DefaultAnimatedStickerNodeImpl(lottieSettings: self.context.lottieRenderingSettings)
         self.emptyAnimationNode.alpha = 0.0
         self.emptyAnimationNode.isUserInteractionEnabled = false
         
@@ -264,6 +294,8 @@ final class CallListControllerNode: ASDisplayNode {
         self.emptyButtonIconNode.displaysAsynchronously = false
         self.emptyButtonIconNode.isUserInteractionEnabled = false
         
+        self.edgeEffectView = EdgeEffectView()
+        
         super.init()
         
         self.setViewBlock({
@@ -276,6 +308,8 @@ final class CallListControllerNode: ASDisplayNode {
         self.addSubnode(self.emptyButtonTextNode)
         self.addSubnode(self.emptyButtonIconNode)
         self.addSubnode(self.emptyButtonNode)
+        
+        self.view.addSubview(self.edgeEffectView)
                 
         switch self.mode {
             case .tab:
@@ -318,8 +352,8 @@ final class CallListControllerNode: ASDisplayNode {
                     }
                 }
             }
-        }, call: { [weak self] peerId, isVideo in
-            self?.call(peerId, isVideo)
+        }, call: { [weak self] message in
+            self?.call(message)
         }, openInfo: { [weak self] peerId, messages in
             self?.openInfo(peerId, messages)
         }, delete: { [weak self] messageIds in
@@ -329,7 +363,7 @@ final class CallListControllerNode: ASDisplayNode {
             let _ = (context.engine.data.get(
                 TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
             )
-            |> deliverOnMainQueue).start(next: { peer in
+            |> deliverOnMainQueue).startStandalone(next: { peer in
                 guard let strongSelf = self, let peer = peer else {
                     return
                 }
@@ -337,12 +371,14 @@ final class CallListControllerNode: ASDisplayNode {
                 let actionSheet = ActionSheetController(presentationData: strongSelf.presentationData)
                 var items: [ActionSheetItem] = []
                 
+                items.append(ActionSheetTextItem(title: strongSelf.presentationData.strings.CallList_DeleteConfirmation, parseMarkdown: true))
+                
                 items.append(ActionSheetButtonItem(title: strongSelf.presentationData.strings.Conversation_DeleteMessagesFor(peer.displayTitle(strings: strongSelf.presentationData.strings, displayOrder: strongSelf.presentationData.nameDisplayOrder)).string, color: .destructive, action: { [weak actionSheet] in
                     actionSheet?.dismissAnimated()
                     guard let strongSelf = self else {
                         return
                     }
-                    let _ = strongSelf.context.engine.messages.deleteMessagesInteractively(messageIds: messageIds, type: .forEveryone).start()
+                    let _ = strongSelf.context.engine.messages.deleteMessagesInteractively(messageIds: messageIds, type: .forEveryone).startStandalone()
                 }))
                 
                 items.append(ActionSheetButtonItem(title: strongSelf.presentationData.strings.Conversation_DeleteMessagesForMe, color: .destructive, action: { [weak actionSheet] in
@@ -352,7 +388,7 @@ final class CallListControllerNode: ASDisplayNode {
                         return
                     }
                     
-                    let _ = strongSelf.context.engine.messages.deleteMessagesInteractively(messageIds: messageIds, type: .forLocalPeer).start()
+                    let _ = strongSelf.context.engine.messages.deleteMessagesInteractively(messageIds: messageIds, type: .forLocalPeer).startStandalone()
                 }))
                     
                 actionSheet.setItemGroups([
@@ -369,10 +405,10 @@ final class CallListControllerNode: ASDisplayNode {
             if let strongSelf = self {
                 let _ = updateCallListSettingsInteractively(accountManager: strongSelf.context.sharedContext.accountManager, {
                     $0.withUpdatedShowTab(value)
-                }).start()
+                }).startStandalone()
                 
                 if value {
-                    let _ = ApplicationSpecificNotice.incrementCallsTabTips(accountManager: strongSelf.context.sharedContext.accountManager, count: 4).start()
+                    let _ = ApplicationSpecificNotice.incrementCallsTabTips(accountManager: strongSelf.context.sharedContext.accountManager, count: 4).startStandalone()
                 }
             }
         }, openGroupCall: { [weak self] peerId in
@@ -432,6 +468,11 @@ final class CallListControllerNode: ASDisplayNode {
                     strongSelf.joinGroupCall(peerId, activeCall)
                 }
             }))
+        }, openNewCall: { [weak self] in
+            guard let strongSelf = self else {
+                return
+            }
+            strongSelf.openNewCall()
         })
         
         let viewProcessingQueue = self.viewProcessingQueue
@@ -443,6 +484,7 @@ final class CallListControllerNode: ASDisplayNode {
         }
         
         let previousView = Atomic<CallListNodeView?>(value: nil)
+        let previousType = Atomic<EngineCallList.Scope?>(value: nil)
         
         let showSettings: Bool
         switch mode {
@@ -465,7 +507,10 @@ final class CallListControllerNode: ASDisplayNode {
         if let callManager = context.sharedContext.callManager {
             currentGroupCallPeerId = callManager.currentGroupCallSignal
             |> map { call -> EnginePeer.Id? in
-                call?.peerId
+                guard case let .group(call) = call else {
+                    return nil
+                }
+                return call.peerId
             }
             |> distinctUntilChanged
         } else {
@@ -503,9 +548,10 @@ final class CallListControllerNode: ASDisplayNode {
         |> mapToQueue { (updateAndType, state, groupCalls, showCallsTab, currentGroupCallPeerId) -> Signal<CallListNodeListViewTransition, NoError> in
             let (update, type) = updateAndType
             
-            let processedView = CallListNodeView(originalView: update.view, filteredEntries: callListNodeEntriesForView(view: update.view, groupCalls: groupCalls, state: state, showSettings: showSettings, showCallsTab: showCallsTab, isRecentCalls: type == .all, currentGroupCallPeerId: currentGroupCallPeerId), presentationData: state.presentationData)
+            let processedView = CallListNodeView(originalView: update.view, filteredEntries: callListNodeEntriesForView(view: update.view, displayOpenNewCall: type == .all, groupCalls: groupCalls, state: state, showSettings: showSettings, showCallsTab: showCallsTab, isRecentCalls: type == .all, currentGroupCallPeerId: currentGroupCallPeerId), presentationData: state.presentationData)
             let previous = previousView.swap(processedView)
-            
+            let previousType = previousType.swap(type)
+                        
             let reason: CallListNodeViewTransitionReason
             var prepareOnMainQueue = false
             
@@ -565,8 +611,12 @@ final class CallListControllerNode: ASDisplayNode {
                     }
                 }
             }
+            var scrollPosition = update.scrollPosition
+            if previousType != type {
+                scrollPosition = .top(animated: false)
+            }
             
-            return preparedCallListNodeViewTransition(from: previous, to: processedView, reason: reason, disableAnimations: disableAnimations, context: context, scrollPosition: update.scrollPosition)
+            return preparedCallListNodeViewTransition(from: previous, to: processedView, reason: reason, disableAnimations: disableAnimations, context: context, scrollPosition: scrollPosition)
             |> map({ mappedCallListNodeViewListTransition(context: context, presentationData: state.presentationData, showSettings: showSettings, nodeInteraction: nodeInteraction, transition: $0) })
             |> runOn(prepareOnMainQueue ? Queue.mainQueue() : viewProcessingQueue)
         }
@@ -596,7 +646,7 @@ final class CallListControllerNode: ASDisplayNode {
             }
         }
         
-        self.callListDisposable.set(appliedTransition.start())
+        self.callListDisposable.set(appliedTransition.startStrict())
         
         self.callListLocationAndType.set(self.currentLocationAndType)
 
@@ -606,7 +656,7 @@ final class CallListControllerNode: ASDisplayNode {
         }
         |> distinctUntilChanged
         
-        self.emptyStateDisposable.set((combineLatest(emptySignal, typeSignal, self.statePromise.get()) |> deliverOnMainQueue).start(next: { [weak self] isEmpty, type, state in
+        self.emptyStateDisposable.set((combineLatest(emptySignal, typeSignal, self.statePromise.get()) |> deliverOnMainQueue).startStrict(next: { [weak self] isEmpty, type, state in
             if let strongSelf = self {
                 strongSelf.updateEmptyPlaceholder(theme: state.presentationData.theme, strings: state.presentationData.strings, type: type, isHidden: !isEmpty)
             }
@@ -621,28 +671,18 @@ final class CallListControllerNode: ASDisplayNode {
                 }
             }
             
-            self.listNode.visibleContentOffsetChanged = { [weak self] offset in
+            self.listNode.visibleContentOffsetChanged = { [weak self] offset, _ in
                 if let strongSelf = self {
-                    var previousContentOffsetValue: CGFloat?
-                    if let previousContentOffset = strongSelf.previousContentOffset, case let .known(value) = previousContentOffset {
-                        previousContentOffsetValue = value
-                    }
-                    switch offset {
-                        case let .known(value):
-                            let transition: ContainedViewLayoutTransition
-                            if let previousContentOffsetValue = previousContentOffsetValue, value <= 0.0, previousContentOffsetValue > 30.0 {
-                                transition = .animated(duration: 0.2, curve: .easeInOut)
-                            } else {
-                                transition = .immediate
-                            }
-                            strongSelf.navigationBar?.updateBackgroundAlpha(min(30.0, value) / 30.0, transition: transition)
-                        case .unknown, .none:
-                            strongSelf.navigationBar?.updateBackgroundAlpha(1.0, transition: .immediate)
-                    }
-                    
                     strongSelf.previousContentOffset = offset
                 }
             }
+        }
+        
+        self.listNode.onEdgeEffectExtensionUpdated = { [weak self] transition in
+            guard let self else {
+                return
+            }
+            self.controller?.updateNavigationEdgeEffectExtension(transition: transition)
         }
     }
     
@@ -669,6 +709,10 @@ final class CallListControllerNode: ASDisplayNode {
             
             self.emptyButtonIconNode.image = generateTintedImage(image: UIImage(bundleImageName: "Call List/CallIcon"), color: presentationData.theme.list.itemAccentColor)
             
+            if let sideColumnView = self.sideColumnView, let appliedSideColumn = self.appliedSideColumn {
+                sideColumnView.update(size: appliedSideColumn.frame.size, theme: presentationData.theme, strings: presentationData.strings, transition: .immediate)
+            }
+            
             self.updateEmptyPlaceholder(theme: presentationData.theme, strings: presentationData.strings, type: self.currentLocationAndType.scope, isHidden: self.emptyTextNode.alpha.isZero)
             
             self.updateState {
@@ -690,13 +734,13 @@ final class CallListControllerNode: ASDisplayNode {
         let alpha: CGFloat = isHidden ? 0.0 : 1.0
         let previousAlpha = self.emptyTextNode.alpha
         self.emptyTextNode.alpha = alpha
-        self.emptyTextNode.layer.animateAlpha(from: previousAlpha, to: alpha, duration: 0.2)
+        self.emptyTextNode.layer.animateAlpha(from: previousAlpha, to: alpha, duration: 0.25)
         
         if previousAlpha.isZero && !alpha.isZero {
             self.emptyAnimationNode.visibility = true
         }
         self.emptyAnimationNode.alpha = alpha
-        self.emptyAnimationNode.layer.animateAlpha(from: previousAlpha, to: alpha, duration: 0.2, completion: { [weak self] _ in
+        self.emptyAnimationNode.layer.animateAlpha(from: previousAlpha, to: alpha, duration: 0.25, completion: { [weak self] _ in
             if let strongSelf = self {
                 if !previousAlpha.isZero && strongSelf.emptyAnimationNode.alpha.isZero {
                     strongSelf.emptyAnimationNode.visibility = false
@@ -705,10 +749,13 @@ final class CallListControllerNode: ASDisplayNode {
         })
         
         self.emptyButtonIconNode.alpha = alpha
-        self.emptyButtonIconNode.layer.animateAlpha(from: previousAlpha, to: alpha, duration: 0.2)
+        self.emptyButtonIconNode.layer.animateAlpha(from: previousAlpha, to: alpha, duration: 0.25)
         self.emptyButtonTextNode.alpha = alpha
-        self.emptyButtonTextNode.layer.animateAlpha(from: previousAlpha, to: alpha, duration: 0.2)
+        self.emptyButtonTextNode.layer.animateAlpha(from: previousAlpha, to: alpha, duration: 0.25)
         self.emptyButtonNode.isUserInteractionEnabled = !isHidden
+        
+        self.listNode.alpha = 1.0 - alpha
+        self.listNode.layer.animateAlpha(from: 1.0 - previousAlpha, to: 1.0 - alpha, duration: 0.25)
         
         if !isHidden {
             let type = self.currentLocationAndType.scope
@@ -733,7 +780,6 @@ final class CallListControllerNode: ASDisplayNode {
             }
             
             self.emptyTextNode.attributedText = NSAttributedString(string: emptyText, font: textFont, textColor: color, paragraphAlignment: .center)
-            
             self.emptyButtonTextNode.attributedText = NSAttributedString(string: buttonText, font: buttonFont, textColor: theme.list.itemAccentColor, paragraphAlignment: .center)
             
             if let layout = self.containerLayout {
@@ -810,6 +856,16 @@ final class CallListControllerNode: ASDisplayNode {
                         strongSelf._ready.set(true)
                     }
                     
+                    if let focusOnItemTag = strongSelf.focusOnItemTag {
+                        strongSelf.focusOnItemTag = nil
+                        
+                        strongSelf.listNode.forEachItemNode { itemNode in
+                            if let itemNode = itemNode as? ItemListItemNode, let tag = itemNode.tag, tag.isEqual(to: focusOnItemTag) {
+                                itemNode.displayHighlight()
+                            }
+                        }
+                    }
+                    
                     completion()
                 }
             }
@@ -842,7 +898,10 @@ final class CallListControllerNode: ASDisplayNode {
         }
         
         let size = layout.size
-        let contentRect = CGRect(origin: CGPoint(x: 0.0, y: insets.top), size: CGSize(width: size.width, height: size.height - insets.top - insets.bottom))
+        // In the band between the side insets when they differ (iPhone Duo's side strip); equal insets keep the full width.
+        let contentMinX: CGFloat = insets.left != insets.right ? insets.left : 0.0
+        let contentWidth: CGFloat = insets.left != insets.right ? size.width - insets.left - insets.right : size.width
+        let contentRect = CGRect(origin: CGPoint(x: contentMinX, y: insets.top), size: CGSize(width: contentWidth, height: size.height - insets.top - insets.bottom))
 
         let sideInset: CGFloat = 64.0
         
@@ -861,13 +920,62 @@ final class CallListControllerNode: ASDisplayNode {
         let emptyButtonSpacing: CGFloat = 14.0
         let emptyButtonIconSize = (self.emptyButtonIconNode.image?.size ?? CGSize())
         let emptyButtonWidth = emptyButtonIconSize.width + emptyButtonSpacing + emptyButtonSize.width
-        let emptyButtonX = floor(contentRect.width - emptyButtonWidth) / 2.0
+        let emptyButtonX = contentRect.minX + floor(contentRect.width - emptyButtonWidth) / 2.0
         textTransition.updateFrame(node: self.emptyButtonIconNode, frame: CGRect(origin: CGPoint(x: emptyButtonX, y: emptyAnimationY + emptyAnimationHeight + emptyAnimationSpacing + emptyTextSize.height + emptyTextSpacing), size: emptyButtonIconSize))
         textTransition.updateFrame(node: self.emptyButtonTextNode, frame: CGRect(origin: CGPoint(x: emptyButtonX + emptyButtonIconSize.width + emptyButtonSpacing, y: emptyAnimationY + emptyAnimationHeight + emptyAnimationSpacing + emptyTextSize.height + emptyTextSpacing + 4.0), size: emptyButtonSize))
         
         textTransition.updateFrame(node: self.emptyButtonNode, frame: CGRect(origin: CGPoint(x: emptyButtonX, y: emptyAnimationY + emptyAnimationHeight + emptyAnimationSpacing + emptyTextSize.height + emptyTextSpacing), size: CGSize(width: emptyButtonWidth, height: 44.0)))
         
         self.emptyAnimationNode.updateLayout(size: self.emptyAnimationSize)
+    }
+    
+    /// iPhone Duo: places the new-call button at the side strip's region (in this node's coordinates), or
+    /// removes it from the strip when `region` is nil (the button is then in the navigation bar). Hidden,
+    /// in place, while editing. Appearing lays out without animating frames and fades in; a rotation or
+    /// the strip switching sides fades the old place out and the new one in.
+    func updateSideColumn(region: SideColumnRegion?, isHidden: Bool, transition: ContainedViewLayoutTransition) {
+        let change = sideColumnPlacementChange(from: self.appliedSideColumn, to: region)
+        self.appliedSideColumn = region
+        if region == nil && self.sideColumnView == nil {
+            return
+        }
+        let sideColumnView: CallListSideColumnView
+        if let current = self.sideColumnView {
+            sideColumnView = current
+        } else {
+            sideColumnView = CallListSideColumnView(frame: CGRect())
+            sideColumnView.alpha = 0.0
+            sideColumnView.pressed = { [weak self] in
+                self?.startNewCall?()
+            }
+            self.sideColumnView = sideColumnView
+            self.view.addSubview(sideColumnView)
+        }
+        if let region {
+            var frameTransition = transition
+            switch change {
+            case .appear:
+                frameTransition = .immediate
+            case .move:
+                frameTransition = .immediate
+                if case let .animated(duration, _) = transition, sideColumnView.alpha > 0.0, let snapshotView = sideColumnView.snapshotView(afterScreenUpdates: false) {
+                    snapshotView.frame = sideColumnView.frame
+                    snapshotView.isUserInteractionEnabled = false
+                    self.view.insertSubview(snapshotView, aboveSubview: sideColumnView)
+                    snapshotView.layer.animateAlpha(from: 1.0, to: 0.0, duration: duration * 0.5, removeOnCompletion: false, completion: { [weak snapshotView] _ in
+                        snapshotView?.removeFromSuperview()
+                    })
+                    sideColumnView.layer.animateAlpha(from: 0.0, to: 1.0, duration: duration * 0.5, delay: duration * 0.5)
+                }
+            case .none, .disappear, .animate:
+                break
+            }
+            frameTransition.updateFrame(view: sideColumnView, frame: region.frame)
+            sideColumnView.update(size: region.frame.size, theme: self.presentationData.theme, strings: self.presentationData.strings, transition: frameTransition)
+        }
+        let isVisible = region != nil && !isHidden
+        transition.updateAlpha(layer: sideColumnView.layer, alpha: isVisible ? 1.0 : 0.0)
+        sideColumnView.isUserInteractionEnabled = isVisible
     }
     
     func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition) {
@@ -877,14 +985,18 @@ final class CallListControllerNode: ASDisplayNode {
         insets.top += max(navigationBarHeight, layout.insets(options: [.statusBar]).top)
         
         let inset: CGFloat
-        if layout.size.width >= 375.0 {
+        if layout.size.width >= 320.0 {
             inset = max(16.0, floor((layout.size.width - 674.0) / 2.0))
         } else {
             inset = 0.0
         }
         if case .navigation = self.mode {
-            insets.left += inset
-            insets.right += inset
+            // iPhone Duo: a side with a strip keeps the block 16pt clear of it (the profile's section rule);
+            // without a strip both margins are today's.
+            // `max(inset, 16)`: this list has always kept 16pt, also below 320pt wide.
+            let margins = layout.listSideMargins(base: max(inset, 16.0))
+            insets.left += margins.left
+            insets.right += margins.right
             
             self.leftOverlayNode.frame = CGRect(x: 0.0, y: 0.0, width: insets.left, height: layout.size.height)
             self.rightOverlayNode.frame = CGRect(x: layout.size.width - insets.right, y: 0.0, width: insets.right, height: layout.size.height)
@@ -914,5 +1026,12 @@ final class CallListControllerNode: ASDisplayNode {
             self.dequeuedInitialTransitionOnLayout = true
             self.dequeueTransition()
         }
+        
+        let edgeEffectHeight: CGFloat = layout.intrinsicInsets.bottom
+        let edgeEffectFrame = CGRect(origin: CGPoint(x: 0.0, y: layout.size.height - edgeEffectHeight), size: CGSize(width: layout.size.width, height: edgeEffectHeight))
+        transition.updateFrame(view: self.edgeEffectView, frame: edgeEffectFrame)
+        self.edgeEffectView.update(content: self.presentationData.theme.list.plainBackgroundColor, rect: edgeEffectFrame, edge: .bottom, edgeSize: edgeEffectFrame.height, transition: ComponentTransition(transition))
+        
+        self.controller?.updateNavigationEdgeEffectExtension(transition: transition)
     }
 }

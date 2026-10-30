@@ -2,12 +2,10 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import TelegramUIPreferences
 import AccountContext
-import ShareController
 import StickerResources
 import AlertUI
 import PresentationDataUtils
@@ -76,22 +74,33 @@ public final class ImportStickerPackController: ViewController, StandalonePresen
         }
         self.controllerNode.navigationController = self.parentNavigationController
         
-        Queue.mainQueue().after(0.1) {
+        Queue.mainQueue().after(0.1) { [weak self] in
+            guard let self else {
+                return
+            }
+
             self.controllerNode.updateStickerPack(self.stickerPack, verifiedStickers: Set(), declinedStickers: Set(), uploadedStickerResources: [:])
             
-            if case .image = self.stickerPack.type {
+            if case .image = self.stickerPack.type.contentType {
             } else {
-                let _ = (self.context.account.postbox.loadedPeerWithId(self.context.account.peerId)
+                let _ = (self.context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: self.context.account.peerId))
+                |> mapToSignal { peer -> Signal<EnginePeer, NoError> in
+                    if let peer {
+                        return .single(peer)
+                    } else {
+                        return .never()
+                    }
+                }
                 |> deliverOnMainQueue).start(next: { [weak self] peer in
                     guard let strongSelf = self else {
                         return
                     }
-                    
-                    var signals: [Signal<(UUID, StickerVerificationStatus, MediaResource?), NoError>] = []
+
+                    var signals: [Signal<(UUID, StickerVerificationStatus, EngineMediaResource?), NoError>] = []
                     for sticker in strongSelf.stickerPack.stickers {
                         if let resource = strongSelf.controllerNode.stickerResources[sticker.uuid] {
-                            signals.append(strongSelf.context.engine.stickers.uploadSticker(peer: peer, resource: resource, alt: sticker.emojis.first ?? "", dimensions: PixelDimensions(width: 512, height: 512), mimeType: sticker.mimeType)
-                            |> map { result -> (UUID, StickerVerificationStatus, MediaResource?) in
+                            signals.append(strongSelf.context.engine.stickers.uploadSticker(peer: peer, resource: resource, thumbnail: nil, alt: sticker.emojis.first ?? "", dimensions: PixelDimensions(width: 512, height: 512), duration: nil, mimeType: sticker.mimeType)
+                            |> map { result -> (UUID, StickerVerificationStatus, EngineMediaResource?) in
                                 switch result {
                                     case .progress:
                                         return (sticker.uuid, .loading, nil)
@@ -103,7 +112,7 @@ public final class ImportStickerPackController: ViewController, StandalonePresen
                                         }
                                 }
                             }
-                            |> `catch` { _ -> Signal<(UUID, StickerVerificationStatus, MediaResource?), NoError> in
+                            |> `catch` { _ -> Signal<(UUID, StickerVerificationStatus, EngineMediaResource?), NoError> in
                                 return .single((sticker.uuid, .declined, nil))
                             })
                         }
@@ -115,7 +124,7 @@ public final class ImportStickerPackController: ViewController, StandalonePresen
                         }
                         var verifiedStickers = Set<UUID>()
                         var declinedStickers = Set<UUID>()
-                        var uploadedStickerResources: [UUID: MediaResource] = [:]
+                        var uploadedStickerResources: [UUID: EngineMediaResource] = [:]
                         for (uuid, result, resource) in results {
                             switch result {
                                 case .verified:

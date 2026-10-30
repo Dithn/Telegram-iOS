@@ -23,23 +23,31 @@
 
 @implementation TGVideoMessageTrimView
 
-- (instancetype)initWithFrame:(CGRect)frame
+- (instancetype)initWithFrame:(CGRect)frame forStory:(bool)forStory
 {
     self = [super initWithFrame:frame];
     if (self != nil)
     {
         self.hitTestEdgeInsets = UIEdgeInsetsMake(-5, -25, -5, -25);
         
-        _leftSegmentView = [[UIButton alloc] initWithFrame:CGRectMake(0, 0, 16, 33)];
+        CGFloat height = forStory ? 40.0 : 33.0;
+        
+        _leftSegmentView = [[UIButton alloc] initWithFrame:CGRectMake(0, 0, 16, height)];
         _leftSegmentView.exclusiveTouch = true;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         _leftSegmentView.adjustsImageWhenHighlighted = false;
+#pragma clang diagnostic pop
         [_leftSegmentView setBackgroundImage:TGComponentsImageNamed(@"VideoMessageLeftHandle") forState:UIControlStateNormal];
         _leftSegmentView.hitTestEdgeInsets = UIEdgeInsetsMake(-5, -25, -5, -10);
         [self addSubview:_leftSegmentView];
         
-        _rightSegmentView = [[UIButton alloc] initWithFrame:CGRectMake(0, 0, 16, 33)];
+        _rightSegmentView = [[UIButton alloc] initWithFrame:CGRectMake(0, 0, 16, height)];
         _rightSegmentView.exclusiveTouch = true;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         _rightSegmentView.adjustsImageWhenHighlighted = false;
+#pragma clang diagnostic pop
         [_rightSegmentView setBackgroundImage:TGComponentsImageNamed(@"VideoMessageRightHandle") forState:UIControlStateNormal];
         _rightSegmentView.hitTestEdgeInsets = UIEdgeInsetsMake(-5, -10, -5, -25);
         [self addSubview:_rightSegmentView];

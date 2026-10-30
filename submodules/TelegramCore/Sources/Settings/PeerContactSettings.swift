@@ -1,12 +1,13 @@
 import Foundation
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import SwiftSignalKit
 
 extension PeerStatusSettings {
     init(apiSettings: Api.PeerSettings) {
         switch apiSettings {
-            case let .peerSettings(flags, geoDistance, requestChatTitle, requestChatDate):
+            case let .peerSettings(peerSettingsData):
+                let (flags, requestChatTitle, requestChatDate, businessBotId, businessBotManageUrl, chargePaidMessageStars, registrationMonth, phoneCountry, nameChangeDate, photoChangeDate) = (peerSettingsData.flags, peerSettingsData.requestChatTitle, peerSettingsData.requestChatDate, peerSettingsData.businessBotId, peerSettingsData.businessBotManageUrl, peerSettingsData.chargePaidMessageStars, peerSettingsData.registrationMonth, peerSettingsData.phoneCountry, peerSettingsData.nameChangeDate, peerSettingsData.photoChangeDate)
                 var result = PeerStatusSettings.Flags()
                 if (flags & (1 << 1)) != 0 {
                     result.insert(.canAddContact)
@@ -23,23 +24,44 @@ extension PeerStatusSettings {
                 if (flags & (1 << 4)) != 0 {
                     result.insert(.addExceptionWhenAddingContact)
                 }
-                if (flags & (1 << 5)) != 0 {
-                    result.insert(.canReportIrrelevantGeoLocation)
-                }
                 if (flags & (1 << 7)) != 0 {
                     result.insert(.autoArchived)
                 }
                 if (flags & (1 << 8)) != 0 {
                     result.insert(.suggestAddMembers)
                 }
-                self = PeerStatusSettings(flags: result, geoDistance: geoDistance, requestChatTitle: requestChatTitle, requestChatDate: requestChatDate, requestChatIsChannel: (flags & (1 << 10)) != 0)
+            
+                var managingBot: ManagingBot?
+                if let businessBotId {
+                    let businessBotPaused = (flags & (1 << 11)) != 0
+                    let businessBotCanReply = (flags & (1 << 12)) != 0
+                    managingBot = ManagingBot(
+                        id: PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(businessBotId)),
+                        manageUrl: businessBotManageUrl,
+                        isPaused: businessBotPaused,
+                        canReply: businessBotCanReply
+                    )
+                }
+                self = PeerStatusSettings(
+                    flags: result,
+                    requestChatTitle: requestChatTitle,
+                    requestChatDate: requestChatDate,
+                    requestChatIsChannel: (flags & (1 << 10)) != 0,
+                    managingBot: managingBot,
+                    paidMessageStars: chargePaidMessageStars.flatMap { StarsAmount(value: $0, nanos: 0) },
+                    registrationDate: registrationMonth,
+                    phoneCountry: phoneCountry,
+                    nameChangeDate: nameChangeDate,
+                    photoChangeDate: photoChangeDate
+                )
         }
     }
 }
 
 public func unarchiveAutomaticallyArchivedPeer(account: Account, peerId: PeerId) {
     let _ = (account.postbox.transaction { transaction -> Void in
-        updatePeerGroupIdInteractively(transaction: transaction, peerId: peerId, groupId: .root)
+        _internal_updatePeerGroupIdInteractively(transaction: transaction, peerId: peerId, groupId: .root)
+        
         transaction.updatePeerCachedData(peerIds: Set([peerId]), update: { _, current in
             if let currentData = current as? CachedUserData, let currentStatusSettings = currentData.peerStatusSettings {
                 var statusSettings = currentStatusSettings
@@ -64,5 +86,5 @@ public func unarchiveAutomaticallyArchivedPeer(account: Account, peerId: PeerId)
     }
     |> deliverOnMainQueue).start()
     
-    let _ = _internal_updatePeerMuteSetting(account: account, peerId: peerId, muteInterval: nil).start()
+    let _ = _internal_updatePeerMuteSetting(account: account, peerId: peerId, threadId: nil, muteInterval: nil).start()
 }

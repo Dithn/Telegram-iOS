@@ -2,8 +2,9 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import WebKit
+@preconcurrency import WebKit
 import TelegramPresentationData
+import AccountContext
 
 private class WeakPaymentScriptMessageHandler: NSObject, WKScriptMessageHandler {
     private let f: (WKScriptMessage) -> ()
@@ -20,12 +21,14 @@ private class WeakPaymentScriptMessageHandler: NSObject, WKScriptMessageHandler 
 }
 
 final class BotCheckoutWebInteractionControllerNode: ViewControllerTracingNode, WKNavigationDelegate {
+    private let context: AccountContext
     private var presentationData: PresentationData
     private let intent: BotCheckoutWebInteractionControllerIntent
     
     private var webView: WKWebView?
     
-    init(presentationData: PresentationData, url: String, intent: BotCheckoutWebInteractionControllerIntent) {
+    init(context: AccountContext, presentationData: PresentationData, url: String, intent: BotCheckoutWebInteractionControllerIntent) {
+        self.context = context
         self.presentationData = presentationData
         self.intent = intent
         
@@ -45,7 +48,7 @@ final class BotCheckoutWebInteractionControllerNode: ViewControllerTracingNode, 
                 let configuration = WKWebViewConfiguration()
                 let userController = WKUserContentController()
                 
-                let userScript = WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+                let userScript = WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true)
                 userController.addUserScript(userScript)
                 
                 userController.add(WeakPaymentScriptMessageHandler { [weak self] message in
@@ -60,6 +63,7 @@ final class BotCheckoutWebInteractionControllerNode: ViewControllerTracingNode, 
                 if #available(iOSApplicationExtension 9.0, iOS 9.0, *) {
                     webView.allowsLinkPreview = false
                 }
+                webView.navigationDelegate = self
             case .externalVerification:
                 webView = WKWebView()
                 if #available(iOSApplicationExtension 9.0, iOS 9.0, *) {
@@ -79,7 +83,12 @@ final class BotCheckoutWebInteractionControllerNode: ViewControllerTracingNode, 
     }
     
     func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition) {
-        self.webView?.frame = CGRect(origin: CGPoint(x: 0.0, y: navigationBarHeight), size: CGSize(width: layout.size.width, height: max(1.0, layout.size.height - navigationBarHeight)))
+        // Beside a side strip (iPhone Duo) the page keeps to the band: a payment provider's page does not read the safe
+        // area, so laid out across the screen its controls run under the strip and its status corner. Equal side insets
+        // keep the full-width page.
+        let bandMinX: CGFloat = layout.safeInsets.left != layout.safeInsets.right ? layout.safeInsets.left : 0.0
+        let bandWidth: CGFloat = layout.safeInsets.left != layout.safeInsets.right ? layout.size.width - layout.safeInsets.left - layout.safeInsets.right : layout.size.width
+        self.webView?.frame = CGRect(origin: CGPoint(x: bandMinX, y: navigationBarHeight), size: CGSize(width: bandWidth, height: max(1.0, layout.size.height - navigationBarHeight)))
     }
     
     func animateIn() {
@@ -130,7 +139,7 @@ final class BotCheckoutWebInteractionControllerNode: ViewControllerTracingNode, 
                 return
             }
             
-            if case let .addPaymentMethod(completion) = self.intent {
+            if case let .addPaymentMethod(_, completion) = self.intent {
                 completion(BotCheckoutPaymentWebToken(title: title, data: credentialsString, saveOnServer: false))
             }
         }
@@ -142,9 +151,25 @@ final class BotCheckoutWebInteractionControllerNode: ViewControllerTracingNode, 
                 decisionHandler(.cancel)
                 completion(true)
             } else {
+                if let url = navigationAction.request.url, let scheme = url.scheme {
+                    let defaultSchemes: [String] = ["http", "https"]
+                    if !defaultSchemes.contains(scheme) {
+                        decisionHandler(.cancel)
+                        self.context.sharedContext.applicationBindings.openUrl(url.absoluteString)
+                        return
+                    }
+                }
                 decisionHandler(.allow)
             }
         } else {
+            if let url = navigationAction.request.url, let scheme = url.scheme {
+                let defaultSchemes: [String] = ["http", "https"]
+                if !defaultSchemes.contains(scheme) {
+                    decisionHandler(.cancel)
+                    self.context.sharedContext.applicationBindings.openUrl(url.absoluteString)
+                    return
+                }
+            }
             decisionHandler(.allow)
         }
     }

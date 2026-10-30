@@ -1,7 +1,12 @@
 import SwiftSignalKit
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
+
+public enum TelegramEngineAuthorizationState {
+    case unauthorized(UnauthorizedAccountState)
+    case authorized
+}
 
 public extension TelegramEngineUnauthorized {
     final class Auth {
@@ -17,6 +22,10 @@ public extension TelegramEngineUnauthorized {
 
         public func twoStepAuthData() -> Signal<TwoStepAuthData, MTRpcError> {
             return _internal_twoStepAuthData(self.account.network)
+        }
+        
+        public func test() -> Signal<Bool, String> {
+            return _internal_test(self.account.network)
         }
 
         public func updateTwoStepVerificationPassword(currentPassword: String?, updatedPassword: UpdatedTwoStepVerificationPassword) -> Signal<UpdateTwoStepVerificationPasswordResult, UpdateTwoStepVerificationPasswordError> {
@@ -39,8 +48,36 @@ public extension TelegramEngineUnauthorized {
             return _internal_resendTwoStepRecoveryEmail(network: self.account.network)
         }
 
-        public func uploadedPeerVideo(resource: MediaResource) -> Signal<UploadedPeerPhotoData, NoError> {
-            return _internal_uploadedPeerVideo(postbox: self.account.postbox, network: self.account.network, messageMediaPreuploadManager: nil, resource: resource)
+        public func uploadedPeerVideo(resource: EngineMediaResource) -> Signal<UploadedPeerPhotoData, NoError> {
+            return _internal_uploadedPeerVideo(postbox: self.account.postbox, network: self.account.network, messageMediaPreuploadManager: nil, resource: resource._asResource())
+        }
+        
+        public func reportMissingCode(phoneNumber: String, phoneCodeHash: String, mnc: String) -> Signal<Never, ReportMissingCodeError> {
+            return _internal_reportMissingCode(network: self.account.network, phoneNumber: phoneNumber, phoneCodeHash: phoneCodeHash, mnc: mnc)
+        }
+        
+        public func requestPasskeyLoginData(apiId: Int32, apiHash: String) -> Signal<String?, NoError> {
+            return _internal_requestPasskeyLoginData(network: self.account.network, apiId: apiId, apiHash: apiHash)
+        }
+        
+        public func state() -> Signal<TelegramEngineAuthorizationState?, NoError> {
+            return self.account.postbox.stateView()
+            |> map { view -> TelegramEngineAuthorizationState? in
+                if let state = view.state as? UnauthorizedAccountState {
+                    return .unauthorized(state)
+                } else if let _ = view.state as? AuthorizedAccountState {
+                    return .authorized
+                } else {
+                    return nil
+                }
+            }
+        }
+        
+        public func setState(state: UnauthorizedAccountState) -> Signal<Never, NoError> {
+            return self.account.postbox.transaction { transaction -> Void in
+                transaction.setState(state)
+            }
+            |> ignoreValues
         }
     }
 }
@@ -65,12 +102,41 @@ public extension TelegramEngine {
             return _internal_updateTwoStepVerificationPassword(network: self.account.network, currentPassword: currentPassword, updatedPassword: updatedPassword)
         }
 
-        public func deleteAccount() -> Signal<Never, DeleteAccountError> {
-            return self.account.network.request(Api.functions.account.deleteAccount(reason: "GDPR"))
-            |> mapError { _ -> DeleteAccountError in
-                return .generic
+        public func deleteAccount(reason: String, password: String?) -> Signal<Never, DeleteAccountError> {
+            let network = self.account.network
+            
+            let passwordSignal: Signal<Api.InputCheckPasswordSRP?, DeleteAccountError>
+            if let password = password {
+                passwordSignal = _internal_twoStepAuthData(network)
+                |> mapError { _ -> DeleteAccountError in
+                    return .generic
+                }
+                |> mapToSignal { authData -> Signal<Api.InputCheckPasswordSRP?, DeleteAccountError> in
+                    if let currentPasswordDerivation = authData.currentPasswordDerivation, let srpSessionData = authData.srpSessionData {
+                        guard let kdfResult = passwordKDF(encryptionProvider: network.encryptionProvider, keychain: network.context.keychain, password: password, derivation: currentPasswordDerivation, srpSessionData: srpSessionData) else {
+                            return .fail(.generic)
+                        }
+                        return .single(.inputCheckPasswordSRP(.init(srpId: kdfResult.id, A: Buffer(data: kdfResult.A), M1: Buffer(data: kdfResult.M1))))
+                    } else {
+                        return .single(nil)
+                    }
+                }
+            } else {
+                passwordSignal = .single(nil)
             }
-            |> ignoreValues
+            
+            return passwordSignal
+            |> mapToSignal { password -> Signal<Never, DeleteAccountError> in
+                var flags: Int32 = 0
+                if let _ = password {
+                    flags |= (1 << 0)
+                }
+                return self.account.network.request(Api.functions.account.deleteAccount(flags: flags, reason: reason, password: password))
+                |> mapError { _ -> DeleteAccountError in
+                    return .generic
+                }
+                |> ignoreValues
+            }
         }
 
         public func updateTwoStepVerificationEmail(currentPassword: String, updatedEmail: String) -> Signal<UpdateTwoStepVerificationPasswordResult, UpdateTwoStepVerificationPasswordError> {
@@ -139,6 +205,30 @@ public extension TelegramEngine {
 
         public func requestCancelAccountReset(phoneCodeHash: String, phoneCode: String) -> Signal<Never, CancelAccountResetError> {
             return _internal_requestCancelAccountReset(network: self.account.network, phoneCodeHash: phoneCodeHash, phoneCode: phoneCode)
+        }
+        
+        public func invalidateLoginCodes(codes: [String]) -> Signal<Never, NoError> {
+            return _internal_invalidateLoginCodes(network: self.account.network, codes: codes)
+        }
+        
+        public func reportMissingCode(phoneNumber: String, phoneCodeHash: String, mnc: String) -> Signal<Never, ReportMissingCodeError> {
+            return _internal_reportMissingCode(network: self.account.network, phoneNumber: phoneNumber, phoneCodeHash: phoneCodeHash, mnc: mnc)
+        }
+
+        public func passkeysData() -> Signal<[TelegramPasskey], NoError> {
+            return _internal_passkeysData(network: self.account.network)
+        }
+
+        public func requestPasskeyRegistration() -> Signal<String?, NoError> {
+            return _internal_requestPasskeyRegistration(network: self.account.network)
+        }
+        
+        public func requestCreatePasskey(id: String, clientData: String, attestationObject: Data) -> Signal<TelegramPasskey?, NoError> {
+            return _internal_requestCreatePasskey(network: self.account.network, id: id, clientData: clientData, attestationObject: attestationObject)
+        }
+        
+        public func deletePasskey(id: String) -> Signal<Bool, NoError> {
+            return _internal_deletePasskey(network: self.account.network, id: id)
         }
     }
 }

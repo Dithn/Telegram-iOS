@@ -4,7 +4,6 @@ import AsyncDisplayKit
 import Display
 import TelegramCore
 import SwiftSignalKit
-import Postbox
 import TelegramPresentationData
 import TelegramUIPreferences
 import AvatarNode
@@ -12,18 +11,22 @@ import AccountContext
 import ItemListUI
 
 final class MentionChatInputPanelItem: ListViewItem {
+    var neighborDescriptor: AnyEquatable {
+        return AnyEquatable.noNeighborInfluence
+    }
+
     fileprivate let context: AccountContext
     fileprivate let presentationData: ItemListPresentationData
     fileprivate let revealed: Bool
     fileprivate let inverted: Bool
-    fileprivate let peer: Peer
+    fileprivate let peer: EnginePeer
     private let peerSelected: (EnginePeer) -> Void
     fileprivate let setPeerIdRevealed: (EnginePeer.Id?) -> Void
     fileprivate let removeRequested: (EnginePeer.Id) -> Void
-    
+
     let selectable: Bool = true
-    
-    public init(context: AccountContext, presentationData: ItemListPresentationData, inverted: Bool, peer: Peer, revealed: Bool, setPeerIdRevealed: @escaping (PeerId?) -> Void, peerSelected: @escaping (EnginePeer) -> Void, removeRequested: @escaping (PeerId) -> Void) {
+
+    public init(context: AccountContext, presentationData: ItemListPresentationData, inverted: Bool, peer: EnginePeer, revealed: Bool, setPeerIdRevealed: @escaping (EnginePeer.Id?) -> Void, peerSelected: @escaping (EnginePeer) -> Void, removeRequested: @escaping (EnginePeer.Id) -> Void) {
         self.context = context
         self.presentationData = presentationData
         self.inverted = inverted
@@ -34,12 +37,12 @@ final class MentionChatInputPanelItem: ListViewItem {
         self.removeRequested = removeRequested
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         let configure = { () -> Void in
             let node = MentionChatInputPanelItemNode()
             
             let nodeLayout = node.asyncLayout()
-            let (top, bottom) = (previousItem != nil, nextItem != nil)
+            let (top, bottom) = (neighbors.previous != nil, neighbors.next != nil)
             let (layout, apply) = nodeLayout(self, params, top, bottom)
             
             node.contentSize = layout.contentSize
@@ -60,13 +63,13 @@ final class MentionChatInputPanelItem: ListViewItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? MentionChatInputPanelItemNode {
                 let nodeLayout = nodeValue.asyncLayout()
                 
                 async {
-                    let (top, bottom) = (previousItem != nil, nextItem != nil)
+                    let (top, bottom) = (neighbors.previous != nil, neighbors.next != nil)
                     
                     let (layout, apply) = nodeLayout(self, params, top, bottom)
                     Queue.mainQueue().async {
@@ -85,7 +88,7 @@ final class MentionChatInputPanelItem: ListViewItem {
         if self.revealed {
             self.setPeerIdRevealed(nil)
         } else {
-            self.peerSelected(EnginePeer(self.peer))
+            self.peerSelected(self.peer)
         }
     }
 }
@@ -97,7 +100,6 @@ final class MentionChatInputPanelItemNode: ListViewItemNode {
         
     private let avatarNode: AvatarNode
     private let textNode: TextNode
-    private let topSeparatorNode: ASDisplayNode
     private let separatorNode: ASDisplayNode
     private let highlightedBackgroundNode: ASDisplayNode
     
@@ -108,6 +110,8 @@ final class MentionChatInputPanelItemNode: ListViewItemNode {
     private var recognizer: ItemListRevealOptionsGestureRecognizer?
     private var hapticFeedback: HapticFeedback?
     
+    private let activateAreaNode: AccessibilityAreaNode
+    
     private var item: MentionChatInputPanelItem?
     
     private var validLayout: (CGSize, CGFloat, CGFloat)?
@@ -116,22 +120,23 @@ final class MentionChatInputPanelItemNode: ListViewItemNode {
         self.avatarNode = AvatarNode(font: avatarFont)
         self.textNode = TextNode()
         
-        self.topSeparatorNode = ASDisplayNode()
-        self.topSeparatorNode.isLayerBacked = true
-        
         self.separatorNode = ASDisplayNode()
         self.separatorNode.isLayerBacked = true
         
         self.highlightedBackgroundNode = ASDisplayNode()
         self.highlightedBackgroundNode.isLayerBacked = true
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        self.activateAreaNode = AccessibilityAreaNode()
+        self.activateAreaNode.accessibilityTraits = [.button]
         
-        self.addSubnode(self.topSeparatorNode)
+        super.init(layerBacked: false)
+        
         self.addSubnode(self.separatorNode)
         
         self.addSubnode(self.avatarNode)
         self.addSubnode(self.textNode)
+        
+        self.addSubnode(self.activateAreaNode)
     }
     
     override func didLoad() {
@@ -143,10 +148,10 @@ final class MentionChatInputPanelItemNode: ListViewItemNode {
         self.view.addGestureRecognizer(recognizer)
     }
     
-    override public func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, previousItem: ListViewItem?, nextItem: ListViewItem?) {
+    override public func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, neighbors: ListViewItemNeighbors) {
         if let item = item as? MentionChatInputPanelItem {
             let doLayout = self.asyncLayout()
-            let merged = (top: previousItem != nil, bottom: nextItem != nil)
+            let merged = (top: neighbors.previous != nil, bottom: neighbors.next != nil)
             let (layout, apply) = doLayout(item, params, merged.top, merged.bottom)
             self.contentSize = layout.contentSize
             self.insets = layout.insets
@@ -171,10 +176,14 @@ final class MentionChatInputPanelItemNode: ListViewItemNode {
                 updatedInverted = item.inverted
             }
             
+            
+            let title = item.peer.displayTitle(strings: item.presentationData.strings, displayOrder: item.presentationData.nameDisplayOrder)
+            var username: String?
             let string = NSMutableAttributedString()
-            string.append(NSAttributedString(string: item.peer.debugDisplayTitle, font: primaryFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor))
+            string.append(NSAttributedString(string: title, font: primaryFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor))
             if let addressName = item.peer.addressName, !addressName.isEmpty {
                 string.append(NSAttributedString(string: " @\(addressName)", font: secondaryFont, textColor: item.presentationData.theme.list.itemSecondaryTextColor))
+                username = "@\(addressName)"
             }
             
             let (textLayout, textApply) = makeTextLayout(TextNodeLayoutArguments(attributedString: string, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - rightInset, height: 100.0), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
@@ -196,27 +205,27 @@ final class MentionChatInputPanelItemNode: ListViewItemNode {
                     }
                     
                     strongSelf.separatorNode.backgroundColor = item.presentationData.theme.list.itemPlainSeparatorColor
-                    strongSelf.topSeparatorNode.backgroundColor = item.presentationData.theme.list.itemPlainSeparatorColor
-                    strongSelf.backgroundColor = item.presentationData.theme.list.plainBackgroundColor
                     strongSelf.highlightedBackgroundNode.backgroundColor = item.presentationData.theme.list.itemHighlightedBackgroundColor
                     
-                    strongSelf.avatarNode.setPeer(context: item.context, theme: item.presentationData.theme, peer: EnginePeer(item.peer), emptyColor: item.presentationData.theme.list.mediaPlaceholderColor)
+                    strongSelf.avatarNode.setPeer(context: item.context, theme: item.presentationData.theme, peer: item.peer, emptyColor: item.presentationData.theme.list.mediaPlaceholderColor)
                     
                     let _ = textApply()
                     
                     strongSelf.avatarNode.frame = CGRect(origin: CGPoint(x: params.leftInset + 12.0, y: floor((nodeLayout.contentSize.height - 30.0) / 2.0)), size: CGSize(width: 30.0, height: 30.0))
                     strongSelf.textNode.frame = CGRect(origin: CGPoint(x: leftInset, y: floor((nodeLayout.contentSize.height - textLayout.size.height) / 2.0)), size: textLayout.size)
                     
-                    strongSelf.topSeparatorNode.isHidden = mergedTop
                     strongSelf.separatorNode.isHidden = !mergedBottom
                     
-                    strongSelf.topSeparatorNode.frame = CGRect(origin: CGPoint(x: 0.0, y: item.inverted ? (nodeLayout.contentSize.height - UIScreenPixel) : 0.0), size: CGSize(width: params.width, height: UIScreenPixel))
                     strongSelf.separatorNode.frame = CGRect(origin: CGPoint(x: leftInset, y: !item.inverted ? (nodeLayout.contentSize.height - UIScreenPixel) : 0.0), size: CGSize(width: params.width - leftInset, height: UIScreenPixel))
                     
                     strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: params.width, height: nodeLayout.size.height + UIScreenPixel))
                     
-                    if let peer = item.peer as? TelegramUser, let _ = peer.botInfo {
-                        strongSelf.setRevealOptions([ItemListRevealOption(key: 0, title: item.presentationData.strings.Common_Delete, icon: .none, color: item.presentationData.theme.list.itemDisclosureActions.destructive.fillColor, textColor: item.presentationData.theme.list.itemDisclosureActions.destructive.foregroundColor)])
+                    strongSelf.activateAreaNode.accessibilityLabel = title
+                    strongSelf.activateAreaNode.accessibilityValue = username
+                    strongSelf.activateAreaNode.frame = CGRect(origin: .zero, size: nodeLayout.size)
+                    
+                    if case let .user(peer) = item.peer, let _ = peer.botInfo {
+                        strongSelf.setRevealOptions([ItemListRevealOption(key: 0, title: item.presentationData.strings.Common_Delete, icon: .none, color: item.presentationData.theme.list.itemDisclosureActions.destructive.fillColor, iconColor: item.presentationData.theme.list.itemDisclosureActions.destructive.foregroundColor, textColor: item.presentationData.theme.list.itemSecondaryTextColor, isDestructive: true)])
                         strongSelf.setRevealOptionsOpened(item.revealed, animated: animation.isAnimated)
                     } else {
                         strongSelf.setRevealOptions([])
@@ -244,7 +253,7 @@ final class MentionChatInputPanelItemNode: ListViewItemNode {
         if highlighted {
             self.highlightedBackgroundNode.alpha = 1.0
             if self.highlightedBackgroundNode.supernode == nil {
-                self.insertSubnode(self.highlightedBackgroundNode, aboveSubnode: self.separatorNode)
+                //self.insertSubnode(self.highlightedBackgroundNode, aboveSubnode: self.separatorNode)
             }
         } else {
             if self.highlightedBackgroundNode.supernode != nil {
@@ -399,7 +408,7 @@ final class MentionChatInputPanelItemNode: ListViewItemNode {
             }, tapticAction: { [weak self] in
                 self?.hapticImpact()
             })
-            revealNode.setOptions(self.revealOptions, isLeft: false)
+            revealNode.setOptions(self.revealOptions, isLeft: false, enableAnimations: true)
             self.revealNode = revealNode
             
             if let (size, _, rightInset) = self.validLayout {

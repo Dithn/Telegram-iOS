@@ -7,6 +7,7 @@ import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
 import AccountContext
+import Markdown
 
 public final class AdInfoScreen: ViewController {
     private final class Node: ViewControllerTracingNode {
@@ -68,25 +69,32 @@ public final class AdInfoScreen: ViewController {
             self.controller = controller
             self.context = context
 
-            self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
+            self.presentationData = controller.presentationData
 
             self.titleNode = ImmediateTextNode()
             self.titleNode.maximumNumberOfLines = 1
-            self.titleNode.attributedText = NSAttributedString(string: self.presentationData.strings.SponsoredMessageInfoScreen_Title, font: NavigationBar.titleFont, textColor: self.presentationData.theme.rootController.navigationBar.primaryTextColor)
+            self.titleNode.attributedText = NSAttributedString(string: self.presentationData.strings.SponsoredMessageInfoScreen_Title, font: Font.with(size: 17.0, design: .regular, weight: .semibold, traits: [.monospacedNumbers]), textColor: self.presentationData.theme.rootController.navigationBar.primaryTextColor)
 
             self.scrollNode = ASScrollNode()
             self.scrollNode.view.showsVerticalScrollIndicator = true
             self.scrollNode.view.showsHorizontalScrollIndicator = false
-            self.scrollNode.view.scrollsToTop = true
+            self.scrollNode.view.scrollsToTop = false
             self.scrollNode.view.delaysContentTouches = false
             self.scrollNode.view.canCancelContentTouches = true
             if #available(iOS 11.0, *) {
                 self.scrollNode.view.contentInsetAdjustmentBehavior = .never
             }
 
-            var openUrl: (() -> Void)?
+            var openUrl: ((String) -> Void)?
 
-            let rawText = self.presentationData.strings.SponsoredMessageInfoScreen_Text
+            #if DEBUG && false
+            let rawText = "First Line\n**Bold Text** [Description](http://google.com) text\n[url]\nabcdee"
+            #else
+            let rawText = self.presentationData.strings.SponsoredMessageInfoScreen_MarkdownText
+            #endif
+            
+            let defaultUrl = self.presentationData.strings.SponsoredMessageInfo_Url
+            
             var items: [Item] = []
             var didAddUrl = false
             for component in rawText.components(separatedBy: "[url]") {
@@ -100,20 +108,40 @@ public final class AdInfoScreen: ViewController {
 
                 let textNode = ImmediateTextNode()
                 textNode.maximumNumberOfLines = 0
-                textNode.attributedText = NSAttributedString(string: itemText, font: Font.regular(16.0), textColor: self.presentationData.theme.list.itemPrimaryTextColor)
+                textNode.attributedText = parseMarkdownIntoAttributedString(itemText, attributes: MarkdownAttributes(
+                    body: MarkdownAttributeSet(font: Font.regular(16.0), textColor: self.presentationData.theme.list.itemPrimaryTextColor),
+                    bold: MarkdownAttributeSet(font: Font.semibold(16.0), textColor: self.presentationData.theme.list.itemPrimaryTextColor),
+                    link: MarkdownAttributeSet(font: Font.regular(16.0), textColor: self.presentationData.theme.list.itemAccentColor),
+                    linkAttribute: { url in
+                        return ("URL", url)
+                    }
+                ))
                 items.append(.text(textNode))
+                textNode.highlightAttributeAction = { attributes in
+                    if let _ = attributes[NSAttributedString.Key(rawValue: "URL")] {
+                        return NSAttributedString.Key(rawValue: "URL")
+                    } else {
+                        return nil
+                    }
+                }
+                textNode.tapAttributeAction = { attributes, _ in
+                    if let value = attributes[NSAttributedString.Key(rawValue: "URL")] as? String {
+                        openUrl?(value)
+                    }
+                }
+                textNode.linkHighlightColor = self.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.2)
 
                 if !didAddUrl {
                     didAddUrl = true
                     items.append(.link(LinkNode(text: self.presentationData.strings.SponsoredMessageInfo_Url, color: self.presentationData.theme.list.itemAccentColor, action: {
-                        openUrl?()
+                        openUrl?(defaultUrl)
                     })))
                 }
             }
             if !didAddUrl {
                 didAddUrl = true
                 items.append(.link(LinkNode(text: self.presentationData.strings.SponsoredMessageInfo_Url, color: self.presentationData.theme.list.itemAccentColor, action: {
-                    openUrl?()
+                    openUrl?(defaultUrl)
                 })))
             }
             self.items = items
@@ -133,11 +161,11 @@ public final class AdInfoScreen: ViewController {
                 }
             }
 
-            openUrl = { [weak self] in
+            openUrl = { [weak self] url in
                 guard let strongSelf = self else {
                     return
                 }
-                strongSelf.context.sharedContext.applicationBindings.openUrl(strongSelf.presentationData.strings.SponsoredMessageInfo_Url)
+                strongSelf.context.sharedContext.applicationBindings.openUrl(url)
             }
         }
 
@@ -145,14 +173,18 @@ public final class AdInfoScreen: ViewController {
             if self.titleNode.supernode == nil {
                 self.addSubnode(self.titleNode)
             }
-            let titleSize = self.titleNode.updateLayout(CGSize(width: layout.size.width - layout.safeInsets.left * 2.0 - 80.0 - 16.0 * 2.0, height: 100.0))
-            transition.updateFrameAdditive(node: self.titleNode, frame: CGRect(origin: CGPoint(x: layout.safeInsets.left + 16.0, y: floor((navigationHeight - titleSize.height) / 2.0)), size: titleSize))
+            let titleSize = self.titleNode.updateLayout(CGSize(width: layout.size.width - layout.safeInsets.left - layout.safeInsets.right - 80.0 - 16.0 * 2.0, height: 100.0))
+            // Centred in the bar's row below the status bar, as the bar's Done button is: in landscape the modal is
+            // full screen, and iPhone Duo's folded landscape has a status bar there. No status bar gives the old y.
+            let barStatusBarHeight: CGFloat = layout.navigationBarStatusBarHeight ?? 0.0
+            transition.updateFrameAdditive(node: self.titleNode, frame: CGRect(origin: CGPoint(x: layout.safeInsets.left + 16.0, y: barStatusBarHeight + floor((navigationHeight - barStatusBarHeight - titleSize.height) / 2.0)), size: titleSize))
 
             transition.updateFrame(node: self.scrollNode, frame: CGRect(origin: CGPoint(), size: layout.size))
             self.scrollNode.view.scrollIndicatorInsets = UIEdgeInsets(top: navigationHeight, left: 0.0, bottom: 0.0, right: 0.0)
 
+            // Per side: on iPhone Duo the right safe inset is the side strip. Equal insets give the old width.
             let sideInset: CGFloat = layout.safeInsets.left + 16.0
-            let maxWidth: CGFloat = layout.size.width - sideInset * 2.0
+            let maxWidth: CGFloat = layout.size.width - sideInset - (layout.safeInsets.right + 16.0)
             var contentHeight: CGFloat = navigationHeight + 16.0
 
             for item in self.items {
@@ -183,11 +215,16 @@ public final class AdInfoScreen: ViewController {
     }
 
     private let context: AccountContext
-    private var presentationData: PresentationData
+    fileprivate var presentationData: PresentationData
 
-    public init(context: AccountContext) {
+    public init(context: AccountContext, forceDark: Bool = false) {
         self.context = context
-        self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
+        
+        var presentationData = context.sharedContext.currentPresentationData.with { $0 }
+        if forceDark {
+            presentationData = presentationData.withUpdated(theme: defaultDarkColorPresentationTheme)
+        }
+        self.presentationData = presentationData
 
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
 

@@ -3,7 +3,6 @@ import UIKit
 import AsyncDisplayKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
@@ -13,68 +12,75 @@ import AlertUI
 import PresentationDataUtils
 import MediaResources
 import WallpaperResources
-import ShareController
+
 import AccountContext
 import ContextUI
 import UndoUI
-
-func themeDisplayName(strings: PresentationStrings, reference: PresentationThemeReference) -> String {
-    let name: String
-    switch reference {
-        case let .builtin(theme):
-            switch theme {
-                case .dayClassic:
-                    name = strings.Appearance_ThemeCarouselClassic
-                case .day:
-                    name = strings.Appearance_ThemeCarouselDay
-                case .night:
-                    name = strings.Appearance_ThemeCarouselNewNight
-                case .nightAccent:
-                    name = strings.Appearance_ThemeCarouselTintedNight
-            }
-        case let .local(theme):
-            name = theme.title
-        case let .cloud(theme):
-            if let emoticon = theme.theme.emoticon {
-                name = emoticon
-            } else {
-                name = theme.theme.title
-            }
-    }
-    return name
-}
+import PremiumUI
+import PeerNameColorScreen
+import ThemeCarouselItem
+import ThemeAccentColorScreen
+import WallpaperGridScreen
+import PeerNameColorItem
+import DeviceModel
 
 private final class ThemeSettingsControllerArguments {
     let context: AccountContext
     let selectTheme: (PresentationThemeReference) -> Void
     let openThemeSettings: () -> Void
     let openWallpaperSettings: () -> Void
+    let openNameColorSettings: () -> Void
     let selectAccentColor: (PresentationThemeAccentColor?) -> Void
     let openAccentColorPicker: (PresentationThemeReference, Bool) -> Void
     let toggleNightTheme: (Bool) -> Void
     let openAutoNightTheme: () -> Void
     let openTextSize: () -> Void
     let openBubbleSettings: () -> Void
-    let toggleLargeEmoji: (Bool) -> Void
-    let disableAnimations: (Bool) -> Void
-    let selectAppIcon: (String) -> Void
+    let openPowerSavingSettings: () -> Void
+    let openStickersAndEmoji: () -> Void
+    let toggleSendWithCmdEnter: (Bool) -> Void
+    let toggleShowNextMediaOnTap: (Bool) -> Void
+    let selectAppIcon: (PresentationAppIcon) -> Void
     let editTheme: (PresentationCloudTheme) -> Void
     let themeContextAction: (Bool, PresentationThemeReference, ASDisplayNode, ContextGesture?) -> Void
     let colorContextAction: (Bool, PresentationThemeReference, ThemeSettingsColorOption?, ASDisplayNode, ContextGesture?) -> Void
     
-    init(context: AccountContext, selectTheme: @escaping (PresentationThemeReference) -> Void, openThemeSettings: @escaping () -> Void, openWallpaperSettings: @escaping () -> Void, selectAccentColor: @escaping (PresentationThemeAccentColor?) -> Void, openAccentColorPicker: @escaping (PresentationThemeReference, Bool) -> Void, toggleNightTheme: @escaping (Bool) -> Void, openAutoNightTheme: @escaping () -> Void, openTextSize: @escaping () -> Void, openBubbleSettings: @escaping () -> Void, toggleLargeEmoji: @escaping (Bool) -> Void, disableAnimations: @escaping (Bool) -> Void, selectAppIcon: @escaping (String) -> Void, editTheme: @escaping (PresentationCloudTheme) -> Void, themeContextAction: @escaping (Bool, PresentationThemeReference, ASDisplayNode, ContextGesture?) -> Void, colorContextAction: @escaping (Bool, PresentationThemeReference, ThemeSettingsColorOption?, ASDisplayNode, ContextGesture?) -> Void) {
+    init(
+        context: AccountContext,
+        selectTheme: @escaping (PresentationThemeReference) -> Void,
+        openThemeSettings: @escaping () -> Void,
+        openWallpaperSettings: @escaping () -> Void,
+        openNameColorSettings: @escaping () -> Void,
+        selectAccentColor: @escaping (PresentationThemeAccentColor?) -> Void,
+        openAccentColorPicker: @escaping (PresentationThemeReference, Bool) -> Void,
+        toggleNightTheme: @escaping (Bool) -> Void,
+        openAutoNightTheme: @escaping () -> Void,
+        openTextSize: @escaping () -> Void,
+        openBubbleSettings: @escaping () -> Void,
+        openPowerSavingSettings: @escaping () -> Void,
+        openStickersAndEmoji: @escaping () -> Void,
+        toggleSendWithCmdEnter: @escaping (Bool) -> Void,
+        toggleShowNextMediaOnTap: @escaping (Bool) -> Void,
+        selectAppIcon: @escaping (PresentationAppIcon) -> Void,
+        editTheme: @escaping (PresentationCloudTheme) -> Void,
+        themeContextAction: @escaping (Bool, PresentationThemeReference, ASDisplayNode, ContextGesture?) -> Void,
+        colorContextAction: @escaping (Bool, PresentationThemeReference, ThemeSettingsColorOption?, ASDisplayNode, ContextGesture?) -> Void
+    ) {
         self.context = context
         self.selectTheme = selectTheme
         self.openThemeSettings = openThemeSettings
         self.openWallpaperSettings = openWallpaperSettings
+        self.openNameColorSettings = openNameColorSettings
         self.selectAccentColor = selectAccentColor
         self.openAccentColorPicker = openAccentColorPicker
         self.toggleNightTheme = toggleNightTheme
         self.openAutoNightTheme = openAutoNightTheme
         self.openTextSize = openTextSize
         self.openBubbleSettings = openBubbleSettings
-        self.toggleLargeEmoji = toggleLargeEmoji
-        self.disableAnimations = disableAnimations
+        self.openPowerSavingSettings = openPowerSavingSettings
+        self.openStickersAndEmoji = openStickersAndEmoji
+        self.toggleSendWithCmdEnter = toggleSendWithCmdEnter
+        self.toggleShowNextMediaOnTap = toggleShowNextMediaOnTap
         self.selectAppIcon = selectAppIcon
         self.editTheme = editTheme
         self.themeContextAction = themeContextAction
@@ -87,6 +93,7 @@ private enum ThemeSettingsControllerSection: Int32 {
     case nightMode
     case message
     case icon
+    case powerSaving
     case other
 }
 
@@ -96,8 +103,13 @@ public enum ThemeSettingsEntryTag: ItemListItemTag {
     case tint
     case accentColor
     case icon
-    case largeEmoji
+    case powerSaving
+    case stickersAndEmoji
     case animations
+    case sendWithCmdEnter
+    case tapForNextMedia
+    case nightMode
+    case edit
     
     public func isEqual(to other: ItemListItemTag) -> Bool {
         if let other = other as? ThemeSettingsEntryTag, self == other {
@@ -114,20 +126,23 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
     case themes(PresentationTheme, PresentationStrings, [PresentationThemeReference], PresentationThemeReference, Bool, [String: [StickerPackItem]], [Int64: PresentationThemeAccentColor], [Int64: TelegramWallpaper])
     case chatTheme(PresentationTheme, String)
     case wallpaper(PresentationTheme, String)
+    case nameColor(PresentationTheme, String, String, PeerNameColors.Colors?, PeerNameColors.Colors?)
     case autoNight(PresentationTheme, String, Bool, Bool)
     case autoNightTheme(PresentationTheme, String, String)
     case textSize(PresentationTheme, String, String)
     case bubbleSettings(PresentationTheme, String, String)
     case iconHeader(PresentationTheme, String)
-    case iconItem(PresentationTheme, PresentationStrings, [PresentationAppIcon], String?)
+    case iconItem(PresentationTheme, PresentationStrings, [PresentationAppIcon], Bool, String?)
+    case powerSaving
+    case stickersAndEmoji
     case otherHeader(PresentationTheme, String)
-    case largeEmoji(PresentationTheme, String, Bool)
-    case animations(PresentationTheme, String, Bool)
-    case animationsInfo(PresentationTheme, String)
+    case sendWithCmdEnter(PresentationTheme, String, Bool)
+    case showNextMediaOnTap(PresentationTheme, String, Bool)
+    case showNextMediaOnTapInfo(PresentationTheme, String)
     
     var section: ItemListSectionId {
         switch self {
-            case .themeListHeader, .chatPreview, .themes, .chatTheme, .wallpaper:
+        case .themeListHeader, .chatPreview, .themes, .chatTheme, .wallpaper, .nameColor:
                 return ThemeSettingsControllerSection.chatPreview.rawValue
             case .autoNight, .autoNightTheme:
                 return ThemeSettingsControllerSection.nightMode.rawValue
@@ -135,43 +150,51 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
                 return ThemeSettingsControllerSection.message.rawValue
             case .iconHeader, .iconItem:
                 return ThemeSettingsControllerSection.icon.rawValue
-            case .otherHeader, .largeEmoji, .animations, .animationsInfo:
+            case .powerSaving, .stickersAndEmoji:
+                return ThemeSettingsControllerSection.message.rawValue
+            case .otherHeader, .sendWithCmdEnter, .showNextMediaOnTap, .showNextMediaOnTapInfo:
                 return ThemeSettingsControllerSection.other.rawValue
         }
     }
     
     var stableId: Int32 {
         switch self {
-            case .themeListHeader:
-                return 0
-            case .chatPreview:
-                return 1
-            case .themes:
-                return 2
-            case .chatTheme:
-                return 3
-            case .wallpaper:
-                return 4
-            case .autoNight:
-                return 5
-            case .autoNightTheme:
-                return 6
-            case .textSize:
-                return 7
-            case .bubbleSettings:
-                return 8
-            case .iconHeader:
-                return 9
-            case .iconItem:
-                return 10
-            case .otherHeader:
-                return 11
-            case .largeEmoji:
-                return 12
-            case .animations:
-                return 13
-            case .animationsInfo:
-                return 14
+        case .themeListHeader:
+            return 0
+        case .chatPreview:
+            return 1
+        case .themes:
+            return 2
+        case .chatTheme:
+            return 3
+        case .wallpaper:
+            return 4
+        case .nameColor:
+            return 5
+        case .autoNight:
+            return 6
+        case .autoNightTheme:
+            return 7
+        case .textSize:
+            return 8
+        case .bubbleSettings:
+            return 9
+        case .powerSaving:
+            return 10
+        case .stickersAndEmoji:
+            return 11
+        case .iconHeader:
+            return 12
+        case .iconItem:
+            return 13
+        case .otherHeader:
+            return 14
+        case .sendWithCmdEnter:
+            return 15
+        case .showNextMediaOnTap:
+            return 16
+        case .showNextMediaOnTapInfo:
+            return 17
         }
     }
     
@@ -197,6 +220,12 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
                 }
             case let .wallpaper(lhsTheme, lhsText):
                 if case let .wallpaper(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                    return true
+                } else {
+                    return false
+                }
+            case let .nameColor(lhsTheme, lhsText, lhsName, lhsNameColor, lhsProfileColor):
+                if case let .nameColor(rhsTheme, rhsText, rhsName, rhsNameColor, rhsProfileColor) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsName == rhsName, lhsNameColor == rhsNameColor, lhsProfileColor == rhsProfileColor {
                     return true
                 } else {
                     return false
@@ -237,8 +266,20 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
                 } else {
                     return false
                 }
-            case let .iconItem(lhsTheme, lhsStrings, lhsIcons, lhsValue):
-                if case let .iconItem(rhsTheme, rhsStrings, rhsIcons, rhsValue) = rhs, lhsTheme === rhsTheme, lhsStrings === rhsStrings, lhsIcons == rhsIcons, lhsValue == rhsValue {
+            case let .iconItem(lhsTheme, lhsStrings, lhsIcons, lhsIsPremium, lhsValue):
+                if case let .iconItem(rhsTheme, rhsStrings, rhsIcons, rhsIsPremium, rhsValue) = rhs, lhsTheme === rhsTheme, lhsStrings === rhsStrings, lhsIcons == rhsIcons, lhsIsPremium == rhsIsPremium, lhsValue == rhsValue {
+                    return true
+                } else {
+                    return false
+                }
+            case .powerSaving:
+                if case .powerSaving = rhs {
+                    return true
+                } else {
+                    return false
+                }
+            case .stickersAndEmoji:
+                if case .stickersAndEmoji = rhs {
                     return true
                 } else {
                     return false
@@ -249,20 +290,20 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
                 } else {
                     return false
                 }
-            case let .largeEmoji(lhsTheme, lhsTitle, lhsValue):
-                if case let .largeEmoji(rhsTheme, rhsTitle, rhsValue) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle, lhsValue == rhsValue {
+            case let .sendWithCmdEnter(lhsTheme, lhsTitle, lhsValue):
+                if case let .sendWithCmdEnter(rhsTheme, rhsTitle, rhsValue) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle, lhsValue == rhsValue {
                     return true
                 } else {
                     return false
                 }
-            case let .animations(lhsTheme, lhsTitle, lhsValue):
-                if case let .animations(rhsTheme, rhsTitle, rhsValue) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle, lhsValue == rhsValue {
+            case let .showNextMediaOnTap(lhsTheme, lhsTitle, lhsValue):
+                if case let .showNextMediaOnTap(rhsTheme, rhsTitle, rhsValue) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle, lhsValue == rhsValue {
                     return true
                 } else {
                     return false
                 }
-            case let .animationsInfo(lhsTheme, lhsText):
-                if case let .animationsInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+            case let .showNextMediaOnTapInfo(lhsTheme, lhsText):
+                if case let .showNextMediaOnTapInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
                     return true
                 } else {
                     return false
@@ -278,72 +319,135 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
         let arguments = arguments as! ThemeSettingsControllerArguments
         switch self {
             case let .chatPreview(theme, wallpaper, fontSize, chatBubbleCorners, strings, dateTimeFormat, nameDisplayOrder, items):
-                return ThemeSettingsChatPreviewItem(context: arguments.context, theme: theme, componentTheme: theme, strings: strings, sectionId: self.section, fontSize: fontSize, chatBubbleCorners: chatBubbleCorners, wallpaper: wallpaper, dateTimeFormat: dateTimeFormat, nameDisplayOrder: nameDisplayOrder, messageItems: items)
+                return ThemeSettingsChatPreviewItem(context: arguments.context, systemStyle: .glass, theme: theme, componentTheme: theme, strings: strings, sectionId: self.section, fontSize: fontSize, chatBubbleCorners: chatBubbleCorners, wallpaper: wallpaper, dateTimeFormat: dateTimeFormat, nameDisplayOrder: nameDisplayOrder, messageItems: items)
             case let .themes(theme, strings, chatThemes, currentTheme, nightMode, animatedEmojiStickers, themeSpecificAccentColors, themeSpecificChatWallpapers):
-                return ThemeCarouselThemeItem(context: arguments.context, theme: theme, strings: strings, sectionId: self.section, themes: chatThemes, animatedEmojiStickers: animatedEmojiStickers, themeSpecificAccentColors: themeSpecificAccentColors, themeSpecificChatWallpapers: themeSpecificChatWallpapers, nightMode: nightMode, currentTheme: currentTheme, updatedTheme: { theme in
-                arguments.selectTheme(theme)
-            }, contextAction: { theme, node, gesture in
-                arguments.themeContextAction(false, theme, node, gesture)
-            }, tag: ThemeSettingsEntryTag.theme)
+                return ThemeCarouselThemeItem(context: arguments.context, theme: theme, strings: strings, sectionId: self.section, themes: chatThemes, hasNoTheme: false, animatedEmojiStickers: animatedEmojiStickers, themeSpecificAccentColors: themeSpecificAccentColors, themeSpecificChatWallpapers: themeSpecificChatWallpapers, nightMode: nightMode, currentTheme: currentTheme, updatedTheme: { theme in
+                    if let theme {
+                        arguments.selectTheme(theme)
+                    }
+                }, contextAction: { theme, node, gesture in
+                    arguments.themeContextAction(false, theme, node, gesture)
+                }, tag: ThemeSettingsEntryTag.theme)
             case let .chatTheme(_, text):
-                return ItemListDisclosureItem(presentationData: presentationData, title: text, label: "", sectionId: self.section, style: .blocks, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: text, label: "", sectionId: self.section, style: .blocks, action: {
                     arguments.openThemeSettings()
                 })
             case let .wallpaper(_, text):
-                return ItemListDisclosureItem(presentationData: presentationData, title: text, label: "", sectionId: self.section, style: .blocks, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: text, label: "", sectionId: self.section, style: .blocks, action: {
                     arguments.openWallpaperSettings()
                 })
+            case let .nameColor(_, text, _, nameColor, profileColor):
+                var colors: [PeerNameColors.Colors] = []
+                if let nameColor {
+                    colors.append(nameColor)
+                }
+                if let profileColor {
+                    colors.append(profileColor)
+                }
+            
+                let colorImage = generateSettingsMenuPeerColorsLabelIcon(colors: colors)
+            
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: text, label: "", labelStyle: .image(image: colorImage, size: colorImage.size), sectionId: self.section, style: .blocks, action: {
+                    arguments.openNameColorSettings()
+                })
             case let .autoNight(_, title, value, enabled):
-                return ItemListSwitchItem(presentationData: presentationData, title: title, value: value, enabled: enabled, sectionId: self.section, style: .blocks, updated: { value in
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, enabled: enabled, sectionId: self.section, style: .blocks, updated: { value in
                     arguments.toggleNightTheme(value)
-                }, tag: nil)
+                }, tag: ThemeSettingsEntryTag.nightMode)
             case let .autoNightTheme(_, text, value):
-                return ItemListDisclosureItem(presentationData: presentationData, icon: nil, title: text, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: nil, title: text, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                     arguments.openAutoNightTheme()
                 })
             case let .textSize(_, text, value):
-                return ItemListDisclosureItem(presentationData: presentationData, icon: nil, title: text, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: nil, title: text, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                     arguments.openTextSize()
                 })
             case let .bubbleSettings(_, text, value):
-                return ItemListDisclosureItem(presentationData: presentationData, icon: nil, title: text, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: nil, title: text, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                     arguments.openBubbleSettings()
                 })
             case let .themeListHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
             case let .iconHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-            case let .iconItem(theme, strings, icons, value):
-                return ThemeSettingsAppIconItem(theme: theme, strings: strings, sectionId: self.section, icons: icons, currentIconName: value, updated: { iconName in
-                    arguments.selectAppIcon(iconName)
+            case let .iconItem(theme, strings, icons, isPremium, value):
+                return ThemeSettingsAppIconItem(theme: theme, strings: strings, systemStyle: .glass, sectionId: self.section, icons: icons, isPremium: isPremium, currentIconName: value, updated: { icon in
+                    arguments.selectAppIcon(icon)
+                }, tag: ThemeSettingsEntryTag.icon)
+            case .powerSaving:
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: nil, title: presentationData.strings.AppearanceSettings_Animations, label: "", labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                    arguments.openPowerSavingSettings()
+                })
+            case .stickersAndEmoji:
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: nil, title: presentationData.strings.ChatSettings_StickersAndReactions, label: "", labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                    arguments.openStickersAndEmoji()
                 })
             case let .otherHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-            case let .largeEmoji(_, title, value):
-                return ItemListSwitchItem(presentationData: presentationData, title: title, value: value, sectionId: self.section, style: .blocks, updated: { value in
-                    arguments.toggleLargeEmoji(value)
-                }, tag: ThemeSettingsEntryTag.largeEmoji)
-            case let .animations(_, title, value):
-                return ItemListSwitchItem(presentationData: presentationData, title: title, value: value, sectionId: self.section, style: .blocks, updated: { value in
-                    arguments.disableAnimations(value)
-                }, tag: ThemeSettingsEntryTag.animations)
-            case let .animationsInfo(_, text):
+            case let .sendWithCmdEnter(_, title, value):
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: { value in
+                    arguments.toggleSendWithCmdEnter(value)
+                }, tag: ThemeSettingsEntryTag.sendWithCmdEnter)
+            case let .showNextMediaOnTap(_, title, value):
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: { value in
+                    arguments.toggleShowNextMediaOnTap(value)
+                }, tag: ThemeSettingsEntryTag.tapForNextMedia)
+            case let .showNextMediaOnTapInfo(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         }
     }
 }
 
-private func themeSettingsControllerEntries(presentationData: PresentationData, presentationThemeSettings: PresentationThemeSettings, themeReference: PresentationThemeReference, availableThemes: [PresentationThemeReference], availableAppIcons: [PresentationAppIcon], currentAppIconName: String?, chatThemes: [PresentationThemeReference], animatedEmojiStickers: [String: [StickerPackItem]]) -> [ThemeSettingsControllerEntry] {
+private func themeSettingsControllerEntries(
+    presentationData: PresentationData,
+    presentationThemeSettings: PresentationThemeSettings,
+    chatSettings: ChatSettings,
+    mediaSettings: MediaDisplaySettings,
+    themeReference: PresentationThemeReference,
+    availableThemes: [PresentationThemeReference],
+    availableAppIcons: [PresentationAppIcon],
+    currentAppIconName: String?,
+    isPremium: Bool,
+    chatThemes: [PresentationThemeReference],
+    animatedEmojiStickers: [String: [StickerPackItem]],
+    accountPeer: EnginePeer?,
+    nameColors: PeerNameColors
+) -> [ThemeSettingsControllerEntry] {
     var entries: [ThemeSettingsControllerEntry] = []
     
     let strings = presentationData.strings
     let title = presentationData.autoNightModeTriggered ? strings.Appearance_ColorThemeNight.uppercased() : strings.Appearance_ColorTheme.uppercased()
     entries.append(.themeListHeader(presentationData.theme, title))
-    entries.append(.chatPreview(presentationData.theme, presentationData.chatWallpaper, presentationData.chatFontSize, presentationData.chatBubbleCorners, presentationData.strings, presentationData.dateTimeFormat, presentationData.nameDisplayOrder, [ChatPreviewMessageItem(outgoing: false, reply: (presentationData.strings.Appearance_PreviewReplyAuthor, presentationData.strings.Appearance_PreviewReplyText), text: presentationData.strings.Appearance_PreviewIncomingText), ChatPreviewMessageItem(outgoing: true, reply: nil, text: presentationData.strings.Appearance_PreviewOutgoingText)]))
+    
+    let nameColor: PeerColor
+    let profileColor: PeerNameColor?
+    var authorName = presentationData.strings.Appearance_PreviewReplyAuthor
+    if let accountPeer {
+        nameColor = accountPeer.nameColor ?? .preset(.blue)
+        if accountPeer.hasCustomNameColor {
+            authorName = accountPeer.displayTitle(strings: strings, displayOrder: presentationData.nameDisplayOrder)
+        }
+        profileColor = accountPeer.effectiveProfileColor
+    } else {
+        nameColor = .preset(.blue)
+        profileColor = nil
+    }
+    
+    entries.append(.chatPreview(presentationData.theme, presentationData.chatWallpaper, presentationData.chatFontSize, presentationData.chatBubbleCorners, presentationData.strings, presentationData.dateTimeFormat, presentationData.nameDisplayOrder, [ChatPreviewMessageItem(outgoing: false, reply: (authorName, presentationData.strings.Appearance_PreviewReplyText), text: presentationData.strings.Appearance_PreviewIncomingText, nameColor: nameColor, backgroundEmojiId: accountPeer?.backgroundEmojiId), ChatPreviewMessageItem(outgoing: true, reply: nil, text: presentationData.strings.Appearance_PreviewOutgoingText, nameColor: .preset(.blue), backgroundEmojiId: nil)]))
     
     entries.append(.themes(presentationData.theme, presentationData.strings, chatThemes, themeReference, presentationThemeSettings.automaticThemeSwitchSetting.force || presentationData.autoNightModeTriggered, animatedEmojiStickers, presentationThemeSettings.themeSpecificAccentColors, presentationThemeSettings.themeSpecificChatWallpapers))
     entries.append(.chatTheme(presentationData.theme, strings.Settings_ChatThemes))
     entries.append(.wallpaper(presentationData.theme, strings.Settings_ChatBackground))
+    
+    let colors: PeerNameColors.Colors
+    switch nameColor {
+    case let .preset(nameColor):
+        colors = nameColors.get(nameColor, dark: presentationData.theme.overallDarkAppearance)
+    case let .collectible(collectibleColor):
+        colors = collectibleColor.peerNameColors(dark: presentationData.theme.overallDarkAppearance)
+    }
+    let profileColors = profileColor.flatMap { nameColors.getProfile($0, dark: presentationData.theme.overallDarkAppearance, subject: .palette) }
+    entries.append(.nameColor(presentationData.theme, presentationData.strings.Settings_YourColor, accountPeer?.compactDisplayTitle ?? "", colors, profileColors))
     
     entries.append(.autoNight(presentationData.theme, strings.Appearance_NightTheme, presentationThemeSettings.automaticThemeSwitchSetting.force, !presentationData.autoNightModeTriggered || presentationThemeSettings.automaticThemeSwitchSetting.force))
     let autoNightMode: String
@@ -375,16 +479,20 @@ private func themeSettingsControllerEntries(presentationData: PresentationData, 
     }
     entries.append(.textSize(presentationData.theme, strings.Appearance_TextSizeSetting, textSizeValue))
     entries.append(.bubbleSettings(presentationData.theme, strings.Appearance_BubbleCornersSetting, ""))
+    entries.append(.powerSaving)
+    entries.append(.stickersAndEmoji)
     
     if !availableAppIcons.isEmpty {
         entries.append(.iconHeader(presentationData.theme, strings.Appearance_AppIcon.uppercased()))
-        entries.append(.iconItem(presentationData.theme, presentationData.strings, availableAppIcons, currentAppIconName))
+        entries.append(.iconItem(presentationData.theme, presentationData.strings, availableAppIcons, isPremium, currentAppIconName))
     }
     
     entries.append(.otherHeader(presentationData.theme, strings.Appearance_Other.uppercased()))
-    entries.append(.largeEmoji(presentationData.theme, strings.Appearance_LargeEmoji, presentationData.largeEmoji))
-    entries.append(.animations(presentationData.theme, strings.Appearance_ReduceMotion, presentationData.reduceMotion))
-    entries.append(.animationsInfo(presentationData.theme, strings.Appearance_ReduceMotionInfo))
+    if DeviceModel.current.isIpad {
+        entries.append(.sendWithCmdEnter(presentationData.theme, strings.Appearance_SendWithCmdEnter, chatSettings.sendWithCmdEnter))
+    }
+    entries.append(.showNextMediaOnTap(presentationData.theme, strings.Appearance_ShowNextMediaOnTap, mediaSettings.showNextMediaOnTap))
+    entries.append(.showNextMediaOnTapInfo(presentationData.theme, strings.Appearance_ShowNextMediaOnTapInfo))
     
     return entries
 }
@@ -398,7 +506,7 @@ private final class ThemeSettingsControllerImpl: ItemListController, ThemeSettin
 
 public func themeSettingsController(context: AccountContext, focusOnItemTag: ThemeSettingsEntryTag? = nil) -> ViewController {
     #if DEBUG
-    BuiltinWallpaperData.generate(account: context.account)
+    BuiltinWallpaperData.generate(network: context.account.network)
     #endif
 
     var pushControllerImpl: ((ViewController) -> Void)?
@@ -412,14 +520,19 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
     var selectAccentColorImpl: ((PresentationThemeAccentColor?) -> Void)?
     var openAccentColorPickerImpl: ((PresentationThemeReference, Bool) -> Void)?
     
-    let _ = telegramWallpapers(postbox: context.account.postbox, network: context.account.network).start()
+    let _ = context.engine.themes.wallpapers().start()
     
     let currentAppIcon: PresentationAppIcon?
-    let appIcons = context.sharedContext.applicationBindings.getAvailableAlternateIcons()
+    var appIcons = context.sharedContext.applicationBindings.getAvailableAlternateIcons()
     if let alternateIconName = context.sharedContext.applicationBindings.getAlternateIconName() {
         currentAppIcon = appIcons.filter { $0.name == alternateIconName }.first
     } else {
         currentAppIcon = appIcons.filter { $0.isDefault }.first
+    }
+    
+    let premiumConfiguration = PremiumConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
+    if premiumConfiguration.isPremiumDisabled || context.account.testingEnvironment {
+        appIcons = appIcons.filter { !$0.isPremium } 
     }
     
     let availableAppIcons: Signal<[PresentationAppIcon], NoError> = .single(appIcons)
@@ -427,11 +540,14 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
     currentAppIconName.set(currentAppIcon?.name ?? "Blue")
     
     let cloudThemes = Promise<[TelegramTheme]>()
-    let updatedCloudThemes = telegramThemes(postbox: context.account.postbox, network: context.account.network, accountManager: context.sharedContext.accountManager)
+    let updatedCloudThemes = context.engine.themes.themes(accountManager: context.sharedContext.accountManager)
     cloudThemes.set(updatedCloudThemes)
     
     let removedThemeIndexesPromise = Promise<Set<Int64>>(Set())
     let removedThemeIndexes = Atomic<Set<Int64>>(value: Set())
+    
+    let archivedPacks = Promise<[ArchivedStickerPackItem]?>()
+    archivedPacks.set(.single(nil) |> then(context.engine.stickers.archivedStickerPacks() |> map(Optional.init)))
     
     let animatedEmojiStickers = context.engine.stickers.loadedStickerPack(reference: .animatedEmoji, forceActualized: false)
     |> map { animatedEmoji -> [String: [StickerPackItem]] in
@@ -459,6 +575,8 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
         pushControllerImpl?(themePickerController(context: context))
     }, openWallpaperSettings: {
         pushControllerImpl?(ThemeGridController(context: context))
+    }, openNameColorSettings: {
+        pushControllerImpl?(UserAppearanceScreen(context: context))
     }, selectAccentColor: { accentColor in
         selectAccentColorImpl?(accentColor)
     }, openAccentColorPicker: { themeReference, create in
@@ -486,23 +604,52 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
             let settings = view.entries[ApplicationSpecificSharedDataKeys.presentationThemeSettings]?.get(PresentationThemeSettings.self) ?? PresentationThemeSettings.defaultSettings
             pushControllerImpl?(BubbleSettingsController(context: context, presentationThemeSettings: settings))
         })
-    }, toggleLargeEmoji: { largeEmoji in
-        let _ = updatePresentationThemeSettingsInteractively(accountManager: context.sharedContext.accountManager, { current in
-            return current.withUpdatedLargeEmoji(largeEmoji)
+    }, openPowerSavingSettings: {
+        pushControllerImpl?(energySavingSettingsScreen(context: context))
+    }, openStickersAndEmoji: {
+        let _ = (archivedPacks.get() |> take(1) |> deliverOnMainQueue).start(next: { archivedStickerPacks in
+            pushControllerImpl?(installedStickerPacksController(context: context, mode: .general, archivedPacks: archivedStickerPacks, updatedPacks: { _ in
+            }))
+        })
+    }, toggleSendWithCmdEnter: { value in
+        let _ = updateChatSettingsInteractively(accountManager: context.sharedContext.accountManager, { current in
+            return current.withUpdatedSendWithCmdEnter(value)
         }).start()
-    }, disableAnimations: { reduceMotion in
-        let _ = updatePresentationThemeSettingsInteractively(accountManager: context.sharedContext.accountManager, { current in
-            return current.withUpdatedReduceMotion(reduceMotion)
+    }, toggleShowNextMediaOnTap: { value in
+        let _ = updateMediaDisplaySettingsInteractively(accountManager: context.sharedContext.accountManager, { current in
+            return current.withUpdatedShowNextMediaOnTap(value)
         }).start()
-    }, selectAppIcon: { name in
-        currentAppIconName.set(name)
-        context.sharedContext.applicationBindings.requestSetAlternateIconName(name, { _ in
+    }, selectAppIcon: { icon in
+        let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
+        |> deliverOnMainQueue).start(next: { peer in
+            let isPremium = peer?.isPremium ?? false
+            if icon.isPremium && !isPremium {
+                var replaceImpl: ((ViewController) -> Void)?
+                let controller = PremiumDemoScreen(context: context, subject: .appIcons, source: .other, action: {
+                    let controller = PremiumIntroScreen(context: context, source: .appIcons)
+                    replaceImpl?(controller)
+                })
+                replaceImpl = { [weak controller] c in
+                    controller?.replace(with: c)
+                }
+                pushControllerImpl?(controller)
+            } else {
+                currentAppIconName.set(icon.name)
+                context.sharedContext.applicationBindings.requestSetAlternateIconName(icon.isDefault ? nil : icon.name, { _ in
+                })
+            }
         })
     }, editTheme: { theme in
         let controller = editThemeController(context: context, mode: .edit(theme), navigateToChat: { peerId in
-            if let navigationController = getNavigationControllerImpl?() {
-                context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(id: peerId)))
-            }
+            let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+            |> deliverOnMainQueue).start(next: { peer in
+                guard let peer = peer else {
+                    return
+                }
+                if let navigationController = getNavigationControllerImpl?() {
+                    context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer)))
+                }
+            })
         })
         pushControllerImpl?(controller)
     }, themeContextAction: { isCurrent, reference, node, gesture in
@@ -530,7 +677,7 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
         }
         |> mapToSignal { accentColor, wallpaper -> Signal<(PresentationThemeAccentColor?, TelegramWallpaper), NoError> in
             if case let .file(file) = wallpaper, file.id == 0 {
-                return cachedWallpaper(account: context.account, slug: file.slug, settings: file.settings)
+                return cachedWallpaper(engine: context.engine, network: context.account.network, slug: file.slug, settings: file.settings)
                 |> map { cachedWallpaper in
                     if let wallpaper = cachedWallpaper?.wallpaper, case .file = wallpaper {
                         return (accentColor, wallpaper)
@@ -561,12 +708,18 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
                 if theme.theme.isCreator {
                     items.append(.action(ContextMenuActionItem(text: presentationData.strings.Appearance_EditTheme, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/ApplyTheme"), color: theme.contextMenu.primaryColor) }, action: { c, f in
                         let controller = editThemeController(context: context, mode: .edit(theme), navigateToChat: { peerId in
-                            if let navigationController = getNavigationControllerImpl?() {
-                                context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(id: peerId)))
-                            }
+                            let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+                            |> deliverOnMainQueue).start(next: { peer in
+                                guard let peer = peer else {
+                                    return
+                                }
+                                if let navigationController = getNavigationControllerImpl?() {
+                                    context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer)))
+                                }
+                            })
                         })
                         
-                        c.dismiss(completion: {
+                        c?.dismiss(completion: {
                             pushControllerImpl?(controller)
                         })
                     })))
@@ -578,7 +731,7 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
                         
                         let resolvedWallpaper: Signal<TelegramWallpaper, NoError>
                         if case let .file(file) = theme.chat.defaultWallpaper, file.id == 0 {
-                            resolvedWallpaper = cachedWallpaper(account: context.account, slug: file.slug, settings: file.settings)
+                            resolvedWallpaper = cachedWallpaper(engine: context.engine, network: context.account.network, slug: file.slug, settings: file.settings)
                             |> map { cachedWallpaper -> TelegramWallpaper in
                                 return cachedWallpaper?.wallpaper ?? theme.chat.defaultWallpaper
                             }
@@ -591,9 +744,15 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
                             let controller = ThemeAccentColorController(context: context, mode: .edit(settings: nil, theme: theme, wallpaper: wallpaper, generalThemeReference: reference.generalThemeReference, defaultThemeReference: nil, create: true, completion: { result, settings in
                                 let controller = editThemeController(context: context, mode: .create(result, settings
                                 ), navigateToChat: { peerId in
-                                    if let navigationController = getNavigationControllerImpl?() {
-                                        context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(id: peerId)))
-                                    }
+                                    let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+                                    |> deliverOnMainQueue).start(next: { peer in
+                                        guard let peer = peer else {
+                                            return
+                                        }
+                                        if let navigationController = getNavigationControllerImpl?() {
+                                            context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer)))
+                                        }
+                                    })
                                 })
                                 updateControllersImpl?({ controllers in
                                     var controllers = controllers
@@ -608,24 +767,23 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
                                 })
                             }))
                             
-                            c.dismiss(completion: {
+                            c?.dismiss(completion: {
                                 pushControllerImpl?(controller)
                             })
                         })
                     })))
                 }
                 items.append(.action(ContextMenuActionItem(text: presentationData.strings.Appearance_ShareTheme, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Share"), color: theme.contextMenu.primaryColor) }, action: { c, f in
-                    c.dismiss(completion: {
-                        let shareController = ShareController(context: context, subject: .url("https://t.me/addtheme/\(theme.theme.slug)"), preferredAction: .default)
-                        shareController.actionCompleted = {
+                    c?.dismiss(completion: {
+                        let shareController = context.sharedContext.makeShareScreen(context: context, params: ShareControllerParams(subject: .url("https://t.me/addtheme/\(theme.theme.slug)"), preferredAction: .default, actionCompleted: {
                             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                            presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .linkCopied(text: presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
-                        }
+                            presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .linkCopied(title: nil, text: presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
+                        }))
                         presentControllerImpl?(shareController, nil)
                     })
                 })))
                 items.append(.action(ContextMenuActionItem(text: presentationData.strings.Appearance_RemoveTheme, textColor: .destructive, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.contextMenu.destructiveColor) }, action: { c, f in
-                    c.dismiss(completion: {
+                    c?.dismiss(completion: {
                         let actionSheet = ActionSheetController(presentationData: presentationData)
                         var items: [ActionSheetItem] = []
                         items.append(ActionSheetButtonItem(title: presentationData.strings.Appearance_RemoveThemeConfirmation, color: .destructive, action: { [weak actionSheet] in
@@ -673,14 +831,14 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
             } else {
                 items.append(.action(ContextMenuActionItem(text: strings.Theme_Context_ChangeColors, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/ApplyTheme"), color: theme.contextMenu.primaryColor)
                 }, action: { c, f in
-                    c.dismiss(completion: {
+                    c?.dismiss(completion: {
                         let controller = ThemeAccentColorController(context: context, mode: .colors(themeReference: reference, create: true))
                         pushControllerImpl?(controller)
                     })
                 })))
             }
             
-            let contextController = ContextController(account: context.account, presentationData: presentationData, source: .controller(ContextControllerContentSourceImpl(controller: themeController, sourceNode: node)), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
+            let contextController = makeContextController(presentationData: presentationData, source: .controller(ContextControllerContentSourceImpl(controller: themeController, sourceNode: node)), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
             presentInGlobalOverlayImpl?(contextController, nil)
         })
     }, colorContextAction: { isCurrent, reference, accentColor, node, gesture in
@@ -738,7 +896,7 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
             
             let wallpaperSignal: Signal<TelegramWallpaper, NoError>
             if case let .file(file) = effectiveWallpaper, file.id == 0 {
-                wallpaperSignal = cachedWallpaper(account: context.account, slug: file.slug, settings: file.settings)
+                wallpaperSignal = cachedWallpaper(engine: context.engine, network: context.account.network, slug: file.slug, settings: file.settings)
                 |> map { cachedWallpaper in
                     return cachedWallpaper?.wallpaper ?? effectiveWallpaper
                 }
@@ -795,12 +953,18 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
                     if cloudTheme.theme.isCreator && cloudThemeExists {
                         items.append(.action(ContextMenuActionItem(text: presentationData.strings.Appearance_EditTheme, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/ApplyTheme"), color: theme.contextMenu.primaryColor) }, action: { c, f in
                             let controller = editThemeController(context: context, mode: .edit(cloudTheme), navigateToChat: { peerId in
-                                if let navigationController = getNavigationControllerImpl?() {
-                                    context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(id: peerId)))
-                                }
+                                let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+                                |> deliverOnMainQueue).start(next: { peer in
+                                    guard let peer = peer else {
+                                        return
+                                    }
+                                    if let navigationController = getNavigationControllerImpl?() {
+                                        context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer)))
+                                    }
+                                })
                             })
                             
-                            c.dismiss(completion: {
+                            c?.dismiss(completion: {
                                 pushControllerImpl?(controller)
                             })
                         })))
@@ -812,7 +976,7 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
                             
                             let resolvedWallpaper: Signal<TelegramWallpaper, NoError>
                             if case let .file(file) = theme.chat.defaultWallpaper, file.id == 0 {
-                                resolvedWallpaper = cachedWallpaper(account: context.account, slug: file.slug, settings: file.settings)
+                                resolvedWallpaper = cachedWallpaper(engine: context.engine, network: context.account.network, slug: file.slug, settings: file.settings)
                                 |> map { cachedWallpaper -> TelegramWallpaper in
                                     return cachedWallpaper?.wallpaper ?? theme.chat.defaultWallpaper
                                 }
@@ -830,9 +994,15 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
                                 }
                                 let controller = ThemeAccentColorController(context: context, mode: .edit(settings: settings, theme: theme, wallpaper: wallpaper, generalThemeReference: effectiveThemeReference.generalThemeReference, defaultThemeReference: nil, create: true, completion: { result, settings in
                                     let controller = editThemeController(context: context, mode: .create(hasSettings ? nil : result, hasSettings ? settings : nil), navigateToChat: { peerId in
-                                        if let navigationController = getNavigationControllerImpl?() {
-                                            context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(id: peerId)))
-                                        }
+                                        let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+                                        |> deliverOnMainQueue).start(next: { peer in
+                                            guard let peer = peer else {
+                                                return
+                                            }
+                                            if let navigationController = getNavigationControllerImpl?() {
+                                                context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer)))
+                                            }
+                                        })
                                     })
                                     updateControllersImpl?({ controllers in
                                         var controllers = controllers
@@ -847,25 +1017,24 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
                                     })
                                 }))
                                 
-                                c.dismiss(completion: {
+                                c?.dismiss(completion: {
                                     pushControllerImpl?(controller)
                                 })
                             })
                         })))
                     }
                     items.append(.action(ContextMenuActionItem(text: presentationData.strings.Appearance_ShareTheme, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Share"), color: theme.contextMenu.primaryColor) }, action: { c, f in
-                        c.dismiss(completion: {
-                            let shareController = ShareController(context: context, subject: .url("https://t.me/addtheme/\(cloudTheme.theme.slug)"), preferredAction: .default)
-                            shareController.actionCompleted = {
+                        c?.dismiss(completion: {
+                            let shareController = context.sharedContext.makeShareScreen(context: context, params: ShareControllerParams(subject: .url("https://t.me/addtheme/\(cloudTheme.theme.slug)"), preferredAction: .default, actionCompleted: {
                                 let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                                presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .linkCopied(text: presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
-                            }
+                                presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .linkCopied(title: nil, text: presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
+                            }))
                             presentControllerImpl?(shareController, nil)
                         })
                     })))
                     if cloudThemeExists {
                         items.append(.action(ContextMenuActionItem(text: presentationData.strings.Appearance_RemoveTheme, textColor: .destructive, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.contextMenu.destructiveColor) }, action: { c, f in
-                            c.dismiss(completion: {
+                            c?.dismiss(completion: {
                                 let actionSheet = ActionSheetController(presentationData: presentationData)
                                 var items: [ActionSheetItem] = []
                                 items.append(ActionSheetButtonItem(title: presentationData.strings.Appearance_RemoveThemeConfirmation, color: .destructive, action: { [weak actionSheet] in
@@ -917,15 +1086,35 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
                     }
                 }
             }
-            let contextController = ContextController(account: context.account, presentationData: presentationData, source: .controller(ContextControllerContentSourceImpl(controller: themeController, sourceNode: node)), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
+            let contextController = makeContextController(presentationData: presentationData, source: .controller(ContextControllerContentSourceImpl(controller: themeController, sourceNode: node)), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
             presentInGlobalOverlayImpl?(contextController, nil)
         })
     })
 
-    let signal = combineLatest(queue: .mainQueue(), context.sharedContext.presentationData, context.sharedContext.accountManager.sharedData(keys: [ApplicationSpecificSharedDataKeys.presentationThemeSettings, SharedDataKeys.chatThemes]), cloudThemes.get(), availableAppIcons, currentAppIconName.get(), removedThemeIndexesPromise.get(), animatedEmojiStickers)
-    |> map { presentationData, sharedData, cloudThemes, availableAppIcons, currentAppIconName, removedThemeIndexes, animatedEmojiStickers -> (ItemListControllerState, (ItemListNodeState, Any)) in
-            let settings = sharedData.entries[ApplicationSpecificSharedDataKeys.presentationThemeSettings]?.get(PresentationThemeSettings.self) ?? PresentationThemeSettings.defaultSettings
-    
+    let signal = combineLatest(
+        queue: .mainQueue(),
+        context.sharedContext.presentationData,
+        context.sharedContext.accountManager.sharedData(keys: [
+            ApplicationSpecificSharedDataKeys.presentationThemeSettings,
+            ApplicationSpecificSharedDataKeys.chatSettings,
+            ApplicationSpecificSharedDataKeys.mediaDisplaySettings,
+            SharedDataKeys.chatThemes
+        ]),
+        cloudThemes.get(),
+        availableAppIcons,
+        currentAppIconName.get(),
+        removedThemeIndexesPromise.get(),
+        animatedEmojiStickers,
+        context.account.postbox.peerView(id: context.account.peerId),
+        context.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
+    )
+    |> map { presentationData, sharedData, cloudThemes, availableAppIcons, currentAppIconName, removedThemeIndexes, animatedEmojiStickers, peerView, accountPeer -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        let settings = sharedData.entries[ApplicationSpecificSharedDataKeys.presentationThemeSettings]?.get(PresentationThemeSettings.self) ?? PresentationThemeSettings.defaultSettings
+        let chatSettings = sharedData.entries[ApplicationSpecificSharedDataKeys.chatSettings]?.get(ChatSettings.self) ?? ChatSettings.defaultSettings
+        let mediaSettings = sharedData.entries[ApplicationSpecificSharedDataKeys.mediaDisplaySettings]?.get(MediaDisplaySettings.self) ?? MediaDisplaySettings.defaultSettings
+        
+        let isPremium = peerView.peers[peerView.peerId]?.isPremium ?? false
+        
         let themeReference: PresentationThemeReference
         if presentationData.autoNightModeTriggered {
             if let _ = settings.theme.emoticon {
@@ -961,7 +1150,7 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
         chatThemes.insert(.builtin(.dayClassic), at: 0)
         
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.Appearance_Title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: themeSettingsControllerEntries(presentationData: presentationData, presentationThemeSettings: settings, themeReference: themeReference, availableThemes: availableThemes, availableAppIcons: availableAppIcons, currentAppIconName: currentAppIconName, chatThemes: chatThemes, animatedEmojiStickers: animatedEmojiStickers), style: .blocks, ensureVisibleItemTag: focusOnItemTag, animateChanges: false)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: themeSettingsControllerEntries(presentationData: presentationData, presentationThemeSettings: settings, chatSettings: chatSettings, mediaSettings: mediaSettings, themeReference: themeReference, availableThemes: availableThemes, availableAppIcons: availableAppIcons, currentAppIconName: currentAppIconName, isPremium: isPremium, chatThemes: chatThemes, animatedEmojiStickers: animatedEmojiStickers, accountPeer: accountPeer, nameColors: context.peerNameColors), style: .blocks, ensureVisibleItemTag: focusOnItemTag, animateChanges: false)
         
         return (controllerState, (listState, arguments))
     }
@@ -1033,8 +1222,10 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
             }
             
             let sectionInset = max(16.0, floor((controller.displayNode.frame.width - 674.0) / 2.0))
+            // iPhone Duo: the list's margins are per side beside the side strip.
+            let sectionMargins = controller.currentlyAppliedLayout?.listSideMargins(base: sectionInset) ?? (left: sectionInset, right: sectionInset)
             
-            let crossfadeController = ThemeSettingsCrossfadeController(view: view, topOffset: topOffset, bottomOffset: bottomOffset, leftOffset: leftOffset, sideInset: sectionInset)
+            let crossfadeController = ThemeSettingsCrossfadeController(view: view, topOffset: topOffset, bottomOffset: bottomOffset, leftOffset: leftOffset, sideInset: sectionMargins.left, rightSideInset: sectionMargins.right)
             crossfadeController.didAppear = { [weak themeItemNode] in
                 if view != nil {
                     themeItemNode?.animateCrossfadeTransition()
@@ -1053,7 +1244,7 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
         
         let resolvedWallpaper: Signal<TelegramWallpaper?, NoError>
         if case let .file(file) = presentationTheme.chat.defaultWallpaper, file.id == 0 {
-            resolvedWallpaper = cachedWallpaper(account: context.account, slug: file.slug, settings: file.settings)
+            resolvedWallpaper = cachedWallpaper(engine: context.engine, network: context.account.network, slug: file.slug, settings: file.settings)
             |> map { wallpaper -> TelegramWallpaper? in
                 return wallpaper?.wallpaper
             }
@@ -1130,10 +1321,10 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
     selectAccentColorImpl = { accentColor in
         var wallpaperSignal: Signal<TelegramWallpaper?, NoError> = .single(nil)
         if let colorWallpaper = accentColor?.wallpaper, case let .file(file) = colorWallpaper {
-            wallpaperSignal = cachedWallpaper(account: context.account, slug: file.slug, settings: colorWallpaper.settings)
+            wallpaperSignal = cachedWallpaper(engine: context.engine, network: context.account.network, slug: file.slug, settings: colorWallpaper.settings)
             |> mapToSignal { cachedWallpaper in
                 if let wallpaper = cachedWallpaper?.wallpaper, case let .file(file) = wallpaper {
-                    let _ = fetchedMediaResource(mediaBox: context.account.postbox.mediaBox, reference: .wallpaper(wallpaper: .slug(file.slug), resource: file.file.resource)).start()
+                    let _ = context.engine.resources.fetch(reference: .wallpaper(wallpaper: .slug(file.slug), resource: file.file.resource), userLocation: .other, userContentType: .other).start()
 
                     return .single(wallpaper)
     
@@ -1195,6 +1386,21 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
             presentCrossfadeControllerImpl?(true)
         })
     }
+    
+    if let focusOnItemTag {
+        var didFocusOnItem = false
+        controller.afterTransactionCompleted = { [weak controller] in
+            if !didFocusOnItem, let controller {
+                controller.forEachItemNode { itemNode in
+                    if let itemNode = itemNode as? ItemListItemNode, let tag = itemNode.tag, tag.isEqual(to: focusOnItemTag) {
+                        didFocusOnItem = true
+                        itemNode.displayHighlight()
+                    }
+                }
+            }
+        }
+    }
+    
     return controller
 }
 
@@ -1210,11 +1416,12 @@ public final class ThemeSettingsCrossfadeController: ViewController {
     
     var didAppear: (() -> Void)?
     
-    public init(view: UIView? = nil, topOffset: CGFloat? = nil, bottomOffset: CGFloat? = nil, leftOffset: CGFloat? = nil, sideInset: CGFloat = 0.0) {
+    /// `sideInset` is the left margin; `rightSideInset` the right one when it differs (iPhone Duo's side strip
+    /// makes the list's right margin wider), else the left one.
+    public init(view: UIView? = nil, topOffset: CGFloat? = nil, bottomOffset: CGFloat? = nil, leftOffset: CGFloat? = nil, sideInset: CGFloat = 0.0, rightSideInset: CGFloat? = nil) {
+        let rightSideInset = rightSideInset ?? sideInset
         if let view = view {
-            if var leftOffset = leftOffset {
-                leftOffset += UIScreenPixel
-                
+            if let leftOffset = leftOffset {
                 if let view = view.snapshotView(afterScreenUpdates: false) {
                     let clipView = UIView()
                     clipView.clipsToBounds = true
@@ -1226,13 +1433,13 @@ public final class ThemeSettingsCrossfadeController: ViewController {
                     if let topOffset = topOffset, let bottomOffset = bottomOffset {
                         var frame = view.frame
                         frame.origin.y = topOffset
-                        frame.size.width = leftOffset
+                        frame.size.width = leftOffset + sideInset
                         frame.size.height = bottomOffset - topOffset
                         clipView.frame = frame
                         
                         frame = view.frame
                         frame.origin.y = -topOffset
-                        frame.size.width = leftOffset
+                        frame.size.width = leftOffset + sideInset
                         frame.size.height = bottomOffset
                         view.frame = frame
                     }
@@ -1242,7 +1449,7 @@ public final class ThemeSettingsCrossfadeController: ViewController {
             }
             
             if sideInset > 0.0 {
-                if let view = view.snapshotView(afterScreenUpdates: false) {
+                if let view = view.snapshotView(afterScreenUpdates: false), leftOffset == nil {
                     let clipView = UIView()
                     clipView.clipsToBounds = true
                     clipView.addSubview(view)
@@ -1276,15 +1483,15 @@ public final class ThemeSettingsCrossfadeController: ViewController {
                     
                     if let topOffset = topOffset, let bottomOffset = bottomOffset {
                         var frame = view.frame
-                        frame.origin.x = frame.width - sideInset
+                        frame.origin.x = frame.width - rightSideInset
                         frame.origin.y = topOffset
-                        frame.size.width = sideInset
+                        frame.size.width = rightSideInset
                         frame.size.height = bottomOffset - topOffset
                         clipView.frame = frame
                         
                         frame = view.frame
                         frame.origin.y = -topOffset
-                        frame.size.width = sideInset
+                        frame.size.width = rightSideInset
                         frame.size.height = bottomOffset
                         view.frame = frame
                     }
@@ -1316,7 +1523,8 @@ public final class ThemeSettingsCrossfadeController: ViewController {
                 self.bottomSnapshotView = view
             }
         } else {
-            self.snapshotView = UIScreen.main.snapshotView(afterScreenUpdates: false)
+            // The screen the app is on: while iPhone Duo is unfolded `UIScreen.main` is the cover screen.
+            self.snapshotView = mainWindowScreen.snapshotView(afterScreenUpdates: false)
         }
         super.init(navigationBarPresentationData: nil)
         
@@ -1381,7 +1589,7 @@ private final class ContextControllerContentSourceImpl: ContextControllerContent
         let sourceNode = self.sourceNode
         return ContextControllerTakeControllerInfo(contentAreaInScreenSpace: CGRect(origin: CGPoint(), size: CGSize(width: 10.0, height: 10.0)), sourceNode: { [weak sourceNode] in
             if let sourceNode = sourceNode {
-                return (sourceNode, sourceNode.bounds)
+                return (sourceNode.view, sourceNode.bounds)
             } else {
                 return nil
             }

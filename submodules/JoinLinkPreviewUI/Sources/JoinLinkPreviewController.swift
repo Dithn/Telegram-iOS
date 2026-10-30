@@ -8,10 +8,10 @@ import TelegramPresentationData
 import AccountContext
 import AlertUI
 import PresentationDataUtils
-import PeerInfoUI
 import UndoUI
+import OldChannelsController
 
-public final class JoinLinkPreviewController: ViewController {
+public final class LegacyJoinLinkPreviewController: ViewController {
     private var controllerNode: JoinLinkPreviewControllerNode {
         return self.displayNode as! JoinLinkPreviewControllerNode
     }
@@ -22,14 +22,14 @@ public final class JoinLinkPreviewController: ViewController {
     private let link: String
     private var isRequest = false
     private var isGroup = false
-    private let navigateToPeer: (EnginePeer.Id, ChatPeekTimeout?) -> Void
+    private let navigateToPeer: (EnginePeer, ChatPeekTimeout?) -> Void
     private let parentNavigationController: NavigationController?
     private var resolvedState: ExternalJoiningChatState?
     private var presentationData: PresentationData
     
     private let disposable = MetaDisposable()
     
-    public init(context: AccountContext, link: String, navigateToPeer: @escaping (EnginePeer.Id, ChatPeekTimeout?) -> Void, parentNavigationController: NavigationController?, resolvedState: ExternalJoiningChatState? = nil) {
+    public init(context: AccountContext, link: String, navigateToPeer: @escaping (EnginePeer, ChatPeekTimeout?) -> Void, parentNavigationController: NavigationController?, resolvedState: ExternalJoiningChatState? = nil) {
         self.context = context
         self.link = link
         self.navigateToPeer = navigateToPeer
@@ -82,16 +82,16 @@ public final class JoinLinkPreviewController: ViewController {
                         if invite.flags.requestNeeded {
                             strongSelf.isRequest = true
                             strongSelf.isGroup = !invite.flags.isBroadcast
-                            strongSelf.controllerNode.setRequestPeer(image: invite.photoRepresentation, title: invite.title, about: invite.about, memberCount: invite.participantsCount, isGroup: !invite.flags.isBroadcast)
+                            strongSelf.controllerNode.setRequestPeer(image: invite.photoRepresentation, title: invite.title, about: invite.about, memberCount: invite.participantsCount, isGroup: !invite.flags.isBroadcast, isVerified: invite.flags.isVerified, isFake: invite.flags.isFake, isScam: invite.flags.isScam)
                         } else {
-                            let data = JoinLinkPreviewData(isGroup: invite.participants != nil, isJoined: false)
-                            strongSelf.controllerNode.setInvitePeer(image: invite.photoRepresentation, title: invite.title, memberCount: invite.participantsCount, members: invite.participants?.map({ $0 }) ?? [], data: data)
+                            let data = JoinLinkPreviewData(isGroup: !invite.flags.isBroadcast, isJoined: false)
+                            strongSelf.controllerNode.setInvitePeer(image: invite.photoRepresentation, title: invite.title, about: invite.about, memberCount: invite.participantsCount, members: invite.participants?.map({ $0 }) ?? [], data: data)
                         }
-                    case let .alreadyJoined(peerId):
-                        strongSelf.navigateToPeer(peerId, nil)
+                    case let .alreadyJoined(peer):
+                        strongSelf.navigateToPeer(peer, nil)
                         strongSelf.dismiss()
-                    case let .peek(peerId, deadline):
-                        strongSelf.navigateToPeer(peerId, ChatPeekTimeout(deadline: deadline, linkData: strongSelf.link))
+                    case let .peek(peer, deadline):
+                        strongSelf.navigateToPeer(peer, ChatPeekTimeout(deadline: deadline, linkData: strongSelf.link))
                         strongSelf.dismiss()
                     case .invalidHash:
                         let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
@@ -139,16 +139,27 @@ public final class JoinLinkPreviewController: ViewController {
     }
     
     private func join() {
-        self.disposable.set((self.context.engine.peers.joinChatInteractively(with: self.link) |> deliverOnMainQueue).start(next: { [weak self] peerId in
+        self.disposable.set((self.context.engine.peers.joinChatInteractively(with: self.link) |> deliverOnMainQueue).start(next: { [weak self] result in
             if let strongSelf = self {
-                if strongSelf.isRequest {
-                    strongSelf.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .inviteRequestSent(title: strongSelf.presentationData.strings.MemberRequests_RequestToJoinSent, text: strongSelf.isGroup ? strongSelf.presentationData.strings.MemberRequests_RequestToJoinSentDescriptionGroup : strongSelf.presentationData.strings.MemberRequests_RequestToJoinSentDescriptionChannel ), elevatedLayout: true, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
-                } else {
-                    if let peerId = peerId {
-                        strongSelf.navigateToPeer(peerId, nil)
+                switch result {
+                case let .joined(peer):
+                    if strongSelf.isRequest {
+                        strongSelf.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .inviteRequestSent(title: strongSelf.presentationData.strings.MemberRequests_RequestToJoinSent, text: strongSelf.isGroup ? strongSelf.presentationData.strings.MemberRequests_RequestToJoinSentDescriptionGroup : strongSelf.presentationData.strings.MemberRequests_RequestToJoinSentDescriptionChannel ), elevatedLayout: true, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
+                    } else {
+                        if let peer {
+                            strongSelf.navigateToPeer(peer, nil)
+                        }
                     }
+                    strongSelf.dismiss()
+                case let .webView(webView):
+                    let chatTitle: String
+                    if case let .invite(invite)? = strongSelf.resolvedState {
+                        chatTitle = invite.title
+                    } else {
+                        chatTitle = ""
+                    }
+                    strongSelf.context.sharedContext.openJoinChatWebView(context: strongSelf.context, parentController: strongSelf, updatedPresentationData: nil, webView: webView, chatTitle: chatTitle)
                 }
-                strongSelf.dismiss()
             }
         }, error: { [weak self] error in
             if let strongSelf = self {
@@ -184,3 +195,38 @@ public final class JoinLinkPreviewController: ViewController {
     }
 }
 
+public func JoinLinkPreviewController(
+    context: AccountContext,
+    link: String,
+    navigateToPeer: @escaping (EnginePeer, ChatPeekTimeout?) -> Void,
+    parentNavigationController: NavigationController?,
+    resolvedState: ExternalJoiningChatState? = nil
+) -> ViewController {
+    if let data = context.currentAppConfiguration.with({ $0 }).data, data["ios_killswitch_legacy_join_link"] != nil {
+        return LegacyJoinLinkPreviewController(context: context, link: link, navigateToPeer: navigateToPeer, parentNavigationController: parentNavigationController, resolvedState: resolvedState)
+    } else if case let .invite(invite) = resolvedState, invite.subscriptionPricing == nil, invite.subscriptionFormId == nil, !invite.flags.canRefulfillSubscription {
+        var verificationStatus: JoinSubjectScreenMode.Group.VerificationStatus?
+        if invite.flags.isFake {
+            verificationStatus = .fake
+        } else if invite.flags.isScam {
+            verificationStatus = .scam
+        } else if invite.flags.isVerified {
+            verificationStatus = .verified
+        }
+        return context.sharedContext.makeJoinSubjectScreen(context: context, mode: .group(JoinSubjectScreenMode.Group(
+            link: link,
+            isGroup: !invite.flags.isBroadcast,
+            isPublic: invite.flags.isPublic,
+            isRequest: invite.flags.requestNeeded,
+            verificationStatus: verificationStatus,
+            nameColor: invite.nameColor,
+            image: invite.photoRepresentation,
+            title: invite.title,
+            about: invite.about,
+            memberCount: invite.participantsCount,
+            members: invite.participants ?? []
+        )))
+    } else {
+        return LegacyJoinLinkPreviewController(context: context, link: link, navigateToPeer: navigateToPeer, parentNavigationController: parentNavigationController, resolvedState: resolvedState)
+    }
+}

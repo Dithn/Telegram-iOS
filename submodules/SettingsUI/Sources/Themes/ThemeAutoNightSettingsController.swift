@@ -2,18 +2,20 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
 import ItemListUI
 import PresentationDataUtils
 import TelegramStringFormatting
+import TextFormat
 import AccountContext
 import DeviceLocationManager
 import Geocoding
 import WallpaperResources
 import Sunrise
+import ThemeSettingsThemeItem
+import ChatTimerScreen
 
 private enum TriggerMode {
     case system
@@ -203,37 +205,37 @@ private enum ThemeAutoNightSettingsControllerEntry: ItemListNodeEntry {
         let arguments = arguments as! ThemeAutoNightSettingsControllerArguments
         switch self {
             case let .modeSystem(_, title, value):
-                return ItemListCheckboxItem(presentationData: presentationData, title: title, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     arguments.updateMode(.system)
                 })
             case let .modeDisabled(_, title, value):
-                return ItemListCheckboxItem(presentationData: presentationData, title: title, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     arguments.updateMode(.none)
                 })
             case let .modeTimeBased(_, title, value):
-                return ItemListCheckboxItem(presentationData: presentationData, title: title, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     arguments.updateMode(.timeBased)
                 })
             case let .modeBrightness(_, title, value):
-                return ItemListCheckboxItem(presentationData: presentationData, title: title, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     arguments.updateMode(.brightness)
                 })
             case let .settingsHeader(_, title):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: title, sectionId: self.section)
             case let .timeBasedAutomaticLocation(_, title, value):
-                return ItemListSwitchItem(presentationData: presentationData, title: title, value: value, sectionId: self.section, style: .blocks, updated: { value in
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: { value in
                     arguments.updateTimeBasedAutomatic(value)
                 })
             case let .timeBasedAutomaticLocationValue(_, title, value):
-                return ItemListDisclosureItem(presentationData: presentationData, icon: nil, title: title, titleColor: .accent, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .none, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: nil, title: title, titleColor: .accent, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .none, action: {
                     arguments.updateTimeBasedAutomaticLocation()
                 })
             case let .timeBasedManualFrom(_, title, value):
-                return ItemListDisclosureItem(presentationData: presentationData, icon: nil, title: title, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: nil, title: title, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                     arguments.openTimeBasedManual(.from)
                 })
             case let .timeBasedManualTo(_, title, value):
-                return ItemListDisclosureItem(presentationData: presentationData, icon: nil, title: title, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: nil, title: title, label: value, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                     arguments.openTimeBasedManual(.to)
                 })
             case let .brightnessValue(theme, value):
@@ -245,7 +247,7 @@ private enum ThemeAutoNightSettingsControllerEntry: ItemListNodeEntry {
             case let .themeHeader(_, title):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: title, sectionId: self.section)
             case let .themeItem(theme, strings, themes, allThemes, currentTheme, themeSpecificAccentColors, themeSpecificChatWallpapers):
-            return ThemeSettingsThemeItem(context: arguments.context, theme: theme, strings: strings, sectionId: self.section, themes: themes, allThemes: allThemes, displayUnsupported: false, themeSpecificAccentColors: themeSpecificAccentColors, themeSpecificChatWallpapers: themeSpecificChatWallpapers, themePreferredBaseTheme: [:], currentTheme: currentTheme, updatedTheme: { theme in
+                return ThemeSettingsThemeItem(context: arguments.context, theme: theme, strings: strings, sectionId: self.section, themes: themes, allThemes: allThemes, displayUnsupported: false, themeSpecificAccentColors: themeSpecificAccentColors, themeSpecificChatWallpapers: themeSpecificChatWallpapers, themePreferredBaseTheme: [:], currentTheme: currentTheme, updatedTheme: { theme in
                     arguments.updateTheme(theme)
                 }, contextAction: nil)
         }
@@ -486,32 +488,44 @@ public func themeAutoNightSettingsController(context: AccountContext) -> ViewCon
                     break
             }
             
-            presentControllerImpl?(ThemeAutoNightTimeSelectionActionSheet(context: context, currentValue: currentValue, applyValue: { value in
-                guard let value = value else {
-                    return
-                }
-                updateSettings { settings in
-                    var settings = settings
-                    switch settings.trigger {
-                        case let .timeBased(setting):
-                            switch setting {
-                            case var .manual(fromSeconds, toSeconds):
-                                switch field {
-                                case .from:
-                                    fromSeconds = value
-                                case .to:
-                                    toSeconds = value
+            let controller = ChatTimerScreen(
+                context: context,
+                configuration: ChatTimerScreen.Configuration(
+                    style: .default,
+                    picker: .timeOfDay,
+                    currentValue: currentValue,
+                    pickerValueMapping: .secondsFromMidnightGMT,
+                    primaryActionTitle: { strings, _, _ in
+                        strings.Wallpaper_Set
+                    }
+                ),
+                completion: { value in
+                    guard let value = value else {
+                        return
+                    }
+                    updateSettings { settings in
+                        var settings = settings
+                        switch settings.trigger {
+                            case let .timeBased(setting):
+                                switch setting {
+                                case var .manual(fromSeconds, toSeconds):
+                                    switch field {
+                                    case .from:
+                                        fromSeconds = value
+                                    case .to:
+                                        toSeconds = value
+                                    }
+                                    settings.trigger = .timeBased(setting: .manual(fromSeconds: fromSeconds, toSeconds: toSeconds))
+                                default:
+                                    break
                                 }
-                                settings.trigger = .timeBased(setting: .manual(fromSeconds: fromSeconds, toSeconds: toSeconds))
                             default:
                                 break
-                            }
-                        default:
-                            break
+                        }
+                        return settings
                     }
-                    return settings
-                }
-            }))
+                })
+            presentControllerImpl?(controller)
             
             return settings
         }
@@ -538,7 +552,7 @@ public func themeAutoNightSettingsController(context: AccountContext) -> ViewCon
         
         let resolvedWallpaper: Signal<TelegramWallpaper?, NoError>
         if case let .file(file) = presentationTheme.chat.defaultWallpaper, file.id == 0 {
-            resolvedWallpaper = cachedWallpaper(account: context.account, slug: file.slug, settings: file.settings)
+            resolvedWallpaper = cachedWallpaper(engine: context.engine, network: context.account.network, slug: file.slug, settings: file.settings)
             |> map { wallpaper -> TelegramWallpaper? in
                 return wallpaper?.wallpaper
             }
@@ -564,7 +578,7 @@ public func themeAutoNightSettingsController(context: AccountContext) -> ViewCon
     })
     
     let cloudThemes = Promise<[TelegramTheme]>()
-    let updatedCloudThemes = telegramThemes(postbox: context.account.postbox, network: context.account.network, accountManager: context.sharedContext.accountManager)
+    let updatedCloudThemes = context.engine.themes.themes(accountManager: context.sharedContext.accountManager)
     cloudThemes.set(updatedCloudThemes)
     
     let signal = combineLatest(context.sharedContext.presentationData |> deliverOnMainQueue, sharedData |> deliverOnMainQueue, cloudThemes.get() |> deliverOnMainQueue, stagingSettingsPromise.get() |> deliverOnMainQueue)

@@ -1,4 +1,6 @@
 
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
 objc_library(
     name = "FFMpegBinding",
     module_name = "FFMpegBinding",
@@ -6,15 +8,21 @@ objc_library(
     srcs = glob([
         "Sources/**/*.m",
         "Sources/**/*.h",
-    ]),
+    ], allow_empty=True),
     hdrs = glob([
         "Public/**/*.h",
     ]),
+    copts = [
+        "-Werror",
+    ],
     includes = [
         "Public",
     ],
     deps = [
-        "//submodules/ffmpeg:ffmpeg",
+        "//submodules/ffmpeg",
+    ],
+    sdk_frameworks = [
+        "CoreMedia",
     ],
     visibility = [
         "//visibility:public",

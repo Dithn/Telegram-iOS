@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
@@ -13,13 +12,13 @@ import StickerPackPreviewUI
 import ItemListStickerPackItem
 
 private final class FeaturedStickerPacksControllerArguments {
-    let account: Account
+    let context: AccountContext
     
     let openStickerPack: (StickerPackCollectionInfo) -> Void
     let addPack: (StickerPackCollectionInfo) -> Void
     
-    init(account: Account, openStickerPack: @escaping (StickerPackCollectionInfo) -> Void, addPack: @escaping (StickerPackCollectionInfo) -> Void) {
-        self.account = account
+    init(context: AccountContext, openStickerPack: @escaping (StickerPackCollectionInfo) -> Void, addPack: @escaping (StickerPackCollectionInfo) -> Void) {
+        self.context = context
         self.openStickerPack = openStickerPack
         self.addPack = addPack
     }
@@ -30,11 +29,11 @@ private enum FeaturedStickerPacksSection: Int32 {
 }
 
 private enum FeaturedStickerPacksEntryId: Hashable {
-    case pack(ItemCollectionId)
+    case pack(EngineItemCollectionId)
 }
 
 private enum FeaturedStickerPacksEntry: ItemListNodeEntry {
-    case pack(Int32, PresentationTheme, PresentationStrings, StickerPackCollectionInfo, Bool, StickerPackItem?, String, Bool, Bool)
+    case pack(Int32, PresentationTheme, PresentationStrings, StickerPackCollectionInfo.Accessor, Bool, StickerPackItem?, String, Bool, Bool)
     
     var section: ItemListSectionId {
         switch self {
@@ -102,11 +101,11 @@ private enum FeaturedStickerPacksEntry: ItemListNodeEntry {
         let arguments = arguments as! FeaturedStickerPacksControllerArguments
         switch self {
             case let .pack(_, _, _, info, unread, topItem, count, playAnimatedStickers, installed):
-                return ItemListStickerPackItem(presentationData: presentationData, account: arguments.account, packInfo: info, itemCount: count, topItem: topItem, unread: unread, control: .installation(installed: installed), editing: ItemListStickerPackItemEditing(editable: false, editing: false, revealed: false, reorderable: false, selectable: false), enabled: true, playAnimatedStickers: playAnimatedStickers, sectionId: self.section, action: {
-                    arguments.openStickerPack(info)
+                return ItemListStickerPackItem(presentationData: presentationData, context: arguments.context, packInfo: info, itemCount: count, topItem: topItem, unread: unread, control: .installation(installed: installed), editing: ItemListStickerPackItemEditing(editable: false, editing: false, revealed: false, reorderable: false, selectable: false), enabled: true, playAnimatedStickers: playAnimatedStickers, sectionId: self.section, action: {
+                    arguments.openStickerPack(info._parse())
                 }, setPackIdWithRevealedOptions: { _, _ in
                 }, addPack: {
-                    arguments.addPack(info)
+                    arguments.addPack(info._parse())
                 }, removePack: {
                 }, toggleSelected: {
                 })
@@ -123,27 +122,35 @@ private struct FeaturedStickerPacksControllerState: Equatable {
     }
 }
 
-private func featuredStickerPacksControllerEntries(presentationData: PresentationData, state: FeaturedStickerPacksControllerState, view: CombinedView, featured: [FeaturedStickerPackItem], unreadPacks: [ItemCollectionId: Bool], stickerSettings: StickerSettings)  -> [FeaturedStickerPacksEntry] {
+private func featuredStickerPacksControllerEntries(context: AccountContext, presentationData: PresentationData, state: FeaturedStickerPacksControllerState, view: [EngineRawItemCollectionInfoEntry], featured: [FeaturedStickerPackItem], unreadPacks: [EngineItemCollectionId: Bool], stickerSettings: StickerSettings)  -> [FeaturedStickerPacksEntry] {
     var entries: [FeaturedStickerPacksEntry] = []
-    
-    if let stickerPacksView = view.views[.itemCollectionInfos(namespaces: [Namespaces.ItemCollection.CloudStickerPacks])] as? ItemCollectionInfosView, !featured.isEmpty {
-        if let packsEntries = stickerPacksView.entriesByNamespace[Namespaces.ItemCollection.CloudStickerPacks] {
-            var installedPacks = Set<ItemCollectionId>()
-            for entry in packsEntries {
-                installedPacks.insert(entry.id)
+
+    if !featured.isEmpty {
+        var installedPacks = Set<EngineItemCollectionId>()
+        for entry in view {
+            installedPacks.insert(entry.id)
+        }
+        var index: Int32 = 0
+        for item in featured {
+            var unread = false
+            if let value = unreadPacks[item.info.id] {
+                unread = value
             }
-            var index: Int32 = 0
-            for item in featured {
-                var unread = false
-                if let value = unreadPacks[item.info.id] {
-                    unread = value
-                }
-                entries.append(.pack(index, presentationData.theme, presentationData.strings, item.info, unread, item.topItems.first, presentationData.strings.StickerPack_StickerCount(item.info.count), stickerSettings.loopAnimatedStickers, installedPacks.contains(item.info.id)))
-                index += 1
+
+            let countTitle: String
+            if item.info.id.namespace == Namespaces.ItemCollection.CloudEmojiPacks {
+                countTitle = presentationData.strings.StickerPack_EmojiCount(item.info.count)
+            } else if item.info.id.namespace == Namespaces.ItemCollection.CloudMaskPacks {
+                countTitle = presentationData.strings.StickerPack_MaskCount(item.info.count)
+            } else {
+                countTitle = presentationData.strings.StickerPack_StickerCount(item.info.count)
             }
+
+            entries.append(.pack(index, presentationData.theme, presentationData.strings, item.info, unread, item.topItems.first, countTitle, context.sharedContext.energyUsageSettings.loopStickers, installedPacks.contains(item.info.id)))
+            index += 1
         }
     }
-    
+
     return entries
 }
 
@@ -158,17 +165,17 @@ public func featuredStickerPacksController(context: AccountContext) -> ViewContr
     
     var presentStickerPackController: ((StickerPackCollectionInfo) -> Void)?
     
-    let arguments = FeaturedStickerPacksControllerArguments(account: context.account, openStickerPack: { info in
+    let arguments = FeaturedStickerPacksControllerArguments(context: context, openStickerPack: { info in
         presentStickerPackController?(info)
     }, addPack: { info in
         let _ = (context.engine.stickers.loadedStickerPack(reference: .id(id: info.id.id, accessHash: info.accessHash), forceActualized: false)
-        |> mapToSignal { result -> Signal<Void, NoError> in
+        |> mapToSignal { result -> Signal<AddStickerPackResult, NoError> in
             switch result {
                 case let .result(info, items, installed):
                     if installed {
                         return .complete()
                     } else {
-                        return context.engine.stickers.addStickerPackInteractively(info: info, items: items)
+                        return context.engine.stickers.addStickerPackInteractively(info: info._parse(), items: items)
                     }
                 case .fetching:
                     break
@@ -176,16 +183,25 @@ public func featuredStickerPacksController(context: AccountContext) -> ViewContr
                     break
             }
             return .complete()
-        } |> deliverOnMainQueue).start()
+        } |> deliverOnMainQueue).startStandalone()
     })
     
-    let stickerPacks = Promise<CombinedView>()
-    stickerPacks.set(context.account.postbox.combinedView(keys: [.itemCollectionInfos(namespaces: [Namespaces.ItemCollection.CloudStickerPacks])]))
+    actionsDisposable.add((context.account.stateManager.installedStickerPacksArchivedEvents
+    |> deliverOnMainQueue).startStandalone(next: { count in
+       if count == 0 {
+           return
+       }
+        let presentationData = context.sharedContext.currentPresentationData.with({ $0 })
+        presentControllerImpl?(textAlertController(context: context, updatedPresentationData: nil, title: nil, text: presentationData.strings.ArchivedPacksAlert_Title, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
+    }))
+    
+    let stickerPacks = Promise<[EngineRawItemCollectionInfoEntry]>()
+    stickerPacks.set(context.engine.data.subscribe(TelegramEngine.EngineData.Item.ItemCollections.InstalledPackInfos(namespace: Namespaces.ItemCollection.CloudStickerPacks)))
     
     let featured = Promise<[FeaturedStickerPackItem]>()
     featured.set(context.account.viewTracker.featuredStickerPacks())
 
-    var initialUnreadPacks: [ItemCollectionId: Bool] = [:]
+    var initialUnreadPacks: [EngineItemCollectionId: Bool] = [:]
     
     let signal = combineLatest(context.sharedContext.presentationData, statePromise.get() |> deliverOnMainQueue, stickerPacks.get() |> deliverOnMainQueue, featured.get() |> deliverOnMainQueue, context.sharedContext.accountManager.sharedData(keys: [ApplicationSpecificSharedDataKeys.stickerSettings]) |> deliverOnMainQueue)
         |> deliverOnMainQueue
@@ -205,7 +221,7 @@ public func featuredStickerPacksController(context: AccountContext) -> ViewContr
             
             let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.FeaturedStickerPacks_Title), leftNavigationButton: nil, rightNavigationButton: rightNavigationButton, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back), animateChanges: true)
             
-            let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: featuredStickerPacksControllerEntries(presentationData: presentationData, state: state, view: view, featured: featured, unreadPacks: initialUnreadPacks, stickerSettings: stickerSettings), style: .blocks, animateChanges: false)
+            let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: featuredStickerPacksControllerEntries(context: context, presentationData: presentationData, state: state, view: view, featured: featured, unreadPacks: initialUnreadPacks, stickerSettings: stickerSettings), style: .blocks, animateChanges: false)
             return (controllerState, (listState, arguments))
         } |> afterDisposed {
             actionsDisposable.dispose()
@@ -213,10 +229,10 @@ public func featuredStickerPacksController(context: AccountContext) -> ViewContr
     
     let controller = ItemListController(context: context, state: signal)
     
-    var alreadyReadIds = Set<ItemCollectionId>()
+    var alreadyReadIds = Set<EngineItemCollectionId>()
     
     controller.visibleEntriesUpdated = { entries in
-        var unreadIds: [ItemCollectionId] = []
+        var unreadIds: [EngineItemCollectionId] = []
         for entry in entries {
             if let entry = entry as? FeaturedStickerPacksEntry {
                 switch entry {

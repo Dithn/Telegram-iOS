@@ -4,6 +4,7 @@ import AsyncDisplayKit
 import SwiftSignalKit
 import UniversalMediaPlayer
 import AccountContext
+import RangeSet
 
 private final class UniversalVideoContentSubscriber {
     let id: Int32
@@ -28,11 +29,14 @@ private final class UniversalVideoContentHolder {
     var statusValue: MediaPlayerStatus?
     
     var bufferingStatusDisposable: Disposable?
-    var bufferingStatusValue: (IndexSet, Int)?
+    var bufferingStatusValue: (RangeSet<Int64>, Int64)?
+    
+    var isNativePictureInPictureActiveDisposable: Disposable?
+    var isNativePictureInPictureActiveValue: Bool = false
     
     var playbackCompletedIndex: Int?
     
-    init(content: UniversalVideoContent, contentNode: UniversalVideoContentNode & ASDisplayNode, statusUpdated: @escaping (MediaPlayerStatus?) -> Void, bufferingStatusUpdated: @escaping ((IndexSet, Int)?) -> Void, playbackCompleted: @escaping () -> Void) {
+    init(content: UniversalVideoContent, contentNode: UniversalVideoContentNode & ASDisplayNode, statusUpdated: @escaping (MediaPlayerStatus?) -> Void, bufferingStatusUpdated: @escaping ((RangeSet<Int64>, Int64)?) -> Void, playbackCompleted: @escaping () -> Void, isNativePictureInPictureActiveUpdated: @escaping (Bool) -> Void) {
         self.content = content
         self.contentNode = contentNode
         
@@ -50,6 +54,13 @@ private final class UniversalVideoContentHolder {
             }
         })
         
+        self.isNativePictureInPictureActiveDisposable = (contentNode.isNativePictureInPictureActive |> deliverOnMainQueue).start(next: { [weak self] value in
+            if let strongSelf = self {
+                strongSelf.isNativePictureInPictureActiveValue = value
+                isNativePictureInPictureActiveUpdated(value)
+            }
+        })
+        
         self.playbackCompletedIndex = contentNode.addPlaybackCompleted {
             playbackCompleted()
         }
@@ -58,6 +69,7 @@ private final class UniversalVideoContentHolder {
     deinit {
         self.statusDisposable?.dispose()
         self.bufferingStatusDisposable?.dispose()
+        self.isNativePictureInPictureActiveDisposable?.dispose()
         if let playbackCompletedIndex = self.playbackCompletedIndex {
             self.contentNode.removePlaybackCompleted(playbackCompletedIndex)
         }
@@ -131,10 +143,11 @@ private final class UniversalVideoContentHolder {
 private final class UniversalVideoContentHolderCallbacks {
     let playbackCompleted = Bag<() -> Void>()
     let status = Bag<(MediaPlayerStatus?) -> Void>()
-    let bufferingStatus = Bag<((IndexSet, Int)?) -> Void>()
+    let bufferingStatus = Bag<((RangeSet<Int64>, Int64)?) -> Void>()
+    let isNativePictureInPictureActive = Bag<(Bool) -> Void>()
     
     var isEmpty: Bool {
-        return self.playbackCompleted.isEmpty && self.status.isEmpty && self.bufferingStatus.isEmpty
+        return self.playbackCompleted.isEmpty && self.status.isEmpty && self.bufferingStatus.isEmpty && self.isNativePictureInPictureActive.isEmpty
     }
 }
 
@@ -186,6 +199,14 @@ public final class UniversalVideoManagerImpl: UniversalVideoManager {
                         if let current = strongSelf.holderCallbacks[content.id] {
                             for subscriber in current.playbackCompleted.copyItems() {
                                 subscriber()
+                            }
+                        }
+                    }
+                }, isNativePictureInPictureActiveUpdated: { [weak self] value in
+                    if let strongSelf = self {
+                        if let current = strongSelf.holderCallbacks[content.id] {
+                            for subscriber in current.isNativePictureInPictureActive.copyItems() {
+                                subscriber(value)
                             }
                         }
                     }
@@ -278,7 +299,7 @@ public final class UniversalVideoManagerImpl: UniversalVideoManager {
         } |> runOn(Queue.mainQueue())
     }
     
-    public func bufferingStatusSignal(content: UniversalVideoContent) -> Signal<(IndexSet, Int)?, NoError> {
+    public func bufferingStatusSignal(content: UniversalVideoContent) -> Signal<(RangeSet<Int64>, Int64)?, NoError> {
         return Signal { subscriber in
             var callbacks: UniversalVideoContentHolderCallbacks
             if let current = self.holderCallbacks[content.id] {
@@ -296,6 +317,39 @@ public final class UniversalVideoManagerImpl: UniversalVideoManager {
                 subscriber.putNext(current.bufferingStatusValue)
             } else {
                 subscriber.putNext(nil)
+            }
+            
+            return ActionDisposable {
+                Queue.mainQueue().async {
+                    if let current = self.holderCallbacks[content.id] {
+                        current.status.remove(index)
+                        if current.playbackCompleted.isEmpty {
+                            self.holderCallbacks.removeValue(forKey: content.id)
+                        }
+                    }
+                }
+            }
+        } |> runOn(Queue.mainQueue())
+    }
+    
+    public func isNativePictureInPictureActiveSignal(content: UniversalVideoContent) -> Signal<Bool, NoError> {
+        return Signal { subscriber in
+            var callbacks: UniversalVideoContentHolderCallbacks
+            if let current = self.holderCallbacks[content.id] {
+                callbacks = current
+            } else {
+                callbacks = UniversalVideoContentHolderCallbacks()
+                self.holderCallbacks[content.id] = callbacks
+            }
+            
+            let index = callbacks.isNativePictureInPictureActive.add({ value in
+                subscriber.putNext(value)
+            })
+            
+            if let current = self.holders[content.id] {
+                subscriber.putNext(current.isNativePictureInPictureActiveValue)
+            } else {
+                subscriber.putNext(false)
             }
             
             return ActionDisposable {

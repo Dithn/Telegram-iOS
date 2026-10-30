@@ -1,4 +1,6 @@
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 headers = [
     "opus.h",
     "opus_defines.h",
@@ -15,7 +17,7 @@ genrule(
     name = "opus_build",
     srcs = [
         "build-opus-bazel.sh",
-        "opus-1.3.1.tar.gz",
+        "opus-1.5.1.tar.gz",
     ],
     cmd_bash = 
     """
@@ -29,6 +31,12 @@ genrule(
         BUILD_ARCH="sim_arm64"
     elif [ "$(TARGET_CPU)" == "ios_x86_64" ]; then
         BUILD_ARCH="x86_64"
+    elif [ "$(TARGET_CPU)" == "k8" ] || [ "$(TARGET_CPU)" == "x86_64" ]; then
+        BUILD_ARCH="linux_x86_64"
+    elif [ "$(TARGET_CPU)" == "aarch64" ] || [ "$(TARGET_CPU)" == "arm64" ]; then
+        BUILD_ARCH="linux_arm64"
+    elif [ "$(TARGET_CPU)" == "darwin_arm64" ]; then
+        BUILD_ARCH="macos_arm64"
     else
         echo "Unsupported architecture $(TARGET_CPU)"
     fi
@@ -38,11 +46,11 @@ genrule(
     mkdir -p "$$BUILD_DIR"
 
     cp $(location :build-opus-bazel.sh) "$$BUILD_DIR/"
-    cp $(location :opus-1.3.1.tar.gz) "$$BUILD_DIR/"
+    cp $(location :opus-1.5.1.tar.gz) "$$BUILD_DIR/"
 
     mkdir -p "$$BUILD_DIR/Public/opus"
 
-    sh $$BUILD_DIR/build-opus-bazel.sh $$BUILD_ARCH "$$BUILD_DIR" opus-1.3.1.tar.gz
+    sh $$BUILD_DIR/build-opus-bazel.sh $$BUILD_ARCH "$$BUILD_DIR" opus-1.5.1.tar.gz
     """ +
     "\n".join([
         "cp -f \"$$BUILD_DIR/built/include/opus/{}\" \"$(location Public/opus/{})\"".format(header, header) for header in headers
@@ -63,14 +71,25 @@ cc_library(
     srcs = [":Public/opus/lib/lib" + x + ".a" for x in libs],
 )
 
-objc_library(
-    name = "opus",
-    module_name = "opus",
-    enable_modules = True,
+cc_library(
+    name = "opus_cc",
     hdrs = [":Public/opus/" + x for x in headers],
     includes = [
         "Public",
-        "Public/opus",
+    ],
+    deps = [
+        ":opus_lib",
+    ],
+    visibility = [
+        "//visibility:public",
+    ],
+)
+
+cc_library(
+    name = "opus",
+    hdrs = [":Public/opus/" + x for x in headers],
+    includes = [
+        "Public",
     ],
     deps = [
         ":opus_lib",

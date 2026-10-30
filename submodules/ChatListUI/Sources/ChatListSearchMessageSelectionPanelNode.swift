@@ -3,7 +3,6 @@ import UIKit
 import Display
 import AsyncDisplayKit
 import Display
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import TelegramPresentationData
@@ -17,7 +16,7 @@ final class ChatListSearchMessageSelectionPanelNode: ASDisplayNode {
     private let deleteMessages: () -> Void
     private let shareMessages: () -> Void
     private let forwardMessages: () -> Void
-    private let displayCopyProtectionTip: (ASDisplayNode, Bool) -> Void
+    private let displayCopyProtectionTip: (UIView, Bool) -> Void
     
     private let separatorNode: ASDisplayNode
     private let backgroundNode: NavigationBackgroundNode
@@ -31,8 +30,8 @@ final class ChatListSearchMessageSelectionPanelNode: ASDisplayNode {
     
     private var validLayout: ContainerViewLayout?
     
-    var chatAvailableMessageActions: ((Set<MessageId>) -> Signal<ChatAvailableMessageActions, NoError>)?
-    var selectedMessages = Set<MessageId>() {
+    var chatAvailableMessageActions: ((Set<EngineMessage.Id>) -> Signal<ChatAvailableMessageActions, NoError>)?
+    var selectedMessages = Set<EngineMessage.Id>() {
         didSet {
             if oldValue != self.selectedMessages {
                 self.forwardButton.isEnabled = self.selectedMessages.count != 0
@@ -47,7 +46,7 @@ final class ChatListSearchMessageSelectionPanelNode: ASDisplayNode {
                 } else {
                     if let chatAvailableMessageActions = self.chatAvailableMessageActions {
                         self.canDeleteMessagesDisposable.set((chatAvailableMessageActions(self.selectedMessages)
-                        |> deliverOnMainQueue).start(next: { [weak self] actions in
+                        |> deliverOnMainQueue).startStrict(next: { [weak self] actions in
                             if let strongSelf = self {
                                 strongSelf.actions = actions
                                 if let layout = strongSelf.validLayout {
@@ -61,7 +60,7 @@ final class ChatListSearchMessageSelectionPanelNode: ASDisplayNode {
         }
     }
     
-    init(context: AccountContext, deleteMessages: @escaping () -> Void, shareMessages: @escaping () -> Void, forwardMessages: @escaping () -> Void, displayCopyProtectionTip: @escaping (ASDisplayNode, Bool) -> Void) {
+    init(context: AccountContext, deleteMessages: @escaping () -> Void, shareMessages: @escaping () -> Void, forwardMessages: @escaping () -> Void, displayCopyProtectionTip: @escaping (UIView, Bool) -> Void) {
         self.context = context
         self.deleteMessages = deleteMessages
         self.shareMessages = shareMessages
@@ -134,8 +133,10 @@ final class ChatListSearchMessageSelectionPanelNode: ASDisplayNode {
        
         let width = layout.size.width
         let insets = layout.insets(options: [])
-        let leftInset = insets.left + layout.safeInsets.left
-        let rightInset = insets.right + layout.safeInsets.right
+        // The bottom selection panel spans iPhone Duo's side strip; it keeps clear only of a corner block at the bottom.
+        let bottomInsets = layout.bottomEdgeSideInsets()
+        let leftInset = insets.left + bottomInsets.left
+        let rightInset = insets.right + bottomInsets.right
        
         let panelHeight: CGFloat
         if case .regular = layout.metrics.widthClass, case .regular = layout.metrics.heightClass {
@@ -176,7 +177,7 @@ final class ChatListSearchMessageSelectionPanelNode: ASDisplayNode {
     
     @objc func forwardButtonPressed() {
         if let actions = self.actions, actions.isCopyProtected {
-            self.displayCopyProtectionTip(self.forwardButton, false)
+            self.displayCopyProtectionTip(self.forwardButton.view, false)
         } else {
             self.forwardMessages()
         }
@@ -184,7 +185,7 @@ final class ChatListSearchMessageSelectionPanelNode: ASDisplayNode {
     
     @objc func shareButtonPressed() {
         if let actions = self.actions, actions.isCopyProtected {
-            self.displayCopyProtectionTip(self.shareButton, true)
+            self.displayCopyProtectionTip(self.shareButton.view, true)
         } else {
             self.shareMessages()
         }

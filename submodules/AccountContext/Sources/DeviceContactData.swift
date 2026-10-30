@@ -1,7 +1,8 @@
 import Foundation
 import Contacts
-import Postbox
 import TelegramCore
+import FlatBuffers
+import FlatSerialization
 
 public final class DeviceContactPhoneNumberData: Equatable {
     public let label: String
@@ -10,6 +11,22 @@ public final class DeviceContactPhoneNumberData: Equatable {
     public init(label: String, value: String) {
         self.label = label
         self.value = value
+    }
+    
+    init(flatBuffersObject: TelegramCore_DeviceContactPhoneNumberData) {
+        self.label = flatBuffersObject.label
+        self.value = flatBuffersObject.value
+    }
+    
+    public func encodeToFlatBuffers(builder: inout FlatBufferBuilder) -> Offset {
+        let labelOffset = builder.create(string: self.label)
+        let valueOffset = builder.create(string: self.value)
+        
+        return TelegramCore_DeviceContactPhoneNumberData.createDeviceContactPhoneNumberData(
+            &builder,
+            labelOffset: labelOffset,
+            valueOffset: valueOffset
+        )
     }
     
     public static func == (lhs: DeviceContactPhoneNumberData, rhs: DeviceContactPhoneNumberData) -> Bool {
@@ -190,18 +207,18 @@ public let phonebookUsernamePathPrefix = "@id"
 private let phonebookUsernamePrefix = "https://t.me/" + phonebookUsernamePathPrefix
 
 public extension DeviceContactUrlData {
-    convenience init(appProfile: PeerId) {
-        self.init(label: "Telegram", value: "\(phonebookUsernamePrefix)\(appProfile.id)")
+    convenience init(appProfile: EnginePeer.Id) {
+        self.init(label: "Telegram", value: "\(phonebookUsernamePrefix)\(appProfile.id._internalGetInt64Value())")
     }
 }
 
-public func parseAppSpecificContactReference(_ value: String) -> PeerId? {
+public func parseAppSpecificContactReference(_ value: String) -> EnginePeer.Id? {
     if !value.hasPrefix(phonebookUsernamePrefix) {
         return nil
     }
     let idString = String(value[value.index(value.startIndex, offsetBy: phonebookUsernamePrefix.count)...])
     if let id = Int64(idString) {
-        return PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(id))
+        return EnginePeer.Id(namespace: Namespaces.Peer.CloudUser, id: EnginePeer.Id.Id._internalFromInt64Value(id))
     }
     return nil
 }
@@ -217,6 +234,38 @@ public final class DeviceContactBasicData: Equatable {
         self.phoneNumbers = phoneNumbers
     }
     
+    public init(flatBuffersObject: TelegramCore_StoredDeviceContactData) {
+        self.firstName = flatBuffersObject.firstName
+        self.lastName = flatBuffersObject.lastName
+        
+        if flatBuffersObject.phoneNumbersCount == 1 {
+            self.phoneNumbers = [
+                DeviceContactPhoneNumberData(flatBuffersObject: flatBuffersObject.phoneNumbers(at: 0)!)
+            ]
+        } else {
+            var phoneNumbers: [DeviceContactPhoneNumberData] = []
+            for i in 0 ..< flatBuffersObject.phoneNumbersCount {
+                phoneNumbers.append(DeviceContactPhoneNumberData(flatBuffersObject: flatBuffersObject.phoneNumbers(at: i)!))
+            }
+            self.phoneNumbers = phoneNumbers
+        }
+    }
+    
+    public func encodeToFlatBuffers(builder: inout FlatBufferBuilder) -> Offset {
+        let phoneNumberOffsets = self.phoneNumbers.map { $0.encodeToFlatBuffers(builder: &builder) }
+        let phoneNumberOffset = builder.createVector(ofOffsets: phoneNumberOffsets, len: phoneNumberOffsets.count)
+        
+        let firstNameOffset = builder.create(string: self.firstName)
+        let lastNameOffset = builder.create(string: self.lastName)
+        
+        return TelegramCore_StoredDeviceContactData.createStoredDeviceContactData(
+            &builder,
+            firstNameOffset: firstNameOffset,
+            lastNameOffset: lastNameOffset,
+            phoneNumbersVectorOffset: phoneNumberOffset
+        )
+    }
+    
     public static func ==(lhs: DeviceContactBasicData, rhs: DeviceContactBasicData) -> Bool {
         if lhs.firstName != rhs.firstName {
             return false
@@ -228,6 +277,86 @@ public final class DeviceContactBasicData: Equatable {
             return false
         }
         return true
+    }
+}
+
+public final class DeviceContactDataState: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case contactsData
+        case contactsKeys
+        case telegramReferencesKeys
+        case telegramReferencesValues
+        case stateToken
+    }
+    
+    public let contacts: [String: DeviceContactBasicData]
+    public let telegramReferences: [EnginePeer.Id: String]
+    public let stateToken: Data?
+    
+    public init(contacts: [String: DeviceContactBasicData], telegramReferences: [EnginePeer.Id: String], stateToken: Data?) {
+        self.contacts = contacts
+        self.telegramReferences = telegramReferences
+        self.stateToken = stateToken
+    }
+    
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        let contactsData = try container.decode([Data].self, forKey: .contactsData).map { data in
+            var byteBuffer = ByteBuffer(data: data)
+            let deserializedValue = FlatBuffers_getRoot(byteBuffer: &byteBuffer) as TelegramCore_StoredDeviceContactData
+            let parsedValue = DeviceContactBasicData(flatBuffersObject: deserializedValue)
+            return parsedValue
+        }
+        let contactsKeys = try container.decode([String].self, forKey: .contactsKeys)
+        
+        var contacts: [String: DeviceContactBasicData] = [:]
+        for i in 0 ..< min(contactsData.count, contactsKeys.count) {
+            contacts[contactsKeys[i]] = contactsData[i]
+        }
+        self.contacts = contacts
+        
+        let telegramReferencesKeys = try container.decode([Int64].self, forKey: .telegramReferencesKeys).map { value in
+            return EnginePeer.Id(value)
+        }
+        let telegramReferencesValues = try container.decode([String].self, forKey: .telegramReferencesValues)
+        
+        var telegramReferences: [EnginePeer.Id: String] = [:]
+        for i in 0 ..< min(telegramReferencesValues.count, telegramReferencesKeys.count) {
+            telegramReferences[telegramReferencesKeys[i]] = telegramReferencesValues[i]
+        }
+        self.telegramReferences = telegramReferences
+        
+        self.stateToken = try container.decodeIfPresent(Data.self, forKey: .stateToken)
+    }
+    
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        var contactsData: [Data] = []
+        var contactsKeys: [String] = []
+        for (key, contact) in self.contacts {
+            var builder = FlatBufferBuilder(initialSize: 1024)
+            let offset = contact.encodeToFlatBuffers(builder: &builder)
+            builder.finish(offset: offset)
+            contactsData.append(builder.data)
+            contactsKeys.append(key)
+        }
+        
+        var telegramReferencesKeys: [Int64] = []
+        var telegramReferencesValues: [String] = []
+        for (key, value) in self.telegramReferences {
+            telegramReferencesKeys.append(key.toInt64())
+            telegramReferencesValues.append(value)
+        }
+        
+        try container.encode(contactsKeys, forKey: .contactsKeys)
+        try container.encode(contactsData, forKey: .contactsData)
+        
+        try container.encode(telegramReferencesKeys, forKey: .telegramReferencesKeys)
+        try container.encode(telegramReferencesValues, forKey: .telegramReferencesValues)
+        
+        try container.encodeIfPresent(stateToken, forKey: .stateToken)
     }
 }
 
@@ -328,17 +457,12 @@ public final class DeviceContactExtendedData: Equatable {
 
 public extension DeviceContactExtendedData {
     convenience init?(vcard: Data) {
-        if #available(iOSApplicationExtension 9.0, iOS 9.0, *) {
-            guard let contact = (try? CNContactVCardSerialization.contacts(with: vcard))?.first else {
-                return nil
-            }
-            self.init(contact: contact)
-        } else {
+        guard let contact = (try? CNContactVCardSerialization.contacts(with: vcard))?.first else {
             return nil
         }
+        self.init(contact: contact)
     }
     
-    @available(iOSApplicationExtension 9.0, iOS 9.0, *)
     func asMutableCNContact() -> CNMutableContact {
         let contact = CNMutableContact()
         contact.givenName = self.basicData.firstName
@@ -386,7 +510,6 @@ public extension DeviceContactExtendedData {
         return nil
     }
     
-    @available(iOSApplicationExtension 9.0, iOS 9.0, *)
     convenience init(contact: CNContact) {
         var phoneNumbers: [DeviceContactPhoneNumberData] = []
         for number in contact.phoneNumbers {
@@ -466,8 +589,8 @@ public extension DeviceContactExtendedData {
 }
  
 public extension DeviceContactExtendedData {
-    convenience init?(peer: Peer) {
-        guard let user = peer as? TelegramUser else {
+    convenience init?(peer: EnginePeer) {
+        guard case let .user(user) = peer else {
             return nil
         }
         var phoneNumbers: [DeviceContactPhoneNumberData] = []
@@ -478,8 +601,28 @@ public extension DeviceContactExtendedData {
     }
 }
 
-extension DeviceContactAddressData {
-    public var dictionary: [String: String]  {
+public extension DeviceContactAddressData {
+    var asPostalAddress: CNPostalAddress {
+        let address = CNMutablePostalAddress()
+        if !self.street1.isEmpty {
+            address.street = self.street1
+        }
+        if !self.city.isEmpty {
+            address.city = self.city
+        }
+        if !self.state.isEmpty {
+            address.state = self.state
+        }
+        if !self.country.isEmpty {
+            address.country = self.country
+        }
+        if !self.postcode.isEmpty {
+            address.postalCode = self.postcode
+        }
+        return address
+    }
+    
+    var dictionary: [String: String]  {
         var dictionary: [String: String] = [:]
         if !self.street1.isEmpty {
             dictionary["Street"] = self.street1
@@ -499,7 +642,7 @@ extension DeviceContactAddressData {
         return dictionary
     }
     
-    public var string: String {
+    var string: String {
         var array: [String] = []
         if !self.street1.isEmpty {
             array.append(self.street1)
@@ -519,7 +662,7 @@ extension DeviceContactAddressData {
         return array.joined(separator: " ")
     }
     
-    public var displayString: String {
+    var displayString: String {
         var array: [String] = []
         if !self.street1.isEmpty {
             array.append(self.street1)

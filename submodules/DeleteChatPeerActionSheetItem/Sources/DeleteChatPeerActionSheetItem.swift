@@ -6,6 +6,9 @@ import TelegramPresentationData
 import TelegramUIPreferences
 import AvatarNode
 import AccountContext
+import ComponentFlow
+import BalancedTextComponent
+import MultilineTextComponent
 
 public enum DeleteChatPeerAction {
     case delete
@@ -15,6 +18,7 @@ public enum DeleteChatPeerAction {
     case clearCacheSuggestion
     case removeFromGroup
     case removeFromChannel
+    case deleteSavedPeer
 }
 
 private let avatarFont = avatarPlaceholderFont(size: 26.0)
@@ -26,18 +30,20 @@ public final class DeleteChatPeerActionSheetItem: ActionSheetItem {
     let action: DeleteChatPeerAction
     let strings: PresentationStrings
     let nameDisplayOrder: PresentationPersonNameOrder
+    let balancedLayout: Bool
     
-    public init(context: AccountContext, peer: EnginePeer, chatPeer: EnginePeer, action: DeleteChatPeerAction, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder) {
+    public init(context: AccountContext, peer: EnginePeer, chatPeer: EnginePeer, action: DeleteChatPeerAction, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, balancedLayout: Bool = false) {
         self.context = context
         self.peer = peer
         self.chatPeer = chatPeer
         self.action = action
         self.strings = strings
         self.nameDisplayOrder = nameDisplayOrder
+        self.balancedLayout = balancedLayout
     }
     
     public func node(theme: ActionSheetControllerTheme) -> ActionSheetItemNode {
-        return DeleteChatPeerActionSheetItemNode(theme: theme, strings: self.strings, nameOrder: self.nameDisplayOrder, context: self.context, peer: self.peer, chatPeer: self.chatPeer, action: self.action)
+        return DeleteChatPeerActionSheetItemNode(theme: theme, strings: self.strings, nameOrder: self.nameDisplayOrder, context: self.context, peer: self.peer, chatPeer: self.chatPeer, action: self.action, balancedLayout: self.balancedLayout)
     }
     
     public func updateNode(_ node: ActionSheetItemNode) {
@@ -47,15 +53,19 @@ public final class DeleteChatPeerActionSheetItem: ActionSheetItem {
 private final class DeleteChatPeerActionSheetItemNode: ActionSheetItemNode {
     private let theme: ActionSheetControllerTheme
     private let strings: PresentationStrings
+    private let balancedLayout: Bool
     
     private let avatarNode: AvatarNode
-    private let textNode: ImmediateTextNode
+    
+    private var text: NSAttributedString?
+    private let textView = ComponentView<Empty>()
     
     private let accessibilityArea: AccessibilityAreaNode
     
-    init(theme: ActionSheetControllerTheme, strings: PresentationStrings, nameOrder: PresentationPersonNameOrder, context: AccountContext, peer: EnginePeer, chatPeer: EnginePeer, action: DeleteChatPeerAction) {
+    init(theme: ActionSheetControllerTheme, strings: PresentationStrings, nameOrder: PresentationPersonNameOrder, context: AccountContext, peer: EnginePeer, chatPeer: EnginePeer, action: DeleteChatPeerAction, balancedLayout: Bool) {
         self.theme = theme
         self.strings = strings
+        self.balancedLayout = balancedLayout
         
         let textFont = Font.regular(floor(theme.baseFontSize * 14.0 / 17.0))
         let boldFont = Font.semibold(floor(theme.baseFontSize * 14.0 / 17.0))
@@ -63,30 +73,30 @@ private final class DeleteChatPeerActionSheetItemNode: ActionSheetItemNode {
         self.avatarNode = AvatarNode(font: avatarFont)
         self.avatarNode.isAccessibilityElement = false
         
-        self.textNode = ImmediateTextNode()
-        self.textNode.displaysAsynchronously = false
-        self.textNode.maximumNumberOfLines = 0
-        self.textNode.textAlignment = .center
-        self.textNode.isAccessibilityElement = false
-        
         self.accessibilityArea = AccessibilityAreaNode()
         
         super.init(theme: theme)
         
         self.addSubnode(self.avatarNode)
-        self.addSubnode(self.textNode)
         self.addSubnode(self.accessibilityArea)
         
+        var clipStyle: AvatarNodeClipStyle = .round
+        if case let .channel(channel) = chatPeer, channel.isMonoForum {
+            clipStyle = .bubble
+        }
+        
         if chatPeer.id == context.account.peerId {
-            self.avatarNode.setPeer(context: context, theme: (context.sharedContext.currentPresentationData.with { $0 }).theme, peer: peer, overrideImage: .savedMessagesIcon)
+            self.avatarNode.setPeer(context: context, theme: (context.sharedContext.currentPresentationData.with { $0 }).theme, peer: peer, overrideImage: .savedMessagesIcon, clipStyle: clipStyle)
         } else if chatPeer.id.isReplies {
-            self.avatarNode.setPeer(context: context, theme: (context.sharedContext.currentPresentationData.with { $0 }).theme, peer: peer, overrideImage: .repliesIcon)
+            self.avatarNode.setPeer(context: context, theme: (context.sharedContext.currentPresentationData.with { $0 }).theme, peer: peer, overrideImage: .repliesIcon, clipStyle: clipStyle)
+        } else if chatPeer.id.isAnonymousSavedMessages {
+            self.avatarNode.setPeer(context: context, theme: (context.sharedContext.currentPresentationData.with { $0 }).theme, peer: peer, overrideImage: .anonymousSavedMessagesIcon(isColored: true), clipStyle: clipStyle)
         } else {
             var overrideImage: AvatarNodeImageOverride?
             if chatPeer.isDeleted {
                 overrideImage = .deletedIcon
             }
-            self.avatarNode.setPeer(context: context, theme: (context.sharedContext.currentPresentationData.with { $0 }).theme, peer: peer, overrideImage: overrideImage)
+            self.avatarNode.setPeer(context: context, theme: (context.sharedContext.currentPresentationData.with { $0 }).theme, peer: peer, overrideImage: overrideImage, clipStyle: clipStyle)
         }
         
         var attributedText: NSAttributedString?
@@ -104,11 +114,11 @@ private final class DeleteChatPeerActionSheetItemNode: ActionSheetItemNode {
             var text: PresentationStrings.FormattedString?
             switch action {
             case .delete:
-                if chatPeer.id == context.account.peerId {
+                if peer.id == context.account.peerId {
                     text = PresentationStrings.FormattedString(string: strings.ChatList_DeleteSavedMessagesConfirmation, ranges: [])
-                } else if case let .legacyGroup(chatPeer) = chatPeer {
+                } else if case let .legacyGroup(chatPeer) = peer {
                     text = strings.ChatList_LeaveGroupConfirmation(chatPeer.title)
-                } else if case let .channel(chatPeer) = chatPeer {
+                } else if case let .channel(chatPeer) = peer {
                     text = strings.ChatList_LeaveGroupConfirmation(chatPeer.title)
                 } else if case .secretChat = chatPeer {
                     text = strings.ChatList_DeleteSecretChatConfirmation(peer.displayTitle(strings: strings, displayOrder: nameOrder))
@@ -120,16 +130,23 @@ private final class DeleteChatPeerActionSheetItemNode: ActionSheetItemNode {
                     text = PresentationStrings.FormattedString(string: strings.ChatList_DeleteSavedMessagesConfirmation, ranges: [])
                 } else if case let .legacyGroup(chatPeer) = chatPeer {
                     text = strings.ChatList_DeleteAndLeaveGroupConfirmation(chatPeer.title)
-                } else if case let .channel(chatPeer) = chatPeer {
-                    text = strings.ChatList_DeleteAndLeaveGroupConfirmation(chatPeer.title)
+                } else if case .channel = chatPeer {
+                    text = strings.ChatList_DeleteAndLeaveGroupConfirmation(peer.compactDisplayTitle)
                 } else if case .secretChat = chatPeer {
                     text = strings.ChatList_DeleteSecretChatConfirmation(peer.displayTitle(strings: strings, displayOrder: nameOrder))
                 } else {
                     text = strings.ChatList_DeleteChatConfirmation(peer.displayTitle(strings: strings, displayOrder: nameOrder))
                 }
+            case .deleteSavedPeer:
+                if peer.id == context.account.peerId {
+                    text = strings.ChatList_DeleteSavedPeerMyNotesConfirmation(strings.ChatList_DeleteSavedPeerMyNotesConfirmationTitle)
+                } else {
+                    let peerTitle = peer.displayTitle(strings: strings, displayOrder: nameOrder)
+                    text = strings.ChatList_DeleteSavedPeerConfirmation(peerTitle)
+                }
             case let .clearHistory(canClearCache):
                 if peer.id == context.account.peerId {
-                    text = PresentationStrings.FormattedString(string: strings.ChatList_DeleteSavedMessagesConfirmation, ranges: [])
+                    text = PresentationStrings.FormattedString(string: strings.ChatList_ClearSavedMessagesConfirmation, ranges: [])
                 } else if case .user = peer {
                     text = strings.ChatList_ClearChatConfirmation(peer.displayTitle(strings: strings, displayOrder: nameOrder))
                 } else {
@@ -162,7 +179,7 @@ private final class DeleteChatPeerActionSheetItemNode: ActionSheetItemNode {
         }
         
         if let attributedText = attributedText {
-            self.textNode.attributedText = attributedText
+            self.text = attributedText
             
             self.accessibilityArea.accessibilityLabel = attributedText.string
             self.accessibilityArea.accessibilityTraits = .staticText
@@ -170,7 +187,21 @@ private final class DeleteChatPeerActionSheetItemNode: ActionSheetItemNode {
     }
     
     public override func updateLayout(constrainedSize: CGSize, transition: ContainedViewLayoutTransition) -> CGSize {
-        let textSize = self.textNode.updateLayout(CGSize(width: constrainedSize.width - 20.0, height: .greatestFiniteMagnitude))
+        let textComponent: AnyComponent<Empty>
+        if self.balancedLayout {
+            textComponent = AnyComponent(BalancedTextComponent(
+                text: .plain(self.text ?? NSAttributedString()),
+                horizontalAlignment: .center,
+                maximumNumberOfLines: 0
+            ))
+        } else {
+            textComponent = AnyComponent(MultilineTextComponent(
+                text: .plain(self.text ?? NSAttributedString()),
+                horizontalAlignment: .center,
+                maximumNumberOfLines: 0
+            ))
+        }
+        let textSize = self.textView.update(transition: .immediate, component: textComponent, environment: {}, containerSize: CGSize(width: constrainedSize.width - 20.0, height: 1000.0))
         
         let topInset: CGFloat = 16.0
         let avatarSize: CGFloat = 60.0
@@ -178,7 +209,13 @@ private final class DeleteChatPeerActionSheetItemNode: ActionSheetItemNode {
         let bottomInset: CGFloat = 15.0
         
         self.avatarNode.frame = CGRect(origin: CGPoint(x: floor((constrainedSize.width - avatarSize) / 2.0), y: topInset), size: CGSize(width: avatarSize, height: avatarSize))
-        self.textNode.frame = CGRect(origin: CGPoint(x: floor((constrainedSize.width - textSize.width) / 2.0), y: topInset + avatarSize + textSpacing), size: textSize)
+        
+        if let textComponentView = self.textView.view {
+            if textComponentView.superview == nil {
+                self.view.addSubview(textComponentView)
+            }
+            textComponentView.frame = CGRect(origin: CGPoint(x: floor((constrainedSize.width - textSize.width) / 2.0), y: topInset + avatarSize + textSpacing), size: textSize)
+        }
         
         let size = CGSize(width: constrainedSize.width, height: topInset + avatarSize + textSpacing + textSize.height + bottomInset)
         self.accessibilityArea.frame = CGRect(origin: CGPoint(), size: size)

@@ -2,7 +2,7 @@ import Foundation
 import Postbox
 import MtProtoKit
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 
 
 public func secureIdConfiguration(postbox: Postbox, network: Network) -> Signal<SecureIdConfiguration, NoError> {
@@ -27,16 +27,18 @@ public func secureIdConfiguration(postbox: Postbox, network: Network) -> Signal<
                         assertionFailure()
                         return .complete()
                     }
-                case let .passportConfig(hash, countriesLangs):
+                case let .passportConfig(passportConfigData):
+                    let (hash, countriesLangs) = (passportConfigData.hash, passportConfigData.countriesLangs)
                     switch countriesLangs {
-                        case let .dataJSON(data):
+                        case let .dataJSON(dataJSONData):
+                            let data = dataJSONData.data
                             let value = SecureIdConfiguration(jsonString: data)
                             parsed = CachedSecureIdConfiguration(value: value, hash: hash)
                     }
             }
             return postbox.transaction { transaction -> SecureIdConfiguration in
                 if let entry = CodableEntry(parsed) {
-                    transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedSecureIdConfiguration, key: ValueBoxKey(length: 0)), entry: entry, collectionSpec: ItemCacheCollectionSpec(lowWaterItemCount: 1, highWaterItemCount: 1))
+                    transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedSecureIdConfiguration, key: ValueBoxKey(length: 0)), entry: entry)
                 }
                 return parsed.value
             }

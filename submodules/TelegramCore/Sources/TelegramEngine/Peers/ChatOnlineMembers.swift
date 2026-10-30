@@ -1,7 +1,7 @@
 import Foundation
 import SwiftSignalKit
 import Postbox
-import TelegramApi
+internal import TelegramApi
 
 func _internal_chatOnlineMembers(postbox: Postbox, network: Network, peerId: PeerId) -> Signal<Int32, NoError> {
     return postbox.transaction { transaction -> Api.InputPeer? in
@@ -14,7 +14,8 @@ func _internal_chatOnlineMembers(postbox: Postbox, network: Network, peerId: Pee
         return network.request(Api.functions.messages.getOnlines(peer: inputPeer))
         |> map { value -> Int32 in
             switch value {
-                case let .chatOnlines(onlines):
+                case let .chatOnlines(chatOnlinesData):
+                    let onlines = chatOnlinesData.onlines
                     return onlines
             }
         }

@@ -21,10 +21,21 @@ private let cloudSoundMapping: [Int32: Int64] = [
     108: 5078299559046677216,
     109: 5078299559046677217,
     110: 5078299559046677218,
-    111: 5078299559046677219
+    111: 5078299559046677219,
+    200: 5032932652722685163,
+    201: 5032932652722685160,
+    202: 5032932652722685159,
+    203: 5032932652722685158,
+    204: 5032932652722685168,
+    205: 5032932652722685167,
+    206: 5032932652722685166,
+    207: 5032932652722685165,
+    208: 5032932652722685164,
+    209: 5032932652722685162,
+    210: 5032932652722685161
 ]
 
-public let defaultCloudPeerNotificationSound: PeerMessageSound = .cloud(fileId: cloudSoundMapping[100]!)
+public let defaultCloudPeerNotificationSound: PeerMessageSound = .cloud(fileId: cloudSoundMapping[200]!)
 
 public enum CloudSoundBuiltinCategory {
     case modern
@@ -73,10 +84,40 @@ public func getCloudLegacySound(id: Int64) -> (id: Int32, category: CloudSoundBu
     return nil
 }
 
-public enum PeerMuteState: Equatable {
+public enum PeerMuteState: Codable, Equatable {
     case `default`
     case unmuted
     case muted(until: Int32)
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StringCodingKey.self)
+        
+        switch try container.decode(Int32.self, forKey: "m.v") {
+        case 0:
+            self = .default
+        case 1:
+            self = .muted(until: try container.decode(Int32.self, forKey: "m.u"))
+        case 2:
+            self = .unmuted
+        default:
+            assertionFailure()
+            self = .default
+        }
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: StringCodingKey.self)
+        
+        switch self {
+        case .default:
+            try container.encode(0 as Int32, forKey: "m.v")
+        case let .muted(until):
+            try container.encode(1 as Int32, forKey: "m.v")
+            try container.encode(until, forKey: "m.u")
+        case .unmuted:
+            try container.encode(2 as Int32, forKey: "m.v")
+        }
+    }
     
     fileprivate static func decodeInline(_ decoder: PostboxDecoder) -> PeerMuteState {
         switch decoder.decodeInt32ForKey("m.v", orElse: 0) {
@@ -104,15 +145,15 @@ public enum PeerMuteState: Equatable {
     }
 }
 
-private enum PeerMessageSoundValue: Int32 {
-    case none
-    case bundledModern
-    case bundledClassic
-    case `default`
-    case cloud
+private enum PeerMessageSoundValue: Int32, Codable {
+    case none = 0
+    case bundledModern = 1
+    case bundledClassic = 2
+    case `default` = 3
+    case cloud = 4
 }
 
-public enum PeerMessageSound: Equatable {
+public enum PeerMessageSound: Equatable, Codable {
     public enum Id: Hashable {
         case none
         case `default`
@@ -139,6 +180,30 @@ public enum PeerMessageSound: Equatable {
             return .bundledClassic(id: id)
         case let .cloud(fileId):
             return .cloud(fileId: fileId)
+        }
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StringCodingKey.self)
+        
+        switch try container.decode(Int32.self, forKey: "s.v") {
+        case PeerMessageSoundValue.none.rawValue:
+            self = .none
+        case PeerMessageSoundValue.bundledModern.rawValue:
+            self = .cloud(fileId: getCloudSoundOrDefault(id: (try? container.decode(Int32.self, forKey: "s.i")) ?? 0, isModern: true))
+        case PeerMessageSoundValue.bundledClassic.rawValue:
+            self = .cloud(fileId: getCloudSoundOrDefault(id: (try? container.decode(Int32.self, forKey: "s.i")) ?? 0, isModern: false))
+        case PeerMessageSoundValue.default.rawValue:
+            self = .default
+        case PeerMessageSoundValue.cloud.rawValue:
+            do {
+                self = .cloud(fileId: try container.decode(Int64.self, forKey: "s.cloud.fileId"))
+            } catch {
+                self = .default
+            }
+        default:
+            assertionFailure()
+            self = defaultCloudPeerNotificationSound
         }
     }
     
@@ -179,6 +244,26 @@ public enum PeerMessageSound: Equatable {
         default:
             assertionFailure()
             return defaultCloudPeerNotificationSound
+        }
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: StringCodingKey.self)
+        
+        switch self {
+        case .none:
+            try container.encode(PeerMessageSoundValue.none.rawValue, forKey: "s.v")
+        case let .bundledModern(id):
+            try container.encode(PeerMessageSoundValue.bundledModern.rawValue, forKey: "s.v")
+            try container.encode(id, forKey: "s.i")
+        case let .bundledClassic(id):
+            try container.encode(PeerMessageSoundValue.bundledClassic.rawValue, forKey: "s.v")
+            try container.encode(id, forKey: "s.i")
+        case let .cloud(fileId):
+            try container.encode(PeerMessageSoundValue.cloud.rawValue, forKey: "s.v")
+            try container.encode(fileId, forKey: "s.cloud.fileId")
+        case .default:
+            try container.encode(PeerMessageSoundValue.default.rawValue, forKey: "s.v")
         }
     }
 
@@ -254,10 +339,39 @@ public enum PeerMessageSound: Equatable {
     }
 }
 
-public enum PeerNotificationDisplayPreviews {
+public enum PeerNotificationDisplayPreviews: Equatable, Codable {
     case `default`
     case show
     case hide
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StringCodingKey.self)
+        
+        switch try container.decode(Int32.self, forKey: "p.v") {
+        case 0:
+            self = .default
+        case 1:
+            self = .show
+        case 2:
+            self = .hide
+        default:
+            assertionFailure()
+            self = .default
+        }
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: StringCodingKey.self)
+        
+        switch self {
+        case .default:
+            try container.encode(0 as Int32, forKey: "p.v")
+        case .show:
+            try container.encode(1 as Int32, forKey: "p.v")
+        case .hide:
+            try container.encode(2 as Int32, forKey: "p.v")
+        }
+    }
     
     static func decodeInline(_ decoder: PostboxDecoder) -> PeerNotificationDisplayPreviews {
         switch decoder.decodeInt32ForKey("p.v", orElse: 0) {
@@ -285,23 +399,177 @@ public enum PeerNotificationDisplayPreviews {
     }
 }
 
-public final class TelegramPeerNotificationSettings: PeerNotificationSettings, Equatable {
+public struct PeerStoryNotificationSettings: Codable, Equatable {
+    public enum CodingError: Error {
+        case generic
+    }
+    
+    public static var `default`: PeerStoryNotificationSettings {
+        return PeerStoryNotificationSettings(mute: .default, hideSender: .default, sound: .default)
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case mute = "m"
+        case hideSender = "hs"
+        case sound = "s"
+    }
+    
+    public enum Mute: Int32, Codable {
+        case `default` = 0
+        case unmuted = 1
+        case muted = 2
+    }
+    
+    public enum HideSender: Int32, Codable {
+        case `default` = 0
+        case hide = 1
+        case show = 2
+    }
+    
+    public var mute: Mute
+    public var hideSender: HideSender
+    public var sound: PeerMessageSound
+    
+    public init(
+        mute: Mute,
+        hideSender: HideSender,
+        sound: PeerMessageSound
+    ) {
+        self.mute = mute
+        self.hideSender = hideSender
+        self.sound = sound
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        if let mute = Mute(rawValue: try container.decode(Int32.self, forKey: .mute)) {
+            self.mute = mute
+        } else {
+            throw CodingError.generic
+        }
+        if let hideSender = HideSender(rawValue: try container.decode(Int32.self, forKey: .hideSender)) {
+            self.hideSender = hideSender
+        } else {
+            throw CodingError.generic
+        }
+        self.sound = try container.decode(PeerMessageSound.self, forKey: .sound)
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        try container.encode(self.mute.rawValue, forKey: .mute)
+        try container.encode(self.hideSender.rawValue, forKey: .hideSender)
+        try container.encode(self.sound, forKey: .sound)
+    }
+}
+
+public struct PeerReactionNotificationSettings: Codable, Equatable {
+    public enum CodingError: Error {
+        case generic
+    }
+    
+    public static var `default`: PeerReactionNotificationSettings {
+        return PeerReactionNotificationSettings(
+            messages: .contacts,
+            stories: .contacts,
+            hideSender: .show,
+            sound: .default
+        )
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case messages
+        case stories
+        case hideSender
+        case sound
+    }
+    
+    public enum Sources: Int32, Codable {
+        case nobody = 0
+        case contacts = 1
+        case everyone = 2
+    }
+    
+    public enum Mute: Int32, Codable {
+        case `default` = 0
+        case unmuted = 1
+        case muted = 2
+    }
+    
+    public enum HideSender: Int32, Codable {
+        case `default` = 0
+        case hide = 1
+        case show = 2
+    }
+    
+    public var messages: Sources
+    public var stories: Sources
+    public var hideSender: HideSender
+    public var sound: PeerMessageSound
+    
+    public init(
+        messages: Sources,
+        stories: Sources,
+        hideSender: HideSender,
+        sound: PeerMessageSound
+    ) {
+        self.messages = messages
+        self.stories = stories
+        self.hideSender = hideSender
+        self.sound = sound
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        if let messages = Sources(rawValue: try container.decode(Int32.self, forKey: .messages)) {
+            self.messages = messages
+        } else {
+            throw CodingError.generic
+        }
+        if let stories = Sources(rawValue: try container.decode(Int32.self, forKey: .stories)) {
+            self.stories = stories
+        } else {
+            throw CodingError.generic
+        }
+        if let hideSender = HideSender(rawValue: try container.decode(Int32.self, forKey: .hideSender)) {
+            self.hideSender = hideSender
+        } else {
+            throw CodingError.generic
+        }
+        self.sound = try container.decode(PeerMessageSound.self, forKey: .sound)
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        try container.encode(self.messages.rawValue, forKey: .messages)
+        try container.encode(self.stories.rawValue, forKey: .stories)
+        try container.encode(self.hideSender.rawValue, forKey: .hideSender)
+        try container.encode(self.sound, forKey: .sound)
+    }
+}
+
+public final class TelegramPeerNotificationSettings: PeerNotificationSettings, Codable, Equatable {
     public let muteState: PeerMuteState
     public let messageSound: PeerMessageSound
     public let displayPreviews: PeerNotificationDisplayPreviews
+    public let storySettings: PeerStoryNotificationSettings
     
     public static var defaultSettings: TelegramPeerNotificationSettings {
-        return TelegramPeerNotificationSettings(muteState: .unmuted, messageSound: .default, displayPreviews: .default)
+        return TelegramPeerNotificationSettings(muteState: .unmuted, messageSound: .default, displayPreviews: .default, storySettings: PeerStoryNotificationSettings.default)
     }
     
     public func isRemovedFromTotalUnreadCount(`default`: Bool) -> Bool {
         switch self.muteState {
-            case .unmuted:
-                return false
-            case .muted:
-                return true
-            case .default:
-                return `default`
+        case .unmuted:
+            return false
+        case .muted:
+            return true
+        case .default:
+            return `default`
         }
     }
     
@@ -313,22 +581,43 @@ public final class TelegramPeerNotificationSettings: PeerNotificationSettings, E
         }
     }
     
-    public init(muteState: PeerMuteState, messageSound: PeerMessageSound, displayPreviews: PeerNotificationDisplayPreviews) {
+    public init(muteState: PeerMuteState, messageSound: PeerMessageSound, displayPreviews: PeerNotificationDisplayPreviews, storySettings: PeerStoryNotificationSettings) {
         self.muteState = muteState
         self.messageSound = messageSound
         self.displayPreviews = displayPreviews
+        self.storySettings = storySettings
     }
     
     public init(decoder: PostboxDecoder) {
         self.muteState = PeerMuteState.decodeInline(decoder)
         self.messageSound = PeerMessageSound.decodeInline(decoder)
         self.displayPreviews = PeerNotificationDisplayPreviews.decodeInline(decoder)
+        self.storySettings = decoder.decode(PeerStoryNotificationSettings.self, forKey: "stor") ?? PeerStoryNotificationSettings.default
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StringCodingKey.self)
+        
+        self.muteState = try container.decode(PeerMuteState.self, forKey: "muteState")
+        self.messageSound = try container.decode(PeerMessageSound.self, forKey: "messageSound")
+        self.displayPreviews = try container.decode(PeerNotificationDisplayPreviews.self, forKey: "displayPreviews")
+        self.storySettings = try container.decodeIfPresent(PeerStoryNotificationSettings.self, forKey: "stor") ?? PeerStoryNotificationSettings.default
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: StringCodingKey.self)
+        
+        try container.encode(self.muteState, forKey: "muteState")
+        try container.encode(self.messageSound, forKey: "messageSound")
+        try container.encode(self.displayPreviews, forKey: "displayPreviews")
+        try container.encode(self.storySettings, forKey: "stor")
     }
     
     public func encode(_ encoder: PostboxEncoder) {
         self.muteState.encodeInline(encoder)
         self.messageSound.encodeInline(encoder)
         self.displayPreviews.encodeInline(encoder)
+        encoder.encode(self.storySettings, forKey: "stor")
     }
     
     public func isEqual(to: PeerNotificationSettings) -> Bool {
@@ -340,18 +629,22 @@ public final class TelegramPeerNotificationSettings: PeerNotificationSettings, E
     }
     
     public func withUpdatedMuteState(_ muteState: PeerMuteState) -> TelegramPeerNotificationSettings {
-        return TelegramPeerNotificationSettings(muteState: muteState, messageSound: self.messageSound, displayPreviews: self.displayPreviews)
+        return TelegramPeerNotificationSettings(muteState: muteState, messageSound: self.messageSound, displayPreviews: self.displayPreviews, storySettings: self.storySettings)
     }
     
     public func withUpdatedMessageSound(_ messageSound: PeerMessageSound) -> TelegramPeerNotificationSettings {
-        return TelegramPeerNotificationSettings(muteState: self.muteState, messageSound: messageSound, displayPreviews: self.displayPreviews)
+        return TelegramPeerNotificationSettings(muteState: self.muteState, messageSound: messageSound, displayPreviews: self.displayPreviews, storySettings: self.storySettings)
     }
     
     public func withUpdatedDisplayPreviews(_ displayPreviews: PeerNotificationDisplayPreviews) -> TelegramPeerNotificationSettings {
-        return TelegramPeerNotificationSettings(muteState: self.muteState, messageSound: self.messageSound, displayPreviews: displayPreviews)
+        return TelegramPeerNotificationSettings(muteState: self.muteState, messageSound: self.messageSound, displayPreviews: displayPreviews, storySettings: self.storySettings)
+    }
+    
+    public func withUpdatedStorySettings(_ storySettings: PeerStoryNotificationSettings) -> TelegramPeerNotificationSettings {
+        return TelegramPeerNotificationSettings(muteState: self.muteState, messageSound: self.messageSound, displayPreviews: self.displayPreviews, storySettings: storySettings)
     }
     
     public static func ==(lhs: TelegramPeerNotificationSettings, rhs: TelegramPeerNotificationSettings) -> Bool {
-        return lhs.muteState == rhs.muteState && lhs.messageSound == rhs.messageSound && lhs.displayPreviews == rhs.displayPreviews
+        return lhs.muteState == rhs.muteState && lhs.messageSound == rhs.messageSound && lhs.displayPreviews == rhs.displayPreviews && lhs.storySettings == rhs.storySettings
     }
 }

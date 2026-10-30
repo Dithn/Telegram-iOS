@@ -1,6 +1,6 @@
 import Foundation
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import SwiftSignalKit
 
 func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messageId: MessageId) -> Signal<Void, NoError> {
@@ -53,7 +53,7 @@ func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messa
                     if attribute.countdownBeginTime == nil || attribute.countdownBeginTime == 0 {
                         var timeout = attribute.timeout
                         if let duration = message.secretMediaDuration {
-                            timeout = max(timeout, duration)
+                            timeout = max(timeout, Int32(duration))
                         }
                         updatedAttributes[i] = AutoremoveTimeoutMessageAttribute(timeout: timeout, countdownBeginTime: timestamp)
                         updateMessage = true
@@ -83,8 +83,8 @@ func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messa
                 } else if let attribute = updatedAttributes[i] as? AutoclearTimeoutMessageAttribute {
                     if attribute.countdownBeginTime == nil || attribute.countdownBeginTime == 0 {
                         var timeout = attribute.timeout
-                        if let duration = message.secretMediaDuration {
-                            timeout = max(timeout, duration)
+                        if let duration = message.secretMediaDuration, timeout != viewOnceTimeout {
+                            timeout = max(timeout, Int32(duration))
                         }
                         updatedAttributes[i] = AutoclearTimeoutMessageAttribute(timeout: timeout, countdownBeginTime: timestamp)
                         updateMessage = true
@@ -120,18 +120,19 @@ func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messa
                     if let forwardInfo = currentMessage.forwardInfo {
                         storeForwardInfo = StoreMessageForwardInfo(authorId: forwardInfo.author?.id, sourceId: forwardInfo.source?.id, sourceMessageId: forwardInfo.sourceMessageId, date: forwardInfo.date, authorSignature: forwardInfo.authorSignature, psaType: forwardInfo.psaType, flags: forwardInfo.flags)
                     }
-                    return .update(StoreMessage(id: currentMessage.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: updatedAttributes, media: currentMessage.media))
+                    return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: updatedAttributes, media: currentMessage.media))
                 })
             }
         }
     }
 }
 
-func _internal_markReactionsAsSeenInteractively(postbox: Postbox, messageId: MessageId) -> Signal<Void, NoError> {
+func _internal_markReactionsOrPollVotesAsSeenInteractively(postbox: Postbox, messageId: MessageId) -> Signal<Void, NoError> {
     return postbox.transaction { transaction -> Void in
-        if let message = transaction.getMessage(messageId), message.tags.contains(.unseenReaction) {
+        if let message = transaction.getMessage(messageId), (message.tags.contains(.unseenReaction) || message.tags.contains(.unseenPollVote)) {
             var updateMessage = false
             var updatedAttributes = message.attributes
+            var updatedMedia = message.media
             
             for i in 0 ..< updatedAttributes.count {
                 if let attribute = updatedAttributes[i] as? ReactionsMessageAttribute, attribute.hasUnseen {
@@ -140,7 +141,18 @@ func _internal_markReactionsAsSeenInteractively(postbox: Postbox, messageId: Mes
                     
                     if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
                     } else {
-                        transaction.setPendingMessageAction(type: .readReaction, id: messageId, action: ReadReactionAction())
+                        transaction.setPendingMessageAction(type: .readReactionOrPollVote, id: messageId, action: ReadReactionAction())
+                    }
+                }
+            }
+            for i in 0 ..< updatedMedia.count {
+                if let poll = updatedMedia[i] as? TelegramMediaPoll {
+                    updatedMedia[i] = poll.withoutUnreadResults()
+                    updateMessage = true
+                    
+                    if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
+                    } else {
+                        transaction.setPendingMessageAction(type: .readReactionOrPollVote, id: messageId, action: ReadReactionAction())
                     }
                 }
             }
@@ -153,14 +165,15 @@ func _internal_markReactionsAsSeenInteractively(postbox: Postbox, messageId: Mes
                     }
                     var tags = currentMessage.tags
                     tags.remove(.unseenReaction)
-                    return .update(StoreMessage(id: currentMessage.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: updatedAttributes, media: currentMessage.media))
+                    tags.remove(.unseenPollVote)
+                    return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: updatedAttributes, media: updatedMedia))
                 })
             }
         }
     }
 }
 
-func markMessageContentAsConsumedRemotely(transaction: Transaction, messageId: MessageId) {
+func markMessageContentAsConsumedRemotely(transaction: Transaction, messageId: MessageId, consumeDate: Int32?) {
     if let message = transaction.getMessage(messageId) {
         var updateMessage = false
         var updatedAttributes = message.attributes
@@ -184,35 +197,53 @@ func markMessageContentAsConsumedRemotely(transaction: Transaction, messageId: M
         }
         
         let timestamp = Int32(CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970)
+        let countdownBeginTime = consumeDate ?? timestamp
+        
         for i in 0 ..< updatedAttributes.count {
             if let attribute = updatedAttributes[i] as? AutoremoveTimeoutMessageAttribute {
                 if (attribute.countdownBeginTime == nil || attribute.countdownBeginTime == 0) && message.containsSecretMedia {
-                    updatedAttributes[i] = AutoremoveTimeoutMessageAttribute(timeout: attribute.timeout, countdownBeginTime: timestamp)
+                    updatedAttributes[i] = AutoremoveTimeoutMessageAttribute(timeout: attribute.timeout, countdownBeginTime: countdownBeginTime)
                     updateMessage = true
-                    
+                                 
                     if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
                     } else {
-                        for i in 0 ..< updatedMedia.count {
-                            if let _ = updatedMedia[i] as? TelegramMediaImage {
-                                updatedMedia[i] = TelegramMediaExpiredContent(data: .image)
-                            } else if let _ = updatedMedia[i] as? TelegramMediaFile {
-                                updatedMedia[i] = TelegramMediaExpiredContent(data: .file)
+                        if attribute.timeout == viewOnceTimeout || timestamp >= autoremoveExpiryTimestamp(countdownBeginTime: countdownBeginTime, timeout: attribute.timeout) {
+                            for i in 0 ..< updatedMedia.count {
+                                if let _ = updatedMedia[i] as? TelegramMediaImage {
+                                    updatedMedia[i] = TelegramMediaExpiredContent(data: .image)
+                                } else if let file = updatedMedia[i] as? TelegramMediaFile {
+                                    if file.isInstantVideo {
+                                        updatedMedia[i] = TelegramMediaExpiredContent(data: .videoMessage)
+                                    } else if file.isVoice {
+                                        updatedMedia[i] = TelegramMediaExpiredContent(data: .voiceMessage)
+                                    } else {
+                                        updatedMedia[i] = TelegramMediaExpiredContent(data: .file)
+                                    }
+                                }
                             }
                         }
                     }
                 }
             } else if let attribute = updatedAttributes[i] as? AutoclearTimeoutMessageAttribute {
                 if (attribute.countdownBeginTime == nil || attribute.countdownBeginTime == 0) && message.containsSecretMedia {
-                    updatedAttributes[i] = AutoclearTimeoutMessageAttribute(timeout: attribute.timeout, countdownBeginTime: timestamp)
+                    updatedAttributes[i] = AutoclearTimeoutMessageAttribute(timeout: attribute.timeout, countdownBeginTime: countdownBeginTime)
                     updateMessage = true
                     
                     if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
                     } else {
                         for i in 0 ..< updatedMedia.count {
-                            if let _ = updatedMedia[i] as? TelegramMediaImage {
-                                updatedMedia[i] = TelegramMediaExpiredContent(data: .image)
-                            } else if let _ = updatedMedia[i] as? TelegramMediaFile {
-                                updatedMedia[i] = TelegramMediaExpiredContent(data: .file)
+                            if attribute.timeout == viewOnceTimeout || timestamp >= autoremoveExpiryTimestamp(countdownBeginTime: countdownBeginTime, timeout: attribute.timeout) {
+                                if let _ = updatedMedia[i] as? TelegramMediaImage {
+                                    updatedMedia[i] = TelegramMediaExpiredContent(data: .image)
+                                } else if let file = updatedMedia[i] as? TelegramMediaFile {
+                                    if file.isInstantVideo {
+                                        updatedMedia[i] = TelegramMediaExpiredContent(data: .videoMessage)
+                                    } else if file.isVoice {
+                                        updatedMedia[i] = TelegramMediaExpiredContent(data: .voiceMessage)
+                                    } else {
+                                        updatedMedia[i] = TelegramMediaExpiredContent(data: .file)
+                                    }
+                                }
                             }
                         }
                     }
@@ -226,7 +257,7 @@ func markMessageContentAsConsumedRemotely(transaction: Transaction, messageId: M
                 if let forwardInfo = currentMessage.forwardInfo {
                     storeForwardInfo = StoreMessageForwardInfo(authorId: forwardInfo.author?.id, sourceId: forwardInfo.source?.id, sourceMessageId: forwardInfo.sourceMessageId, date: forwardInfo.date, authorSignature: forwardInfo.authorSignature, psaType: forwardInfo.psaType, flags: forwardInfo.flags)
                 }
-                return .update(StoreMessage(id: currentMessage.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: updatedTags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: updatedAttributes, media: updatedMedia))
+                return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: updatedTags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: updatedAttributes, media: updatedMedia))
             })
         }
     }

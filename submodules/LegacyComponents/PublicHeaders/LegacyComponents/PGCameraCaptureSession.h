@@ -4,11 +4,13 @@
 
 @class PGCameraMovieWriter;
 @class PGRectangleDetector;
+@class SQueue;
 
 @interface PGCameraCaptureSession : AVCaptureSession
 
 @property (nonatomic, readonly) AVCaptureDevice *videoDevice;
-@property (nonatomic, readonly) AVCaptureStillImageOutput *imageOutput;
+
+@property (nonatomic, readonly) AVCapturePhotoOutput *imageOutput;
 @property (nonatomic, readonly) AVCaptureVideoDataOutput *videoOutput;
 @property (nonatomic, readonly) AVCaptureAudioDataOutput *audioOutput;
 @property (nonatomic, readonly) AVCaptureMetadataOutput *metadataOutput;
@@ -18,6 +20,7 @@
 @property (nonatomic, assign) bool alwaysSetFlash;
 @property (nonatomic, assign) PGCameraMode currentMode;
 @property (nonatomic, assign) PGCameraFlashMode currentFlashMode;
+@property (nonatomic, readonly) AVCaptureFlashMode currentDeviceFlashMode;
 
 @property (nonatomic, assign) PGCameraPosition currentCameraPosition;
 @property (nonatomic, readonly) PGCameraPosition preferredCameraPosition;
@@ -26,6 +29,8 @@
 @property (nonatomic, assign) CGFloat zoomLevel;
 @property (nonatomic, readonly) CGFloat minZoomLevel;
 @property (nonatomic, readonly) CGFloat maxZoomLevel;
+
+@property (nonatomic, strong) NSArray<NSNumber *> *zoomLevels;
 
 - (void)setZoomLevel:(CGFloat)zoomLevel animated:(bool)animated;
 
@@ -41,8 +46,6 @@
 @property (nonatomic, copy) void(^crossfadeNeeded)(void);
 
 @property (nonatomic, copy) void(^recognizedQRCode)(NSString *value, AVMetadataMachineReadableCodeObject *object);
-
-@property (nonatomic, assign) bool compressVideo;
 
 - (instancetype)initWithMode:(PGCameraMode)mode position:(PGCameraPosition)position;
 
@@ -63,5 +66,7 @@
 + (AVCaptureDevice *)_deviceWithCameraPosition:(PGCameraPosition)position;
 
 + (bool)_isZoomAvailableForDevice:(AVCaptureDevice *)device;
+
++ (SQueue *)cameraQueue;
 
 @end

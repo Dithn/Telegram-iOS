@@ -1,4 +1,6 @@
 import Postbox
+import FlatBuffers
+import FlatSerialization
 
 public struct TelegramChatBannedRightsFlags: OptionSet, Hashable {
     public var rawValue: Int32
@@ -12,7 +14,6 @@ public struct TelegramChatBannedRightsFlags: OptionSet, Hashable {
     }
     
     public static let banReadMessages = TelegramChatBannedRightsFlags(rawValue: 1 << 0)
-    public static let banSendMessages = TelegramChatBannedRightsFlags(rawValue: 1 << 1)
     public static let banSendMedia = TelegramChatBannedRightsFlags(rawValue: 1 << 2)
     public static let banSendStickers = TelegramChatBannedRightsFlags(rawValue: 1 << 3)
     public static let banSendGifs = TelegramChatBannedRightsFlags(rawValue: 1 << 4)
@@ -23,6 +24,17 @@ public struct TelegramChatBannedRightsFlags: OptionSet, Hashable {
     public static let banChangeInfo = TelegramChatBannedRightsFlags(rawValue: 1 << 10)
     public static let banAddMembers = TelegramChatBannedRightsFlags(rawValue: 1 << 15)
     public static let banPinMessages = TelegramChatBannedRightsFlags(rawValue: 1 << 17)
+    public static let banManageTopics = TelegramChatBannedRightsFlags(rawValue: 1 << 18)
+    public static let banSendPhotos = TelegramChatBannedRightsFlags(rawValue: 1 << 19)
+    public static let banSendVideos = TelegramChatBannedRightsFlags(rawValue: 1 << 20)
+    public static let banSendInstantVideos = TelegramChatBannedRightsFlags(rawValue: 1 << 21)
+    public static let banSendMusic = TelegramChatBannedRightsFlags(rawValue: 1 << 22)
+    public static let banSendVoice = TelegramChatBannedRightsFlags(rawValue: 1 << 23)
+    public static let banSendFiles = TelegramChatBannedRightsFlags(rawValue: 1 << 24)
+    public static let banSendText = TelegramChatBannedRightsFlags(rawValue: 1 << 25)
+    public static let banSendReactions = TelegramChatBannedRightsFlags(rawValue: 1 << 27)
+    public static let banEditRank = TelegramChatBannedRightsFlags(rawValue: 1 << 26)
+    public static let banManageLinkedPeers = TelegramChatBannedRightsFlags(rawValue: 1 << 28)
 }
 
 public struct TelegramChatBannedRights: PostboxCoding, Equatable {
@@ -46,5 +58,17 @@ public struct TelegramChatBannedRights: PostboxCoding, Equatable {
     
     public static func ==(lhs: TelegramChatBannedRights, rhs: TelegramChatBannedRights) -> Bool {
         return lhs.flags == rhs.flags && lhs.untilDate == rhs.untilDate
+    }
+    
+    public init(flatBuffersObject: TelegramCore_TelegramChatBannedRights) throws {
+        self.flags = TelegramChatBannedRightsFlags(rawValue: flatBuffersObject.flags)
+        self.untilDate = flatBuffersObject.untilDate
+    }
+    
+    public func encodeToFlatBuffers(builder: inout FlatBufferBuilder) -> Offset {
+        let start = TelegramCore_TelegramChatBannedRights.startTelegramChatBannedRights(&builder)
+        TelegramCore_TelegramChatBannedRights.add(flags: self.flags.rawValue, &builder)
+        TelegramCore_TelegramChatBannedRights.add(untilDate: self.untilDate, &builder)
+        return TelegramCore_TelegramChatBannedRights.endTelegramChatBannedRights(&builder, start: start)
     }
 }

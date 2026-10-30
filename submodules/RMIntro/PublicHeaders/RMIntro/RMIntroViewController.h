@@ -7,7 +7,13 @@
 //
 
 #import <UIKit/UIKit.h>
+
+#define GLES_SILENCE_DEPRECATION
+
 #import <GLKit/GLKit.h>
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
 @class SSignal;
 
@@ -61,9 +67,18 @@
 @property (nonatomic, copy) void (^startMessaging)(void);
 @property (nonatomic, copy) void (^startMessagingInAlternativeLanguage)(NSString *);
 
+@property (nonatomic, copy) UIView *(^createStartButton)(CGFloat);
+
+- (UIView *)createAnimationSnapshot;
+- (UIView *)createTextSnapshot;
+
+- (void)animateIn;
+
 @property (nonatomic) bool isEnabled;
 
 - (void)startTimer;
 - (void)stopTimer;
 
 @end
+
+#pragma clang diagnostic pop

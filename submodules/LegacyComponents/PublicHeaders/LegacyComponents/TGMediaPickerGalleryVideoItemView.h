@@ -3,8 +3,8 @@
 #import <LegacyComponents/TGModernGalleryImageItemImageView.h>
 #import <AVFoundation/AVFoundation.h>
 
-@class TGPhotoEntitiesContainerView;
 @protocol TGMediaEditableItem;
+@protocol TGPhotoDrawingEntitiesView;
 
 @interface TGMediaPickerGalleryVideoItemView : TGModernGalleryItemView <TGModernGalleryEditableItemView>
 
@@ -22,7 +22,7 @@
 - (void)playIfAvailable;
 
 - (void)setPlayButtonHidden:(bool)hidden animated:(bool)animated;
-- (void)toggleSendAsGif;
+- (void)toggleSendAsGif:(bool)showTooltip;
 
 - (void)setScrubbingPanelApperanceLocked:(bool)locked;
 - (void)setScrubbingPanelHidden:(bool)hidden animated:(bool)animated;
@@ -31,10 +31,14 @@
 - (void)prepareForEditing;
 - (void)returnFromEditing;
 
+- (void)prepareForCoverEditing;
+- (void)returnFromCoverEditing;
+
+- (NSTimeInterval)currentPosition;
 - (UIImage *)screenImage;
 - (UIImage *)transitionImage;
 - (CGRect)editorTransitionViewRect;
-- (TGPhotoEntitiesContainerView *)entitiesView;
+- (UIView<TGPhotoDrawingEntitiesView> *)entitiesView;
 
 - (id<TGMediaEditableItem>)editableMediaItem;
 

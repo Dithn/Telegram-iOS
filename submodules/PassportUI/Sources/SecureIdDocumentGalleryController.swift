@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import QuickLook
-import Postbox
 import SwiftSignalKit
 import AsyncDisplayKit
 import TelegramCore
@@ -176,6 +175,7 @@ class SecureIdDocumentGalleryController: ViewController, StandalonePresentableCo
             if let strongSelf = self {
                 strongSelf.present(controller, in: .window(.root), with: arguments, blockInteraction: true)
             }
+        }, pushController: { _ in
         }, dismissController: { [weak self] in
             self?.dismiss(forceAway: true)
         }, replaceRootController: { [weak self] controller, ready in
@@ -183,8 +183,12 @@ class SecureIdDocumentGalleryController: ViewController, StandalonePresentableCo
                 strongSelf.replaceRootController(controller, ready)
             }
         }, editMedia: { _ in
+        }, controller: { [weak self] in
+            return self
+        }, currentItemNode: { [weak self] in
+            return self?.galleryNode.pager.centralItemNode()
         })
-        self.displayNode = GalleryControllerNode(controllerInteraction: controllerInteraction)
+        self.displayNode = GalleryControllerNode(context: self.context, controllerInteraction: controllerInteraction, titleView: nil)
         self.displayNodeDidLoad()
         
         self.galleryNode.statusBar = self.statusBar
@@ -213,7 +217,7 @@ class SecureIdDocumentGalleryController: ViewController, StandalonePresentableCo
                     
                     if let node = strongSelf.galleryNode.pager.centralItemNode() {
                         strongSelf.centralItemTitle.set(node.title())
-                        strongSelf.centralItemTitleView.set(node.titleView())
+                        //strongSelf.centralItemTitleView.set(node.titleView())
                         strongSelf.centralItemNavigationStyle.set(node.navigationStyle())
                         strongSelf.centralItemFooterContentNode.set(node.footerContent())
                     }
@@ -232,7 +236,7 @@ class SecureIdDocumentGalleryController: ViewController, StandalonePresentableCo
         
         if let centralItemNode = self.galleryNode.pager.centralItemNode(), let presentationArguments = self.presentationArguments as? SecureIdDocumentGalleryControllerPresentationArguments {
             self.centralItemTitle.set(centralItemNode.title())
-            self.centralItemTitleView.set(centralItemNode.titleView())
+            //self.centralItemTitleView.set(centralItemNode.titleView())
             self.centralItemNavigationStyle.set(centralItemNode.navigationStyle())
             self.centralItemFooterContentNode.set(centralItemNode.footerContent())
             

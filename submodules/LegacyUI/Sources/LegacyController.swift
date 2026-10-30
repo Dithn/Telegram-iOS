@@ -1,10 +1,14 @@
 import Foundation
 import UIKit
+import ContextUI
 import Display
+import SSignalKit
 import SwiftSignalKit
 import LegacyComponents
 import TelegramPresentationData
-import AttachmentUI
+import Camera
+import DeviceModel
+import TooltipUI
 
 public enum LegacyControllerPresentation {
     case custom
@@ -25,6 +29,18 @@ private func passControllerAppearanceAnimated(in: Bool, presentation: LegacyCont
     }
 }
 
+private final class LegacyActionSheetContextReferenceContentSource: ContextReferenceContentSource {
+    private let sourceView: UIView
+
+    init(sourceView: UIView) {
+        self.sourceView = sourceView
+    }
+
+    func transitionInfo() -> ContextControllerReferenceViewInfo? {
+        return ContextControllerReferenceViewInfo(referenceView: self.sourceView, contentAreaInScreenSpace: mainWindowScreenBounds, actionsPosition: .top)
+    }
+}
+
 private final class LegacyComponentsOverlayWindowManagerImpl: NSObject, LegacyComponentsOverlayWindowManager {
     private weak var contentController: UIViewController?
     private weak var parentController: ViewController?
@@ -34,6 +50,7 @@ private final class LegacyComponentsOverlayWindowManagerImpl: NSObject, LegacyCo
     init(parentController: ViewController?, theme: PresentationTheme?) {
         self.parentController = parentController
         self.controller = LegacyController(presentation: .custom, theme: theme)
+        self.controller?.hasSparseContainerView = (parentController as? LegacyController)?.hasSparseContainerView ?? false
         
         super.init()
         
@@ -109,6 +126,26 @@ public final class LegacyControllerContext: NSObject, LegacyComponentsContext {
         }
     }
     
+    
+    public func lockPortrait() {
+        if let controller = self.controller as? LegacyController {
+            controller.supportedOrientations = ViewControllerSupportedOrientations(regularSize: .all, compactSize: .portrait)
+        }
+    }
+    
+    public func unlockPortrait() {
+        if let controller = self.controller as? LegacyController {
+            controller.supportedOrientations = ViewControllerSupportedOrientations(regularSize: .all, compactSize: .allButUpsideDown)
+        }
+    }
+    
+    public func disableInteractiveKeyboardGesture() {
+        if let controller = self.controller as? LegacyController {
+            controller.view.disablesInteractiveModalDismiss = true
+            controller.view.disablesInteractiveKeyboardGestureRecognizer = true
+        }
+    }
+
     public func keyCommandController() -> TGKeyCommandController! {
         return nil
     }
@@ -118,7 +155,7 @@ public final class LegacyControllerContext: NSObject, LegacyComponentsContext {
     }
     
     public func statusBarFrame() -> CGRect {
-        return legacyComponentsApplication!.statusBarFrame
+        return legacyComponentsApplication!.delegate!.window!?.windowScene?.statusBarManager?.statusBarFrame ?? CGRect()
     }
     
     public func isStatusBarHidden() -> Bool {
@@ -171,6 +208,11 @@ public final class LegacyControllerContext: NSObject, LegacyComponentsContext {
     }
     
     public func forceStatusBarAppearanceUpdate() {
+    }
+    
+    public func cameraZoomLevels() -> [NSNumber]! {
+        let metrics = Camera.Metrics(model: DeviceModel.current)
+        return metrics.zoomLevels.map { NSNumber(value: $0) }
     }
     
     public func currentlyInSplitView() -> Bool {
@@ -231,11 +273,111 @@ public final class LegacyControllerContext: NSObject, LegacyComponentsContext {
     }
     
     public func presentActionSheet(_ actions: [LegacyComponentsActionSheetAction]!, view: UIView!, completion: ((LegacyComponentsActionSheetAction?) -> Void)!) {
-        
+        self.presentActionSheet(actions, view: view, sourceRect: nil, completion: completion)
     }
     
     public func presentActionSheet(_ actions: [LegacyComponentsActionSheetAction]!, view: UIView!, sourceRect: (() -> CGRect)!, completion: ((LegacyComponentsActionSheetAction?) -> Void)!) {
+        guard let controller = self.controller, let view = view else {
+            completion?(nil)
+            return
+        }
         
+        let presentationData: PresentationData
+        if let context = legacyContextGet() {
+            presentationData = context.sharedContext.currentPresentationData.with { $0 }.withUpdated(theme: defaultDarkColorPresentationTheme)
+        } else {
+            presentationData = defaultPresentationData().withUpdated(theme: defaultDarkColorPresentationTheme)
+        }
+
+        let anchorView: UIView?
+        let referenceView: UIView
+        if let sourceRect = sourceRect {
+            let anchor = UIView(frame: sourceRect())
+            anchor.isUserInteractionEnabled = false
+            anchor.backgroundColor = .clear
+            view.addSubview(anchor)
+            anchorView = anchor
+            referenceView = anchor
+        } else {
+            anchorView = nil
+            referenceView = view
+        }
+
+        var didSelectAction = false
+        var items: [ContextMenuItem] = []
+        for legacyAction in actions ?? [] {
+            if legacyAction.type == LegacyComponentsActionSheetActionTypeCancel {
+                continue
+            }
+            guard let title = legacyAction.title else {
+                continue
+            }
+            let textColor: ContextMenuActionItemTextColor = legacyAction.type == LegacyComponentsActionSheetActionTypeDestructive ? .destructive : .primary
+            items.append(.action(ContextMenuActionItem(text: title, textColor: textColor, icon: { _ in
+                return nil
+            }, action: { actionContext in
+                didSelectAction = true
+                if let contextController = actionContext.controller {
+                    contextController.dismiss(result: .default, completion: {
+                        completion?(legacyAction)
+                    })
+                } else {
+                    anchorView?.removeFromSuperview()
+                    completion?(legacyAction)
+                }
+            })))
+        }
+
+        if items.isEmpty {
+            anchorView?.removeFromSuperview()
+            completion?(nil)
+            return
+        }
+
+        let contextController = makeContextController(
+            context: legacyContextGet(),
+            presentationData: presentationData,
+            source: .reference(LegacyActionSheetContextReferenceContentSource(sourceView: referenceView)),
+            items: .single(ContextController.Items(content: .list(items)))
+        )
+        contextController.dismissed = { [weak anchorView] in
+            anchorView?.removeFromSuperview()
+            if !didSelectAction {
+                completion?(nil)
+            }
+        }
+        controller.present(contextController, in: .window(.root))
+    }
+    
+    public func presentTooltip(_ text: String!, icon: UIImage!, sourceRect: CGRect) {
+        guard let context = legacyContextGet() else {
+            return
+        }
+        
+        var position: TooltipScreen.ArrowPosition = .bottom
+        if let layout = self.controller?.currentlyAppliedLayout, let orientation = layout.metrics.orientation {
+            switch orientation {
+            case .landscapeLeft:
+                position = .left
+            case .landscapeRight:
+                position = .right
+            default:
+                break
+            }
+        }
+                
+        let controller = TooltipScreen(
+            account: context.account,
+            sharedContext: context.sharedContext,
+            text: .plain(text: text),
+            style: .customBlur(UIColor(rgb: 0x18181a), 0.0),
+            icon: .image(icon),
+            location: .point(sourceRect, position),
+            displayDuration: .custom(2.0),
+            shouldDismissOnTouch: { _, _ in
+            return .dismiss(consume: false)
+        })
+        context.sharedContext.presentGlobalController(controller, nil)
     }
     
     public func makeOverlayWindowManager() -> LegacyComponentsOverlayWindowManager! {
@@ -287,6 +429,12 @@ public final class LegacyControllerContext: NSObject, LegacyComponentsContext {
                 safeInsets.bottom = 21.0
             } else if validLayout.intrinsicInsets.bottom.isEqual(to: 34.0) {
                 safeInsets.bottom = 34.0
+            } else {
+                if let knownSafeInset = validLayout.deviceMetrics.onScreenNavigationHeight(inLandscape: validLayout.size.width > validLayout.size.height, systemOnScreenNavigationHeight: nil) {
+                    if knownSafeInset > 0.0 {
+                        safeInsets.bottom = knownSafeInset
+                    }
+                }
             }
             if controller.navigationPresentation == .modal {
                 safeInsets.top = 0.0
@@ -294,6 +442,14 @@ public final class LegacyControllerContext: NSObject, LegacyComponentsContext {
             return safeInsets
         }
         return UIEdgeInsets()
+    }
+    
+    public func statusIslandTrailingInset() -> CGFloat {
+        // A modal card sits below the island, like its zeroed top inset in `safeAreaInset()` assumes.
+        if let controller = self.controller as? LegacyController, let validLayout = controller.validLayout, controller.navigationPresentation != .modal {
+            return validLayout.navigationBarTrailingButtonsInset
+        }
+        return 0.0
     }
     
     public func prefersLightStatusBar() -> Bool {
@@ -360,7 +516,7 @@ public final class LegacyControllerContext: NSObject, LegacyComponentsContext {
         let navigationBar = presentationTheme.rootController.navigationBar
         let tabBar = presentationTheme.rootController.tabBar
         
-        return TGMediaAssetsPallete(dark: presentationTheme.overallDarkAppearance, backgroundColor: theme.plainBackgroundColor, selectionColor: theme.itemHighlightedBackgroundColor, separatorColor: theme.itemPlainSeparatorColor, textColor: theme.itemPrimaryTextColor, secondaryTextColor: theme.controlSecondaryColor, accentColor: theme.itemAccentColor, destructiveColor: theme.itemDestructiveColor, barBackgroundColor: navigationBar.opaqueBackgroundColor, barSeparatorColor: tabBar.separatorColor, navigationTitleColor: navigationBar.primaryTextColor, badge: generateStretchableFilledCircleImage(diameter: 22.0, color: navigationBar.accentTextColor), badgeTextColor: navigationBar.opaqueBackgroundColor, sendIconImage: PresentationResourcesChat.chatInputPanelSendButtonImage(presentationTheme), doneIconImage: PresentationResourcesChat.chatInputPanelApplyButtonImage(presentationTheme), maybeAccentColor: navigationBar.accentTextColor)
+        return TGMediaAssetsPallete(dark: presentationTheme.overallDarkAppearance, backgroundColor: theme.plainBackgroundColor, selectionColor: theme.itemHighlightedBackgroundColor, separatorColor: theme.itemPlainSeparatorColor, textColor: theme.itemPrimaryTextColor, secondaryTextColor: theme.controlSecondaryColor, accentColor: theme.itemAccentColor, destructiveColor: theme.itemDestructiveColor, barBackgroundColor: navigationBar.opaqueBackgroundColor, barSeparatorColor: tabBar.separatorColor, navigationTitleColor: navigationBar.primaryTextColor, badge: generateStretchableFilledCircleImage(diameter: 22.0, color: navigationBar.accentTextColor), badgeTextColor: navigationBar.opaqueBackgroundColor, sendIconImage: PresentationResourcesChat.chatInputPanelSendButtonImage(presentationTheme), doneIconImage: PresentationResourcesChat.chatInputPanelApplyButtonImage(presentationTheme), scheduleIconImage: PresentationResourcesChat.chatInputPanelScheduleButtonImage(presentationTheme), maybeAccentColor: navigationBar.accentTextColor)
     }
     
     public func checkButtonPallete() -> TGCheckButtonPallete! {
@@ -376,7 +532,7 @@ public final class LegacyControllerContext: NSObject, LegacyComponentsContext {
     }
 }
 
-open class LegacyController: ViewController, PresentableController, AttachmentContainable {
+open class LegacyController: ViewController, PresentableController {
     public private(set) var legacyController: UIViewController!
     private let presentation: LegacyControllerPresentation
     
@@ -403,15 +559,16 @@ open class LegacyController: ViewController, PresentableController, AttachmentCo
     }
     private var enableContainerLayoutUpdates = false
     
+    public var hasSparseContainerView = false {
+        didSet {
+            if self.isNodeLoaded {
+                self.controllerNode.hasSparseContainerView = self.hasSparseContainerView
+            }
+        }
+    }
+    
     public var disposables = DisposableSet()
-    
-    open var requestAttachmentMenuExpansion: () -> Void = {}
-    open var updateNavigationStack: (@escaping ([AttachmentContainable]) -> ([AttachmentContainable], AttachmentMediaPickerContext?)) -> Void = { _ in }
-    open var updateTabBarAlpha: (CGFloat, ContainedViewLayoutTransition) -> Void = { _, _ in }
-    open var cancelPanGesture: () -> Void = { }
-    open var isContainerPanning: () -> Bool = { return false }
-    open var isContainerExpanded: () -> Bool = { return false }
-    
+            
     public init(presentation: LegacyControllerPresentation, theme: PresentationTheme? = nil, strings: PresentationStrings? = nil, initialLayout: ContainerViewLayout? = nil) {
         self.sizeClass.set(SSignal.single(UIUserInterfaceSizeClass.compact.rawValue as NSNumber))
         self.presentation = presentation
@@ -453,6 +610,8 @@ open class LegacyController: ViewController, PresentableController, AttachmentCo
     override open func loadDisplayNode() {
         self.displayNode = LegacyControllerNode()
         self.displayNodeDidLoad()
+        
+        self.controllerNode.hasSparseContainerView = self.hasSparseContainerView
     }
     
     override open func viewWillAppear(_ animated: Bool) {
@@ -590,14 +749,18 @@ open class LegacyController: ViewController, PresentableController, AttachmentCo
     override open func dismiss(completion: (() -> Void)? = nil) {
         self.view.endEditing(true)
         switch self.presentation {
-            case .modal:
-                self.controllerNode.animateModalOut { [weak self] in
-                    self?.presentingViewController?.dismiss(animated: false, completion: completion)
-                }
-            case .custom:
+        case .modal:
+            self.controllerNode.animateModalOut { [weak self] in
+                self?.presentingViewController?.dismiss(animated: false, completion: completion)
+            }
+        case .custom:
+            if let _ = self.navigationController as? NavigationController {
+                super.dismiss(animated: false, completion: completion)
+            } else {
                 self.presentingViewController?.dismiss(animated: false, completion: completion)
-            case .navigation:
-                (self.navigationController as? NavigationController)?.filterController(self, animated: true)
+            }
+        case .navigation:
+            (self.navigationController as? NavigationController)?.filterController(self, animated: true)
         }
     }
     
@@ -605,5 +768,52 @@ open class LegacyController: ViewController, PresentableController, AttachmentCo
         self.controllerNode.animateModalOut { [weak self] in
             self?.presentingViewController?.dismiss(animated: false, completion: nil)
         }
+    }
+}
+
+extension LegacyController: KeyShortcutResponder {
+    public var keyShortcuts: [KeyShortcut] {
+        guard TGKeyCommandController.keyCommandsSupported(), let legacyController = self.legacyController as? TGViewController else {
+            return []
+        }
+
+        var shortcuts: [KeyShortcut] = []
+        var hasExclusiveResponder = false
+
+        legacyController.enumerateChildViewControllersRecursively { viewController in
+            if hasExclusiveResponder {
+                return
+            }
+
+            guard let viewController = viewController, let responder = viewController as? TGKeyCommandResponder else {
+                return
+            }
+
+            if responder.isExclusive?() == true {
+                hasExclusiveResponder = true
+                shortcuts.removeAll()
+            }
+
+            guard let commands = responder.availableKeyCommands() as? [TGKeyCommand] else {
+                return
+            }
+
+            for command in commands {
+                let title = command.title ?? ""
+                let input = command.input ?? ""
+                let modifiers = command.modifierFlags
+                let shortcut = KeyShortcut(title: title, input: input, modifiers: modifiers, action: { [weak viewController] in
+                    guard let responder = viewController as? TGKeyCommandResponder else {
+                        return
+                    }
+                    let keyCommand = UIKeyCommand(input: input, modifierFlags: modifiers, action: #selector(TGKeyCommandResponder.processKeyCommand(_:)))
+                    responder.processKeyCommand(keyCommand)
+                })
+                shortcuts.removeAll(where: { $0 == shortcut })
+                shortcuts.append(shortcut)
+            }
+        }
+
+        return shortcuts
     }
 }

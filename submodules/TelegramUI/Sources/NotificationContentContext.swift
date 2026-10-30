@@ -1,10 +1,11 @@
+import LottieSettings
 import UIKit
 import UserNotifications
 import UserNotificationsUI
 import Display
 import TelegramCore
+import PasscodeCore
 import SwiftSignalKit
-import Postbox
 import TelegramPresentationData
 import TelegramUIPreferences
 import AccountContext
@@ -33,6 +34,7 @@ private func setupSharedLogger(rootPath: String, path: String) {
 
 public struct NotificationViewControllerInitializationData {
     public let appBundleId: String
+    public let appBuildType: TelegramAppBuildType
     public let appGroupPath: String
     public let apiId: Int32
     public let apiHash: String
@@ -40,9 +42,11 @@ public struct NotificationViewControllerInitializationData {
     public let encryptionParameters: (Data, Data)
     public let appVersion: String
     public let bundleData: Data?
+    public let useBetaFeatures: Bool
     
-    public init(appBundleId: String, appGroupPath: String, apiId: Int32, apiHash: String, languagesCategory: String, encryptionParameters: (Data, Data), appVersion: String, bundleData: Data?) {
+    public init(appBundleId: String, appBuildType: TelegramAppBuildType, appGroupPath: String, apiId: Int32, apiHash: String, languagesCategory: String, encryptionParameters: (Data, Data), appVersion: String, bundleData: Data?, useBetaFeatures: Bool) {
         self.appBundleId = appBundleId
+        self.appBuildType = appBuildType
         self.appGroupPath = appGroupPath
         self.apiId = apiId
         self.apiHash = apiHash
@@ -50,6 +54,7 @@ public struct NotificationViewControllerInitializationData {
         self.encryptionParameters = encryptionParameters
         self.appVersion = appVersion
         self.bundleData = bundleData
+        self.useBetaFeatures = useBetaFeatures
     }
 }
 
@@ -83,9 +88,9 @@ public final class NotificationViewControllerImpl {
         let rootPath = rootPathForBasePath(self.initializationData.appGroupPath)
         performAppGroupUpgrades(appGroupPath: self.initializationData.appGroupPath, rootPath: rootPath)
         
-        TempBox.initializeShared(basePath: rootPath, processType: "notification-content", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+        EngineTempBox.initializeShared(basePath: rootPath, processType: "notification-content", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
         
-        let logsPath = rootPath + "/notificationcontent-logs"
+        let logsPath = rootPath + "/logs/notificationcontent-logs"
         let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
         
         setupSharedLogger(rootPath: rootPath, path: logsPath)
@@ -94,17 +99,17 @@ public final class NotificationViewControllerImpl {
         
         if sharedAccountContext == nil {
             initializeAccountManagement()
-            let accountManager = AccountManager<TelegramAccountManagerTypes>(basePath: rootPath + "/accounts-metadata", isTemporary: true, isReadOnly: false, useCaches: false, removeDatabaseOnError: false)
+            let accountManager: AccountManager<TelegramAccountManagerTypes> = setupAccountManager(basePath: rootPath + "/accounts-metadata", isTemporary: true, isReadOnly: false, useCaches: false, removeDatabaseOnError: false)
             
             var initialPresentationDataAndSettings: InitialPresentationDataAndSettings?
             let semaphore = DispatchSemaphore(value: 0)
-            let _ = currentPresentationDataAndSettings(accountManager: accountManager, systemUserInterfaceStyle: .light).start(next: { value in
+            let _ = currentPresentationDataAndSettings(accountManager: accountManager, systemUserInterfaceStyle: .light).startStandalone(next: { value in
                 initialPresentationDataAndSettings = value
                 semaphore.signal()
             })
             semaphore.wait()
             
-            let applicationBindings = TelegramApplicationBindings(isMainApp: false, appBundleId: self.initializationData.appBundleId, containerPath: self.initializationData.appGroupPath, appSpecificScheme: "tgapp", openUrl: { _ in
+            let applicationBindings = TelegramApplicationBindings(isMainApp: false, appBundleId: self.initializationData.appBundleId, appBuildType: self.initializationData.appBuildType, containerPath: self.initializationData.appGroupPath, appSpecificScheme: "tgapp", openUrl: { _ in
             }, openUniversalUrl: { _, completion in
                 completion.completion(false)
                 return
@@ -117,7 +122,7 @@ public final class NotificationViewControllerImpl {
             }, applicationInForeground: .single(false), applicationIsActive: .single(false), clearMessageNotifications: { _ in
             }, pushIdleTimerExtension: {
                 return EmptyDisposable
-            }, openSettings: {}, openAppStorePage: {}, registerForNotifications: { _ in }, requestSiriAuthorization: { _ in }, siriAuthorization: { return .notDetermined }, getWindowHost: {
+            }, openSettings: {}, openAppStorePage: {}, openSubscriptions: {}, registerForNotifications: { _ in }, requestSiriAuthorization: { _ in }, siriAuthorization: { return .notDetermined }, getWindowHost: {
                 return nil
             }, presentNativeController: { _ in
             }, dismissNativeController: {
@@ -136,7 +141,7 @@ public final class NotificationViewControllerImpl {
                 return nil
             })
             
-            sharedAccountContext = SharedAccountContextImpl(mainWindow: nil, sharedContainerPath: self.initializationData.appGroupPath, basePath: rootPath, encryptionParameters: ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: self.initializationData.encryptionParameters.0)!, salt: ValueBoxEncryptionParameters.Salt(data: self.initializationData.encryptionParameters.1)!), accountManager: accountManager, appLockContext: appLockContext, applicationBindings: applicationBindings, initialPresentationDataAndSettings: initialPresentationDataAndSettings!, networkArguments: NetworkInitializationArguments(apiId: self.initializationData.apiId, apiHash: self.initializationData.apiHash, languagesCategory: self.initializationData.languagesCategory, appVersion: self.initializationData.appVersion, voipMaxLayer: 0, voipVersions: [], appData: .single(self.initializationData.bundleData), autolockDeadine: .single(nil), encryptionProvider: OpenSSLEncryptionProvider(), resolvedDeviceName: nil), rootPath: rootPath, legacyBasePath: nil, apsNotificationToken: .never(), voipNotificationToken: .never(), setNotificationCall: { _ in }, navigateToChat: { _, _, _ in })
+            sharedAccountContext = SharedAccountContextImpl(mainWindow: nil, sharedContainerPath: self.initializationData.appGroupPath, basePath: rootPath, encryptionParameters: EngineValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: EngineValueBoxEncryptionParameters.Key(data: self.initializationData.encryptionParameters.0)!, salt: EngineValueBoxEncryptionParameters.Salt(data: self.initializationData.encryptionParameters.1)!), accountManager: accountManager, appLockContext: appLockContext, notificationController: nil, applicationBindings: applicationBindings, initialPresentationDataAndSettings: initialPresentationDataAndSettings!, networkArguments: NetworkInitializationArguments(apiId: self.initializationData.apiId, apiHash: self.initializationData.apiHash, languagesCategory: self.initializationData.languagesCategory, appVersion: self.initializationData.appVersion, voipMaxLayer: 0, voipVersions: [], appData: .single(self.initializationData.bundleData), externalRequestVerificationStream: .never(), externalRecaptchaRequestVerification: { _, _ in return .never() }, autolockDeadine: .single(nil), encryptionProvider: OpenSSLEncryptionProvider(), deviceModelName: nil, useBetaFeatures: self.initializationData.useBetaFeatures, isICloudEnabled: false), hasInAppPurchases: false, rootPath: rootPath, legacyBasePath: nil, apsNotificationToken: .never(), voipNotificationToken: .never(), firebaseSecretStream: .never(), setNotificationCall: { _ in }, navigateToChat: { _, _, _, _ in }, appDelegate: nil)
             
             presentationDataPromise.set(sharedAccountContext!.presentationData)
         }
@@ -175,7 +180,7 @@ public final class NotificationViewControllerImpl {
             return
         }
         
-        let messageId = MessageId(peerId: PeerId(peerIdValue), namespace: messageIdNamespace, id: messageIdId)
+        let messageId = EngineMessage.Id(peerId: EnginePeer.Id(peerIdValue), namespace: messageIdNamespace, id: messageIdId)
         
         if let image = media as? TelegramMediaImage, let thumbnailRepresentation = imageRepresentationLargerThan(image.representations, size: PixelDimensions(width: 120, height: 120)), let largestRepresentation = largestImageRepresentation(image.representations) {
             let dimensions = largestRepresentation.dimensions
@@ -231,15 +236,15 @@ public final class NotificationViewControllerImpl {
                         return (account, imageReference)
                 }
             }
-            |> deliverOnMainQueue).start(next: { [weak self] accountAndImage in
+            |> deliverOnMainQueue).startStrict(next: { [weak self] accountAndImage in
                 guard let strongSelf = self else {
                     return
                 }
                 if let imageReference = accountAndImage.1 {
-                    strongSelf.imageNode.setSignal(chatMessagePhoto(postbox: accountAndImage.0.postbox, photoReference: imageReference))
+                    strongSelf.imageNode.setSignal(chatMessagePhoto(postbox: accountAndImage.0.postbox, userLocation: .other, photoReference: imageReference))
                     
                     accountAndImage.0.network.shouldExplicitelyKeepWorkerConnections.set(.single(true))
-                    strongSelf.fetchedDisposable.set(standaloneChatMessagePhotoInteractiveFetched(account: accountAndImage.0, photoReference: imageReference).start())
+                    strongSelf.fetchedDisposable.set(standaloneChatMessagePhotoInteractiveFetched(account: accountAndImage.0, userLocation: .other, photoReference: imageReference).startStrict())
                 }
             }))
         } else if let file = media as? TelegramMediaFile, let dimensions = file.dimensions {
@@ -262,10 +267,12 @@ public final class NotificationViewControllerImpl {
                 return context != nil
             }
             |> take(1)
-            |> mapToSignal { context -> Signal<(Account, FileMediaReference?), NoError> in
-                guard let account = context?.account else {
+            |> mapToSignal { context -> Signal<(Account, FileMediaReference?, LottieRenderingSettings), NoError> in
+                guard let context else {
                     return .complete()
                 }
+                let account = context.account
+                let lottieSettings = context.lottieRenderingSettings
                 return account.postbox.messageAtId(messageId)
                 |> take(1)
                 |> map { message in
@@ -279,10 +286,10 @@ public final class NotificationViewControllerImpl {
                     } else {
                         fileReference = .standalone(media: file)
                     }
-                    return (account, fileReference)
+                    return (account, fileReference, lottieSettings)
                 }
             }
-            |> deliverOnMainQueue).start(next: { [weak self, weak view] accountAndImage in
+            |> deliverOnMainQueue).startStrict(next: { [weak self, weak view] accountAndImage in
                 guard let strongSelf = self else {
                     return
                 }
@@ -292,7 +299,7 @@ public final class NotificationViewControllerImpl {
                         if let current = strongSelf.animatedStickerNode {
                             animatedStickerNode = current
                         } else {
-                            animatedStickerNode = AnimatedStickerNode()
+                            animatedStickerNode = DefaultAnimatedStickerNodeImpl(lottieSettings: accountAndImage.2)
                             strongSelf.animatedStickerNode = animatedStickerNode
                             animatedStickerNode.started = {
                                 guard let strongSelf = self else {
@@ -309,15 +316,15 @@ public final class NotificationViewControllerImpl {
                         let dimensions = fileReference.media.dimensions ?? PixelDimensions(width: 512, height: 512)
                         let fittedDimensions = dimensions.cgSize.aspectFitted(CGSize(width: 512.0, height: 512.0))
                         if file.isVideoSticker {
-                            strongSelf.imageNode.setSignal(chatMessageSticker(postbox: accountAndImage.0.postbox, file: fileReference.media, small: false))
+                            strongSelf.imageNode.setSignal(chatMessageSticker(postbox: accountAndImage.0.postbox, userLocation: .other, file: fileReference.media, small: false))
                         } else {
-                            strongSelf.imageNode.setSignal(chatMessageAnimatedSticker(postbox: accountAndImage.0.postbox, file: fileReference.media, small: false, size: fittedDimensions))
+                            strongSelf.imageNode.setSignal(chatMessageAnimatedSticker(postbox: accountAndImage.0.postbox, userLocation: .other, file: fileReference.media, small: false, size: fittedDimensions))
                         }
-                        animatedStickerNode.setup(source: AnimatedStickerResourceSource(account: accountAndImage.0, resource: fileReference.media.resource, isVideo: file.isVideoSticker), width: Int(fittedDimensions.width), height: Int(fittedDimensions.height), mode: .direct(cachePathPrefix: nil))
+                        animatedStickerNode.setup(source: AnimatedStickerResourceSource(account: accountAndImage.0, resource: fileReference.media.resource, isVideo: file.isVideoSticker), width: Int(fittedDimensions.width), height: Int(fittedDimensions.height), playbackMode: .loop, mode: .direct(cachePathPrefix: nil))
                         animatedStickerNode.visibility = true
                         
                         accountAndImage.0.network.shouldExplicitelyKeepWorkerConnections.set(.single(true))
-                        strongSelf.fetchedDisposable.set(freeMediaFileInteractiveFetched(account: accountAndImage.0, fileReference: fileReference).start())
+                        strongSelf.fetchedDisposable.set(freeMediaFileInteractiveFetched(account: accountAndImage.0, userLocation: .other, fileReference: fileReference).startStrict())
                     } else if file.isSticker {
                         if let animatedStickerNode = strongSelf.animatedStickerNode {
                             animatedStickerNode.removeFromSupernode()
@@ -325,10 +332,10 @@ public final class NotificationViewControllerImpl {
                         }
                         strongSelf.imageNode.isHidden = false
                         
-                        strongSelf.imageNode.setSignal(chatMessageSticker(account: accountAndImage.0, file: file, small: false))
+                        strongSelf.imageNode.setSignal(chatMessageSticker(account: accountAndImage.0, userLocation: .other, file: file, small: false))
                         
                         accountAndImage.0.network.shouldExplicitelyKeepWorkerConnections.set(.single(true))
-                        strongSelf.fetchedDisposable.set(freeMediaFileInteractiveFetched(account: accountAndImage.0, fileReference: fileReference).start())
+                        strongSelf.fetchedDisposable.set(freeMediaFileInteractiveFetched(account: accountAndImage.0, userLocation: .other, fileReference: fileReference).startStrict())
                     }
                 }
             }))

@@ -92,11 +92,11 @@ enum BotCheckoutInfoControllerStatus {
     case verifying
 }
 
-final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, UIScrollViewDelegate {
+final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, ASScrollViewDelegate {
     private let context: AccountContext
     private weak var navigationBar: NavigationBar?
     private let invoice: BotPaymentInvoice
-    private let messageId: EngineMessage.Id
+    private let source: BotPaymentInvoiceSource
     private var focus: BotCheckoutInfoControllerFocus?
     
     private let dismiss: () -> Void
@@ -130,7 +130,7 @@ final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, UIScrollVi
         context: AccountContext,
         navigationBar: NavigationBar?,
         invoice: BotPaymentInvoice,
-        messageId: EngineMessage.Id,
+        source: BotPaymentInvoiceSource,
         formInfo: BotPaymentRequestedInfo,
         focus: BotCheckoutInfoControllerFocus,
         theme: PresentationTheme,
@@ -144,7 +144,7 @@ final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, UIScrollVi
         self.context = context
         self.navigationBar = navigationBar
         self.invoice = invoice
-        self.messageId = messageId
+        self.source = source
         self.formInfo = formInfo
         self.focus = focus
         self.dismiss = dismiss
@@ -244,7 +244,7 @@ final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, UIScrollVi
         self.scrollNode.view.alwaysBounceVertical = true
         self.scrollNode.view.showsVerticalScrollIndicator = false
         self.scrollNode.view.showsHorizontalScrollIndicator = false
-        self.scrollNode.view.delegate = self
+        self.scrollNode.view.delegate = self.wrappedScrollViewDelegate
         
         self.addSubnode(self.scrollNode)
         
@@ -334,7 +334,6 @@ final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, UIScrollVi
     override func didLoad() {
         super.didLoad()
         
-        self.navigationBar?.updateBackgroundAlpha(0.0, transition: .immediate)
     }
     
     func updateCountry(_ iso2: String) {
@@ -367,7 +366,7 @@ final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, UIScrollVi
     func verify() {
         self.isVerifying = true
         let formInfo = self.collectFormInfo()
-        self.verifyDisposable.set((self.context.engine.payments.validateBotPaymentForm(saveInfo: self.saveInfoItem.isOn, messageId: self.messageId, formInfo: formInfo) |> deliverOnMainQueue).start(next: { [weak self] result in
+        self.verifyDisposable.set((self.context.engine.payments.validateBotPaymentForm(saveInfo: self.saveInfoItem.isOn, source: self.source, formInfo: formInfo) |> deliverOnMainQueue).start(next: { [weak self] result in
             if let strongSelf = self {
                 strongSelf.formInfoUpdated(formInfo, result)
             }
@@ -442,7 +441,8 @@ final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, UIScrollVi
         self.containerLayout = (layout, navigationBarHeight)
         
         var insets = layout.insets(options: [.input])
-        insets.top += max(navigationBarHeight, layout.insets(options: [.statusBar]).top)
+        // Below the bar, or the status bar the bar lays out under (compact beside iPhone Duo's status island).
+        insets.top += max(navigationBarHeight, max(layout.navigationBarStatusBarHeight ?? 0.0, layout.intrinsicInsets.top))
         
         var contentHeight: CGFloat = 0.0
         
@@ -455,8 +455,13 @@ final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, UIScrollVi
         
         let inset = max(16.0, floor((layout.size.width - 674.0) / 2.0))
         var sideInset: CGFloat = 0.0
-        if layout.size.width >= 375.0 {
-            sideInset = inset
+        var rightSideInset: CGFloat = 0.0
+        if layout.size.width >= 320.0 {
+            // iPhone Duo: a side with a side strip keeps the form 16pt clear of it; without a strip both margins
+            // are `inset`.
+            let margins = layout.listSideMargins(base: inset)
+            sideInset = margins.left
+            rightSideInset = margins.right
         }
         
         for items in self.itemNodes {
@@ -468,7 +473,7 @@ final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, UIScrollVi
             
             for i in 0 ..< items.count {
                 let item = items[i]
-                let itemHeight = item.updateLayout(theme: self.theme, width: layout.size.width, sideInset: sideInset, measuredInset: commonInset, previousItemNode: i == 0 ? nil : items[i - 1], nextItemNode: i == (items.count - 1) ? nil : items[i + 1], transition: transition)
+                let itemHeight = item.updateLayout(theme: self.theme, width: layout.size.width, sideInset: sideInset, rightSideInset: rightSideInset, measuredInset: commonInset, previousItemNode: i == 0 ? nil : items[i - 1], nextItemNode: i == (items.count - 1) ? nil : items[i + 1], transition: transition)
                 transition.updateFrame(node: item, frame: CGRect(origin: CGPoint(x: 0.0, y: contentHeight), size: CGSize(width: layout.size.width, height: itemHeight)))
                 contentHeight += itemHeight
             }
@@ -494,7 +499,7 @@ final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, UIScrollVi
         }
         
         self.leftOverlayNode.frame = CGRect(x: 0.0, y: 0.0, width: sideInset, height: layout.size.height)
-        self.rightOverlayNode.frame = CGRect(x: layout.size.width - sideInset, y: 0.0, width: sideInset, height: layout.size.height)
+        self.rightOverlayNode.frame = CGRect(x: layout.size.width - rightSideInset, y: 0.0, width: rightSideInset, height: layout.size.height)
         
         if let focus = self.focus {
             var focusItem: ASDisplayNode?
@@ -565,8 +570,6 @@ final class BotCheckoutInfoControllerNode: ViewControllerTracingNode, UIScrollVi
         guard !self.scrollNode.view.ignoreUpdateBounds else {
             return
         }
-        let value = scrollView.contentOffset.y + scrollView.contentInset.top
-        self.navigationBar?.updateBackgroundAlpha(min(30.0, value) / 30.0, transition: .immediate)
     }
     
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {

@@ -1,15 +1,13 @@
 import Foundation
 import UIKit
 import Display
-import Postbox
 import SwiftSignalKit
 import AsyncDisplayKit
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
 import AccountContext
-import ShareController
-import CounterContollerTitleView
+import CounterControllerTitleView
 import WallpaperResources
 import OverlayStatusController
 import AppBundle
@@ -62,6 +60,8 @@ public final class ThemePreviewController: ViewController {
         self.presentationTheme.set(.single(previewTheme))
         
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationTheme: self.previewTheme, presentationStrings: self.presentationData.strings))
+        
+        self._hasGlassStyle = true
         
         self.blocksBackgroundWhenInOverlay = true
         self.acceptsFocusWhenInOverlay = true
@@ -139,25 +139,25 @@ public final class ThemePreviewController: ViewController {
             isPreview = true
         }
         
-        let titleView = CounterContollerTitleView(theme: self.previewTheme)
-        titleView.title = CounterContollerTitle(title: themeName, counter: hasInstallsCount ? " " : "")
+        let titleView = CounterControllerTitleView(theme: self.previewTheme)
+        titleView.title = CounterControllerTitle(title: themeName, counter: hasInstallsCount ? " " : "")
         self.navigationItem.titleView = titleView
-        self.navigationItem.leftBarButtonItem = UIBarButtonItem(customView: UIView())
+        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "___close", style: .plain, target: self, action: #selector(self.cancelPressed))
         
         self.statusBar.statusBarStyle = self.previewTheme.rootController.statusBarStyle.style
         self.supportedOrientations = ViewControllerSupportedOrientations(regularSize: .all, compactSize: .portrait)
         
         if !isPreview {
-            self.navigationItem.rightBarButtonItem = UIBarButtonItem(image: generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Accessory Panels/MessageSelectionForward"), color: self.previewTheme.rootController.navigationBar.accentTextColor), style: .plain, target: self, action: #selector(self.actionPressed))
+            self.navigationItem.rightBarButtonItem = UIBarButtonItem(image: generateTintedImage(image: UIImage(bundleImageName: "Navigation/Share"), color: self.previewTheme.chat.inputPanel.panelControlColor), style: .plain, target: self, action: #selector(self.actionPressed))
         }
         
         self.disposable = (combineLatest(self.theme.get(), self.presentationTheme.get())
         |> deliverOnMainQueue).start(next: { [weak self] theme, presentationTheme in
             if let strongSelf = self, let theme = theme {
-                let titleView = CounterContollerTitleView(theme: strongSelf.previewTheme)
-                titleView.title = CounterContollerTitle(title: themeName, counter: hasInstallsCount ? strongSelf.presentationData.strings.Theme_UsersCount(max(1, theme.installCount ?? 0)) : "")
+                let titleView = CounterControllerTitleView(theme: strongSelf.previewTheme)
+                titleView.title = CounterControllerTitle(title: themeName, counter: hasInstallsCount ? strongSelf.presentationData.strings.Theme_UsersCount(max(1, theme.installCount ?? 0)) : "")
                 strongSelf.navigationItem.titleView = titleView
-                strongSelf.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationTheme: presentationTheme, presentationStrings: strongSelf.presentationData.strings))
+                strongSelf.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationTheme: presentationTheme, presentationStrings: strongSelf.presentationData.strings), transition: .immediate)
             }
         })
         
@@ -177,6 +177,10 @@ public final class ThemePreviewController: ViewController {
         self.presentationDataDisposable?.dispose()
         self.disposable?.dispose()
         self.applyDisposable.dispose()
+    }
+    
+    @objc private func cancelPressed() {
+        self.dismiss(animated: true)
     }
     
     override public func viewDidAppear(_ animated: Bool) {
@@ -219,7 +223,7 @@ public final class ThemePreviewController: ViewController {
         if let initialWallpaper = initialWallpaper {
             self.controllerNode.wallpaperPromise.set(.single(initialWallpaper))
         } else if case let .file(file) = previewTheme.chat.defaultWallpaper, file.id == 0 {
-            self.controllerNode.wallpaperPromise.set(cachedWallpaper(account: self.context.account, slug: file.slug, settings: file.settings)
+            self.controllerNode.wallpaperPromise.set(cachedWallpaper(engine: self.context.engine, network: self.context.account.network, slug: file.slug, settings: file.settings)
             |> mapToSignal { wallpaper in                
                 return .single(wallpaper?.wallpaper ?? .color(previewTheme.chatList.backgroundColor.argb))
             })
@@ -264,8 +268,8 @@ public final class ThemePreviewController: ViewController {
             case .media:
                 if let strings = encodePresentationTheme(previewTheme), let data = strings.data(using: .utf8) {
                     let resource = LocalFileMediaResource(fileId: Int64.random(in: Int64.min ... Int64.max))
-                    context.account.postbox.mediaBox.storeResourceData(resource.id, data: data)
-                    context.sharedContext.accountManager.mediaBox.storeResourceData(resource.id, data: data)
+                    context.engine.resources.storeResourceData(id: EngineMediaResource.Id(resource.id), data: data)
+                    context.sharedContext.accountManager.resources.storeResourceData(id: EngineMediaResource.Id(resource.id), data: data)
                     theme = .single(.local(PresentationLocalTheme(title: previewTheme.name.string, resource: resource, resolvedWallpaper: nil)))
                 } else {
                     theme = .single(.builtin(.dayClassic))
@@ -282,7 +286,7 @@ public final class ThemePreviewController: ViewController {
             switch theme {
                 case let .cloud(info):
                     resolvedWallpaper = info.resolvedWallpaper
-                    return telegramThemes(postbox: context.account.postbox, network: context.account.network, accountManager: context.sharedContext.accountManager)
+                    return context.engine.themes.themes(accountManager: context.sharedContext.accountManager)
                     |> take(1)
                     |> map { themes -> Bool in
                         if let _ = themes.first(where: { $0.id == info.theme.id }) {
@@ -315,7 +319,7 @@ public final class ThemePreviewController: ViewController {
                         }, scale: 1.0)
                         let themeThumbnailData = themeThumbnail?.jpegData(compressionQuality: 0.6)
                         
-                        return telegramThemes(postbox: context.account.postbox, network: context.account.network, accountManager: context.sharedContext.accountManager)
+                        return context.engine.themes.themes(accountManager: context.sharedContext.accountManager)
                         |> take(1)
                         |> mapToSignal { themes -> Signal<(PresentationThemeReference, Bool), NoError> in
                             let similarTheme = themes.first(where: { $0.isCreator && $0.title == info.title })
@@ -331,7 +335,7 @@ public final class ThemePreviewController: ViewController {
                                         return .single((.local(updatedTheme), true))
                                     }
                                     if case let .result(theme) = result, let file = theme.file {
-                                        context.sharedContext.accountManager.mediaBox.moveResourceData(from: info.resource.id, to: file.resource.id)
+                                        context.sharedContext.accountManager.resources.moveResourceData(from: EngineMediaResource.Id(info.resource.id), to: EngineMediaResource.Id(file.resource.id))
                                         return .single((.cloud(PresentationCloudTheme(theme: theme, resolvedWallpaper: resolvedWallpaper, creatorAccountId: theme.isCreator ? context.account.id : nil)), true))
                                     } else {
                                         return .complete()
@@ -350,7 +354,7 @@ public final class ThemePreviewController: ViewController {
                                         return .single((.local(updatedTheme), true))
                                     }
                                     if case let .result(updatedTheme) = result, let file = updatedTheme.file {
-                                        context.sharedContext.accountManager.mediaBox.moveResourceData(from: info.resource.id, to: file.resource.id)
+                                        context.sharedContext.accountManager.resources.moveResourceData(from: EngineMediaResource.Id(info.resource.id), to: EngineMediaResource.Id(file.resource.id))
                                         return .single((.cloud(PresentationCloudTheme(theme: updatedTheme, resolvedWallpaper: resolvedWallpaper, creatorAccountId: updatedTheme.isCreator ? context.account.id : nil)), true))
                                     } else {
                                         return .complete()
@@ -408,7 +412,7 @@ public final class ThemePreviewController: ViewController {
                     
                     var themeSpecificChatWallpapers = updatedSettings.themeSpecificChatWallpapers
                     themeSpecificChatWallpapers[updatedTheme.index] = nil
-                    return PreferencesEntry(updatedSettings.withUpdatedThemeSpecificChatWallpapers(themeSpecificChatWallpapers).withUpdatedThemeSpecificAccentColors(themeSpecificAccentColors))
+                    return EnginePreferencesEntry(updatedSettings.withUpdatedThemeSpecificChatWallpapers(themeSpecificChatWallpapers).withUpdatedThemeSpecificAccentColors(themeSpecificAccentColors))
                 })
                 return previousDefaultTheme
             }
@@ -452,7 +456,7 @@ public final class ThemePreviewController: ViewController {
                                 guard let strongSelf = self, !displayed else {
                                     return
                                 }
-                                strongSelf.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .actionSucceeded(title: strongSelf.presentationData.strings.Theme_ThemeChanged, text: strongSelf.presentationData.strings.Theme_ThemeChangedText, cancel: strongSelf.presentationData.strings.Undo_Undo), elevatedLayout: true, animateInAsReplacement: false, action: { value in
+                                strongSelf.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .actionSucceeded(title: strongSelf.presentationData.strings.Theme_ThemeChanged, text: strongSelf.presentationData.strings.Theme_ThemeChangedText, cancel: strongSelf.presentationData.strings.Undo_Undo, destructive: false), elevatedLayout: true, animateInAsReplacement: false, action: { value in
                                     if value == .undo {
                                         Queue.mainQueue().after(0.2) {
                                             let _ = updatePresentationThemeSettingsInteractively(accountManager: context.sharedContext.accountManager, { current -> PresentationThemeSettings in
@@ -517,10 +521,10 @@ public final class ThemePreviewController: ViewController {
                 subject = .url("https://t.me/addtheme/\(slug)")
                 preferredAction = .default
             case let .media(media):
-                subject = .media(media)
+                subject = .media(media, nil)
                 preferredAction = .default
         }
-        let controller = ShareController(context: self.context, subject: subject, preferredAction: preferredAction)
+        let controller = self.context.sharedContext.makeShareScreen(context: self.context, params: ShareControllerParams(subject: subject, preferredAction: preferredAction))
         self.present(controller, in: .window(.root), blockInteraction: true)
     }
 }

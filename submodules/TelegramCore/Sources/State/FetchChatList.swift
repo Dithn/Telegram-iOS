@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 
@@ -12,26 +12,31 @@ enum FetchChatListLocation {
 
 struct ParsedDialogs {
     let itemIds: [PeerId]
-    let peers: [Peer]
-    let peerPresences: [PeerId: PeerPresence]
+    let peers: AccumulatedPeers
     
     let notificationSettings: [PeerId: PeerNotificationSettings]
     let readStates: [PeerId: [MessageId.Namespace: PeerReadState]]
     let mentionTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary]
     let reactionTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary]
+    let pollVoteTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary]
     let channelStates: [PeerId: Int32]
     let topMessageIds: [PeerId: MessageId]
     let storeMessages: [StoreMessage]
-    
+    let ttlPeriods: [PeerId: CachedPeerAutoremoveTimeout]
+    let viewForumAsMessages: [PeerId: Bool]
+    let inputStates: [(PeerId, Api.DraftMessage)]
+
     let lowerNonPinnedIndex: MessageIndex?
     let referencedFolders: [PeerGroupId: PeerGroupUnreadCountersSummary]
 }
 
 private func extractDialogsData(dialogs: Api.messages.Dialogs) -> (apiDialogs: [Api.Dialog], apiMessages: [Api.Message], apiChats: [Api.Chat], apiUsers: [Api.User], apiIsAtLowestBoundary: Bool) {
     switch dialogs {
-        case let .dialogs(dialogs, messages, chats, users):
+        case let .dialogs(dialogsData):
+            let (dialogs, messages, chats, users) = (dialogsData.dialogs, dialogsData.messages, dialogsData.chats, dialogsData.users)
             return (dialogs, messages, chats, users, true)
-        case let .dialogsSlice(_, dialogs, messages, chats, users):
+        case let .dialogsSlice(dialogsSliceData):
+            let (_, dialogs, messages, chats, users) = (dialogsSliceData.count, dialogsSliceData.dialogs, dialogsSliceData.messages, dialogsSliceData.chats, dialogsSliceData.users)
             return (dialogs, messages, chats, users, false)
         case .dialogsNotModified:
             assertionFailure()
@@ -41,39 +46,31 @@ private func extractDialogsData(dialogs: Api.messages.Dialogs) -> (apiDialogs: [
 
 private func extractDialogsData(peerDialogs: Api.messages.PeerDialogs) -> (apiDialogs: [Api.Dialog], apiMessages: [Api.Message], apiChats: [Api.Chat], apiUsers: [Api.User], apiIsAtLowestBoundary: Bool) {
     switch peerDialogs {
-        case let .peerDialogs(dialogs, messages, chats, users, _):
+        case let .peerDialogs(peerDialogsData):
+            let (dialogs, messages, chats, users) = (peerDialogsData.dialogs, peerDialogsData.messages, peerDialogsData.chats, peerDialogsData.users)
             return (dialogs, messages, chats, users, false)
     }
 }
 
-private func parseDialogs(apiDialogs: [Api.Dialog], apiMessages: [Api.Message], apiChats: [Api.Chat], apiUsers: [Api.User], apiIsAtLowestBoundary: Bool) -> ParsedDialogs {
+private func parseDialogs(accountPeerId: PeerId, apiDialogs: [Api.Dialog], apiMessages: [Api.Message], apiChats: [Api.Chat], apiUsers: [Api.User], apiIsAtLowestBoundary: Bool) -> ParsedDialogs {
     var notificationSettings: [PeerId: PeerNotificationSettings] = [:]
     var readStates: [PeerId: [MessageId.Namespace: PeerReadState]] = [:]
     var mentionTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary] = [:]
     var reactionTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary] = [:]
+    var pollVoteTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary] = [:]
     var channelStates: [PeerId: Int32] = [:]
     var topMessageIds: [PeerId: MessageId] = [:]
+    var ttlPeriods: [PeerId: CachedPeerAutoremoveTimeout] = [:]
+    var viewForumAsMessages: [PeerId: Bool] = [:]
     
     var storeMessages: [StoreMessage] = []
     var nonPinnedDialogsTopMessageIds = Set<MessageId>()
     
     var referencedFolders: [PeerGroupId: PeerGroupUnreadCountersSummary] = [:]
     var itemIds: [PeerId] = []
+    var inputStates: [(PeerId, Api.DraftMessage)] = []
     
-    var peers: [PeerId: Peer] = [:]
-    var peerPresences: [PeerId: PeerPresence] = [:]
-    for chat in apiChats {
-        if let groupOrChannel = parseTelegramGroupOrChannel(chat: chat) {
-            peers[groupOrChannel.id] = groupOrChannel
-        }
-    }
-    for user in apiUsers {
-        let telegramUser = TelegramUser(user: user)
-        peers[telegramUser.id] = telegramUser
-        if let presence = TelegramUserPresence(apiUser: user) {
-            peerPresences[telegramUser.id] = presence
-        }
-    }
+    let peers = AccumulatedPeers(chats: apiChats, users: apiUsers)
     
     for dialog in apiDialogs {
         let apiPeer: Api.Peer
@@ -84,11 +81,13 @@ private func parseDialogs(apiDialogs: [Api.Dialog], apiMessages: [Api.Message], 
         let apiMarkedUnread: Bool
         let apiUnreadMentionsCount: Int32
         let apiUnreadReactionsCount: Int32
+        let apiUnreadPollVoteCount: Int32
         var apiChannelPts: Int32?
         let apiNotificationSettings: Api.PeerNotifySettings
         switch dialog {
-            case let .dialog(flags, peer, topMessage, readInboxMaxId, readOutboxMaxId, unreadCount, unreadMentionsCount, unreadReactionsCount, peerNotificationSettings, pts, _, _):
-                if let peer = peers[peer.peerId] {
+            case let .dialog(dialogData):
+                let (flags, peer, topMessage, readInboxMaxId, readOutboxMaxId, unreadCount, unreadMentionsCount, unreadReactionsCount, unreadPollVoteCount, peerNotificationSettings, pts, ttlPeriod) = (dialogData.flags, dialogData.peer, dialogData.topMessage, dialogData.readInboxMaxId, dialogData.readOutboxMaxId, dialogData.unreadCount, dialogData.unreadMentionsCount, dialogData.unreadReactionsCount, dialogData.unreadPollVotesCount, dialogData.notifySettings, dialogData.pts, dialogData.ttlPeriod)
+                if let peer = peers.get(peer.peerId) {
                     var isExluded = false
                     if let group = peer as? TelegramGroup {
                         if group.flags.contains(.deactivated) {
@@ -107,22 +106,34 @@ private func parseDialogs(apiDialogs: [Api.Dialog], apiMessages: [Api.Message], 
                 apiMarkedUnread = (flags & (1 << 3)) != 0
                 apiUnreadMentionsCount = unreadMentionsCount
                 apiUnreadReactionsCount = unreadReactionsCount
+                apiUnreadPollVoteCount = unreadPollVoteCount
                 apiNotificationSettings = peerNotificationSettings
                 apiChannelPts = pts
+            
+                viewForumAsMessages[peer.peerId] = (flags & (1 << 6)) != 0
+                ttlPeriods[peer.peerId] = .known(ttlPeriod.flatMap(CachedPeerAutoremoveTimeout.Value.init(peerValue:)))
+                        
                 let isPinned = (flags & (1 << 2)) != 0
                 if !isPinned {
                     nonPinnedDialogsTopMessageIds.insert(MessageId(peerId: peer.peerId, namespace: Namespaces.Message.Cloud, id: topMessage))
                 }
                 let peerId: PeerId
                 switch apiPeer {
-                    case let .peerUser(userId):
+                    case let .peerUser(peerUserData):
+                        let userId = peerUserData.userId
                         peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))
-                    case let .peerChat(chatId):
+                    case let .peerChat(peerChatData):
+                        let chatId = peerChatData.chatId
                         peerId = PeerId(namespace: Namespaces.Peer.CloudGroup, id: PeerId.Id._internalFromInt64Value(chatId))
-                    case let .peerChannel(channelId):
+                    case let .peerChannel(peerChannelData):
+                        let channelId = peerChannelData.channelId
                         peerId = PeerId(namespace: Namespaces.Peer.CloudChannel, id: PeerId.Id._internalFromInt64Value(channelId))
                 }
-                
+
+                if let draft = dialogData.draft, case .draftMessage = draft {
+                    inputStates.append((peerId, draft))
+                }
+
                 if readStates[peerId] == nil {
                     readStates[peerId] = [:]
                 }
@@ -131,6 +142,7 @@ private func parseDialogs(apiDialogs: [Api.Dialog], apiMessages: [Api.Message], 
                 if apiTopMessage != 0 {
                     mentionTagSummaries[peerId] = MessageHistoryTagNamespaceSummary(version: 1, count: apiUnreadMentionsCount, range: MessageHistoryTagNamespaceCountValidityRange(maxId: apiTopMessage))
                     reactionTagSummaries[peerId] = MessageHistoryTagNamespaceSummary(version: 1, count: apiUnreadReactionsCount, range: MessageHistoryTagNamespaceCountValidityRange(maxId: apiTopMessage))
+                    pollVoteTagSummaries[peerId] = MessageHistoryTagNamespaceSummary(version: 1, count: apiUnreadPollVoteCount, range: MessageHistoryTagNamespaceCountValidityRange(maxId: apiTopMessage))
                     topMessageIds[peerId] = MessageId(peerId: peerId, namespace: Namespaces.Message.Cloud, id: apiTopMessage)
                 }
                 
@@ -139,9 +151,17 @@ private func parseDialogs(apiDialogs: [Api.Dialog], apiMessages: [Api.Message], 
                 }
                 
                 notificationSettings[peerId] = TelegramPeerNotificationSettings(apiSettings: apiNotificationSettings)
-            case let .dialogFolder(_, folder, _, _, unreadMutedPeersCount, _, unreadMutedMessagesCount, _):
+            case let .dialogCommunity(dialogCommunityData):
+                let peerId = peerIdFromApiCommunityId(dialogCommunityData.communityId)
+                if let community = peers.get(peerId) as? TelegramCommunity, community.collapsedInDialogs == true {
+                    itemIds.append(peerId)
+                }
+                notificationSettings[peerId] = TelegramPeerNotificationSettings(apiSettings: dialogCommunityData.notifySettings)
+            case let .dialogFolder(dialogFolderData):
+                let (folder, unreadMutedPeersCount, unreadMutedMessagesCount) = (dialogFolderData.folder, dialogFolderData.unreadMutedPeersCount, dialogFolderData.unreadMutedMessagesCount)
                 switch folder {
-                    case let .folder(_, id, _, _):
+                    case let .folder(folderData):
+                        let id = folderData.id
                         referencedFolders[PeerGroupId(rawValue: id)] = PeerGroupUnreadCountersSummary(all: PeerGroupUnreadCounters(messageCount: unreadMutedMessagesCount, chatCount: unreadMutedPeersCount))
                 }
         }
@@ -150,7 +170,11 @@ private func parseDialogs(apiDialogs: [Api.Dialog], apiMessages: [Api.Message], 
     var lowerNonPinnedIndex: MessageIndex?
     
     for message in apiMessages {
-        if let storeMessage = StoreMessage(apiMessage: message) {
+        var peerIsForum = false
+        if let peerId = message.peerId, let peer = peers.get(peerId), peer.isForumOrMonoForum {
+            peerIsForum = true
+        }
+        if let storeMessage = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: peerIsForum) {
             var updatedStoreMessage = storeMessage
             if case let .Id(id) = storeMessage.id {
                 if let channelPts = channelStates[id.peerId] {
@@ -172,42 +196,48 @@ private func parseDialogs(apiDialogs: [Api.Dialog], apiMessages: [Api.Message], 
     
     return ParsedDialogs(
         itemIds: itemIds,
-        peers: Array(peers.values),
-        peerPresences: peerPresences,
-    
+        peers: peers,
         notificationSettings: notificationSettings,
         readStates: readStates,
         mentionTagSummaries: mentionTagSummaries,
         reactionTagSummaries: reactionTagSummaries,
+        pollVoteTagSummaries: pollVoteTagSummaries,
         channelStates: channelStates,
         topMessageIds: topMessageIds,
         storeMessages: storeMessages,
-    
+        ttlPeriods: ttlPeriods,
+        viewForumAsMessages: viewForumAsMessages,
+        inputStates: inputStates,
+
         lowerNonPinnedIndex: lowerNonPinnedIndex,
         referencedFolders: referencedFolders
     )
 }
 
 struct FetchedChatList {
-    let chatPeerIds: [PeerId]
-    let peers: [Peer]
-    let peerPresences: [PeerId: PeerPresence]
-    let notificationSettings: [PeerId: PeerNotificationSettings]
-    let readStates: [PeerId: [MessageId.Namespace: PeerReadState]]
-    let mentionTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary]
-    let reactionTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary]
-    let channelStates: [PeerId: Int32]
-    let storeMessages: [StoreMessage]
-    let topMessageIds: [PeerId: MessageId]
+    var chatPeerIds: [PeerId]
+    var peers: AccumulatedPeers
+    var notificationSettings: [PeerId: PeerNotificationSettings]
+    var ttlPeriods: [PeerId: CachedPeerAutoremoveTimeout]
+    var viewForumAsMessages: [PeerId: Bool]
+    var readStates: [PeerId: [MessageId.Namespace: PeerReadState]]
+    var mentionTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary]
+    var reactionTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary]
+    var pollVoteTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary]
+    var channelStates: [PeerId: Int32]
+    var storeMessages: [StoreMessage]
+    var topMessageIds: [PeerId: MessageId]
     
-    let lowerNonPinnedIndex: MessageIndex?
+    var lowerNonPinnedIndex: MessageIndex?
     
-    let pinnedItemIds: [PeerId]?
-    let folderSummaries: [PeerGroupId: PeerGroupUnreadCountersSummary]
-    let peerGroupIds: [PeerId: PeerGroupId]
+    var pinnedItemIds: [PeerId]?
+    var folderSummaries: [PeerGroupId: PeerGroupUnreadCountersSummary]
+    var peerGroupIds: [PeerId: PeerGroupId]
+    var threadInfos: [PeerAndBoundThreadId: StoreMessageHistoryThreadData]
+    var inputStates: [(PeerId, Api.DraftMessage)]
 }
 
-func fetchChatList(postbox: Postbox, network: Network, location: FetchChatListLocation, upperBound: MessageIndex, hash: Int64, limit: Int32) -> Signal<FetchedChatList?, NoError> {
+func fetchChatList(accountPeerId: PeerId, postbox: Postbox, network: Network, location: FetchChatListLocation, upperBound: MessageIndex, hash: Int64, limit: Int32) -> Signal<FetchedChatList?, NoError> {
     return postbox.stateView()
     |> mapToSignal { view -> Signal<AuthorizedAccountState, NoError> in
         if let state = view.state as? AuthorizedAccountState {
@@ -241,8 +271,7 @@ func fetchChatList(postbox: Postbox, network: Network, location: FetchChatListLo
                         folderId = groupId.rawValue
                 }
                 additionalPinnedChats = network.request(Api.functions.messages.getPinnedDialogs(folderId: folderId))
-                |> retryRequest
-                |> map(Optional.init)
+                |> retryRequestIfNotFrozen
             } else {
                 additionalPinnedChats = .single(nil)
             }
@@ -266,11 +295,11 @@ func fetchChatList(postbox: Postbox, network: Network, location: FetchChatListLo
                     return .single(nil)
                 }
                 let extractedRemoteDialogs = extractDialogsData(dialogs: remoteChats)
-                let parsedRemoteChats = parseDialogs(apiDialogs: extractedRemoteDialogs.apiDialogs, apiMessages: extractedRemoteDialogs.apiMessages, apiChats: extractedRemoteDialogs.apiChats, apiUsers: extractedRemoteDialogs.apiUsers, apiIsAtLowestBoundary: extractedRemoteDialogs.apiIsAtLowestBoundary)
+                let parsedRemoteChats = parseDialogs(accountPeerId: accountPeerId, apiDialogs: extractedRemoteDialogs.apiDialogs, apiMessages: extractedRemoteDialogs.apiMessages, apiChats: extractedRemoteDialogs.apiChats, apiUsers: extractedRemoteDialogs.apiUsers, apiIsAtLowestBoundary: extractedRemoteDialogs.apiIsAtLowestBoundary)
                 var parsedPinnedChats: ParsedDialogs?
                 if let pinnedChats = pinnedChats {
                     let extractedPinnedChats = extractDialogsData(peerDialogs: pinnedChats)
-                    parsedPinnedChats = parseDialogs(apiDialogs: extractedPinnedChats.apiDialogs, apiMessages: extractedPinnedChats.apiMessages, apiChats: extractedPinnedChats.apiChats, apiUsers: extractedPinnedChats.apiUsers, apiIsAtLowestBoundary: extractedPinnedChats.apiIsAtLowestBoundary)
+                    parsedPinnedChats = parseDialogs(accountPeerId: accountPeerId, apiDialogs: extractedPinnedChats.apiDialogs, apiMessages: extractedPinnedChats.apiMessages, apiChats: extractedPinnedChats.apiChats, apiUsers: extractedPinnedChats.apiUsers, apiIsAtLowestBoundary: extractedPinnedChats.apiIsAtLowestBoundary)
                 }
                 
                 var combinedReferencedFolders = Set<PeerGroupId>()
@@ -287,7 +316,7 @@ func fetchChatList(postbox: Postbox, network: Network, location: FetchChatListLo
                         |> retryRequest
                         |> map { result -> (PeerGroupId, ParsedDialogs) in
                             let extractedData = extractDialogsData(dialogs: result)
-                            let parsedChats = parseDialogs(apiDialogs: extractedData.apiDialogs, apiMessages: extractedData.apiMessages, apiChats: extractedData.apiChats, apiUsers: extractedData.apiUsers, apiIsAtLowestBoundary: extractedData.apiIsAtLowestBoundary)
+                            let parsedChats = parseDialogs(accountPeerId: accountPeerId, apiDialogs: extractedData.apiDialogs, apiMessages: extractedData.apiMessages, apiChats: extractedData.apiChats, apiUsers: extractedData.apiUsers, apiIsAtLowestBoundary: extractedData.apiIsAtLowestBoundary)
                             return (groupId, parsedChats)
                         }
                         folderSignals.append(requestFeed)
@@ -295,34 +324,40 @@ func fetchChatList(postbox: Postbox, network: Network, location: FetchChatListLo
                 }
                 
                 return combineLatest(folderSignals)
-                |> map { folders -> FetchedChatList? in
-                    var peers: [Peer] = []
-                    var peerPresences: [PeerId: PeerPresence] = [:]
+                |> mapToSignal { folders -> Signal<FetchedChatList?, NoError> in
+                    var peers = AccumulatedPeers()
                     var notificationSettings: [PeerId: PeerNotificationSettings] = [:]
+                    var ttlPeriods: [PeerId: CachedPeerAutoremoveTimeout] = [:]
+                    var viewForumAsMessages: [PeerId: Bool] = [:]
                     var readStates: [PeerId: [MessageId.Namespace: PeerReadState]] = [:]
                     var mentionTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary] = [:]
                     var reactionTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary] = [:]
+                    var pollVoteTagSummaries: [PeerId: MessageHistoryTagNamespaceSummary] = [:]
                     var channelStates: [PeerId: Int32] = [:]
                     var storeMessages: [StoreMessage] = []
                     var topMessageIds: [PeerId: MessageId] = [:]
                     
-                    peers.append(contentsOf: parsedRemoteChats.peers)
-                    peerPresences.merge(parsedRemoteChats.peerPresences, uniquingKeysWith: { _, updated in updated })
+                    peers = peers.union(with: parsedRemoteChats.peers)
                     notificationSettings.merge(parsedRemoteChats.notificationSettings, uniquingKeysWith: { _, updated in updated })
+                    ttlPeriods.merge(parsedRemoteChats.ttlPeriods, uniquingKeysWith: { _, updated in updated })
+                    viewForumAsMessages.merge(parsedRemoteChats.viewForumAsMessages, uniquingKeysWith: { _, updated in updated })
                     readStates.merge(parsedRemoteChats.readStates, uniquingKeysWith: { _, updated in updated })
                     mentionTagSummaries.merge(parsedRemoteChats.mentionTagSummaries, uniquingKeysWith: { _, updated in updated })
                     reactionTagSummaries.merge(parsedRemoteChats.reactionTagSummaries, uniquingKeysWith: { _, updated in updated })
+                    pollVoteTagSummaries.merge(parsedRemoteChats.pollVoteTagSummaries, uniquingKeysWith: { _, updated in updated })
                     channelStates.merge(parsedRemoteChats.channelStates, uniquingKeysWith: { _, updated in updated })
                     storeMessages.append(contentsOf: parsedRemoteChats.storeMessages)
                     topMessageIds.merge(parsedRemoteChats.topMessageIds, uniquingKeysWith: { _, updated in updated })
                     
                     if let parsedPinnedChats = parsedPinnedChats {
-                        peers.append(contentsOf: parsedPinnedChats.peers)
-                        peerPresences.merge(parsedPinnedChats.peerPresences, uniquingKeysWith: { _, updated in updated })
+                        peers = peers.union(with: parsedPinnedChats.peers)
                         notificationSettings.merge(parsedPinnedChats.notificationSettings, uniquingKeysWith: { _, updated in updated })
+                        ttlPeriods.merge(parsedPinnedChats.ttlPeriods, uniquingKeysWith: { _, updated in updated })
+                        viewForumAsMessages.merge(parsedPinnedChats.viewForumAsMessages, uniquingKeysWith: { _, updated in updated })
                         readStates.merge(parsedPinnedChats.readStates, uniquingKeysWith: { _, updated in updated })
                         mentionTagSummaries.merge(parsedPinnedChats.mentionTagSummaries, uniquingKeysWith: { _, updated in updated })
                         reactionTagSummaries.merge(parsedPinnedChats.reactionTagSummaries, uniquingKeysWith: { _, updated in updated })
+                        pollVoteTagSummaries.merge(parsedPinnedChats.pollVoteTagSummaries, uniquingKeysWith: { _, updated in updated })
                         channelStates.merge(parsedPinnedChats.channelStates, uniquingKeysWith: { _, updated in updated })
                         storeMessages.append(contentsOf: parsedPinnedChats.storeMessages)
                         topMessageIds.merge(parsedPinnedChats.topMessageIds, uniquingKeysWith: { _, updated in updated })
@@ -340,12 +375,14 @@ func fetchChatList(postbox: Postbox, network: Network, location: FetchChatListLo
                         for peerId in folderChats.itemIds {
                             peerGroupIds[peerId] = groupId
                         }
-                        peers.append(contentsOf: folderChats.peers)
-                        peerPresences.merge(folderChats.peerPresences, uniquingKeysWith: { _, updated in updated })
+                        peers = peers.union(with: folderChats.peers)
                         notificationSettings.merge(folderChats.notificationSettings, uniquingKeysWith: { _, updated in updated })
+                        ttlPeriods.merge(folderChats.ttlPeriods, uniquingKeysWith: { _, updated in updated })
+                        viewForumAsMessages.merge(folderChats.viewForumAsMessages, uniquingKeysWith: { _, updated in updated })
                         readStates.merge(folderChats.readStates, uniquingKeysWith: { _, updated in updated })
                         mentionTagSummaries.merge(folderChats.mentionTagSummaries, uniquingKeysWith: { _, updated in updated })
                         reactionTagSummaries.merge(folderChats.reactionTagSummaries, uniquingKeysWith: { _, updated in updated })
+                        pollVoteTagSummaries.merge(folderChats.pollVoteTagSummaries, uniquingKeysWith: { _, updated in updated })
                         channelStates.merge(folderChats.channelStates, uniquingKeysWith: { _, updated in updated })
                         storeMessages.append(contentsOf: folderChats.storeMessages)
                     }
@@ -372,14 +409,16 @@ func fetchChatList(postbox: Postbox, network: Network, location: FetchChatListLo
                         }
                     }
                     
-                    return FetchedChatList(
+                    let result: FetchedChatList? = FetchedChatList(
                         chatPeerIds: parsedRemoteChats.itemIds + (pinnedItemIds ?? []),
                         peers: peers,
-                        peerPresences: peerPresences,
                         notificationSettings: notificationSettings,
+                        ttlPeriods: ttlPeriods,
+                        viewForumAsMessages: viewForumAsMessages,
                         readStates: readStates,
                         mentionTagSummaries: mentionTagSummaries,
                         reactionTagSummaries: reactionTagSummaries,
+                        pollVoteTagSummaries: pollVoteTagSummaries,
                         channelStates: channelStates,
                         storeMessages: storeMessages,
                         topMessageIds: topMessageIds,
@@ -388,8 +427,23 @@ func fetchChatList(postbox: Postbox, network: Network, location: FetchChatListLo
                     
                         pinnedItemIds: pinnedItemIds,
                         folderSummaries: folderSummaries,
-                        peerGroupIds: peerGroupIds
+                        peerGroupIds: peerGroupIds,
+                        threadInfos: [:],
+                        // A pinned chat appears in both the remote and pinned responses, so the same peer's draft
+                        // can be listed twice here. That is intentionally not deduped: `_internal_applyFetchedChatInputStates`
+                        // is idempotent — after the first apply, the second pass reads the just-written (equal) local
+                        // timestamp and its strict newer-wins guard skips it. Don't drop the guard without deduping here.
+                        inputStates: parsedRemoteChats.inputStates + (parsedPinnedChats?.inputStates ?? [])
                     )
+                    return resolveUnknownEmojiFiles(postbox: postbox, source: .network(network), messages: storeMessages, reactions: [], result: result)
+                    |> mapToSignal { result in
+                        if let result = result {
+                            return resolveForumThreads(accountPeerId: accountPeerId, postbox: postbox, source: .network(network), fetchedChatList: result)
+                            |> map(Optional.init)
+                        } else {
+                            return .single(result)
+                        }
+                    }
                 }
             }
         }

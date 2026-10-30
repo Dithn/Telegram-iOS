@@ -90,20 +90,20 @@ private func allOpenInOptions(context: AccountContext, item: OpenInItem) -> [Ope
     var options: [OpenInOption] = []
     switch item {
         case let .url(url):
-            var skipSafari = false
             if url.contains("youtube.com/") || url.contains("youtu.be/") {
                 let updatedUrl = url.replacingOccurrences(of: "https://", with: "youtube://").replacingOccurrences(of: "http://", with: "youtube://")
                 options.append(OpenInOption(identifier: "youtube", application: .other(title: "YouTube", identifier: 544007664, scheme: "youtube", store: nil), action: {
                     return .openUrl(url: updatedUrl)
                 }))
-                skipSafari = true
             }
             
-            if !skipSafari {
-                options.append(OpenInOption(identifier: "safari", application: .safari, action: {
-                    return .openUrl(url: url)
-                }))
-            }
+            options.append(OpenInOption(identifier: "safari", application: .safari, action: {
+                var url = url
+                if url.hasPrefix("https://") {
+                    url = url.replacingOccurrences(of: "https://", with: "x-safari-https://")
+                }
+                return .openUrl(url: url)
+            }))
 
             options.append(OpenInOption(identifier: "chrome", application: .other(title: "Chrome", identifier: 535886823, scheme: "googlechrome", store: nil), action: {
                 if let url = URL(string: url), var components = URLComponents(url: url, resolvingAgainstBaseURL: true) {
@@ -198,6 +198,16 @@ private func allOpenInOptions(context: AccountContext, item: OpenInItem) -> [Ope
             options.append(OpenInOption(identifier: "alook", application: .other(title: "Alook Browser", identifier: 1261944766, scheme: "alook", store: nil), action: {
                 return .openUrl(url: "alook://\(url)")
             }))
+
+            options.append(OpenInOption(identifier: "vivaldi", application: .other(title: "Vivaldi", identifier: 1633234600, scheme: "vivaldi", store: "us"), action: {
+                if let url = URL(string: url), var components = URLComponents(url: url, resolvingAgainstBaseURL: true) {
+                    components.scheme = "vivaldi"
+                    if let url = components.string {
+                        return .openUrl(url: url)
+                    }
+                }
+                return .none
+            }))
         case let .location(location, directions):
             let lat = location.latitude
             let lon = location.longitude
@@ -233,6 +243,13 @@ private func allOpenInOptions(context: AccountContext, item: OpenInItem) -> [Ope
                     } else {
                         return .openUrl(url: "comgooglemaps-x-callback://?center=\(coordinates)&q=\(coordinates)&x-success=telegram://?resume=true&x-source=Telegram")
                     }
+                }
+            }))
+            options.append(OpenInOption(identifier: "yangoMaps", application: .other(title: "Yango Maps", identifier: 1665672451, scheme: "yangomaps", store: nil), action: {
+                if let _ = directions {
+                    return .openUrl(url: "yangomaps://build_route_on_map?lat_to=\(lat)&lon_to=\(lon)")
+                } else {
+                    return .openUrl(url: "yangomaps://maps.yango.com/?pt=\(lon),\(lat)&z=16")
                 }
             }))
         
@@ -286,7 +303,7 @@ private func allOpenInOptions(context: AccountContext, item: OpenInItem) -> [Ope
                 }))
             }
             
-            options.append(OpenInOption(identifier: "2gis", application: .other(title: "2GIS", identifier: 481627348, scheme: "dgis", store: nil), action: {
+            options.append(OpenInOption(identifier: "2gis", application: .other(title: "2GIS", identifier: 481627348, scheme: "dgis", store: "ru"), action: {
                 let coordinates = "\(lon),\(lat)"
                 if let _ = directions {
                     return .openUrl(url: "dgis://2gis.ru/routeSearch/to/\(coordinates)/go")
@@ -322,6 +339,18 @@ private func allOpenInOptions(context: AccountContext, item: OpenInItem) -> [Ope
                 } else {
                     return .openUrl(url: url)
                 }
+            }))
+        
+            options.append(OpenInOption(identifier: "yandexGo", application: .other(title: "Yandex Go", identifier: 472650686, scheme: "yandextaxi", store: nil), action: {
+                return .openUrl(url: "yandextaxi://route?end-lat=\(lat)&end-lon=\(lon)")
+            }))
+            
+            options.append(OpenInOption(identifier: "yango", application: .other(title: "Yango", identifier: 1437157286, scheme: "yangoride", store: nil), action: {
+                return .openUrl(url: "yangoride://route?end-lat=\(lat)&end-lon=\(lon)")
+            }))
+        
+            options.append(OpenInOption(identifier: "rizogo", application: .other(title: "Rizo GO", identifier: 6466694224, scheme: "rizogo", store: nil), action: {
+                return .openUrl(url: "rizogo://route?end-lat=\(lat)&end-lon=\(lon)")
             }))
     }
     return options

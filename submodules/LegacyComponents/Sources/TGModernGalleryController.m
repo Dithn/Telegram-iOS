@@ -1,8 +1,9 @@
-#import "TGModernGalleryController.h"
+#import <LegacyComponents/LegacyComponents.h>
+#import <LegacyComponents/TGModernGalleryController.h>
 
 #import "LegacyComponentsInternal.h"
-#import "TGHacks.h"
-#import "TGImageUtils.h"
+#import <LegacyComponents/TGHacks.h>
+#import <LegacyComponents/TGImageUtils.h>
 
 #import <LegacyComponents/TGModernGalleryView.h>
 
@@ -26,6 +27,36 @@
 #import <LegacyComponents/TGKeyCommandController.h>
 
 #define TGModernGalleryItemPadding 20.0f
+
+static void adjustFrameRate(CAAnimation *animation) {
+    if (@available(iOS 15.0, *)) {
+        float maxFps = [UIScreen mainScreen].maximumFramesPerSecond;
+        if (maxFps > 61.0f) {
+            float preferredFps = maxFps;
+            if ([animation isKindOfClass:[CABasicAnimation class]]) {
+                CABasicAnimation *basicAnimation = (CABasicAnimation *)animation;
+                if ([basicAnimation.keyPath isEqualToString:@"opacity"]) {
+                    preferredFps = 60.0f;
+                }
+            }
+            animation.preferredFrameRateRange = CAFrameRateRangeMake(30.0, preferredFps, maxFps);
+        }
+    }
+}
+
+static bool TGModernGalleryViewHasFirstResponder(UIView *view) {
+    if (view.isFirstResponder) {
+        return true;
+    }
+
+    for (UIView *subview in view.subviews) {
+        if (TGModernGalleryViewHasFirstResponder(subview)) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 @interface TGModernGalleryController () <UIScrollViewDelegate, TGModernGalleryScrollViewDelegate, TGModernGalleryItemViewDelegate, TGKeyCommandResponder>
 {
@@ -150,6 +181,12 @@
     [self dismissWhenReadyAnimated:animated force:false];
 }
 
+- (void)setScrollViewHidden:(bool)hidden {
+    TGDispatchAfter(0.01, dispatch_get_main_queue(), ^{
+        _view.scrollView.hidden = hidden;
+    });
+}
+
 - (void)dismissWhenReadyAnimated:(bool)animated force:(bool)force
 {
     if (animated) {
@@ -187,7 +224,9 @@
     {
         if ([itemView.item isEqual:focusItem])
         {
-            itemView.alpha = 0.01;
+            TGDispatchAfter(0.1, dispatch_get_main_queue(), ^{
+                itemView.alpha = 0.01;
+            });
             UIView *contentView = [itemView transitionContentView];
             UIView *snapshotView = [contentView snapshotViewAfterScreenUpdates:true];
             snapshotView.frame = [contentView convertRect:contentView.bounds toView:nil];
@@ -637,7 +676,7 @@
             if (_asyncTransitionIn) {
                 __weak TGModernGalleryController *weakSelf = self;
                 self.view.hidden = true;
-                _transitionInDisposable = [[[[transitionFromItemView readyForTransitionIn] take:1] timeout:1.0 onQueue:[SQueue mainQueue] orSignal:[SSignal single:@true]] startWithNext:^(__unused id next) {
+                _transitionInDisposable = [[[[transitionFromItemView readyForTransitionIn] take:1] timeout:1.0 onQueue:[SQueue mainQueue] orSignal:[SSignal single:@true]] startStrictWithNext:^(__unused id next) {
                     __strong TGModernGalleryController *strongSelf = weakSelf;
                     if (strongSelf != nil) {
                         [strongSelf animateTransitionInFromView:transitionInFromView toView:transitionInToView toViewContentRect:transitionInToViewContentRect];
@@ -650,7 +689,7 @@
                             strongSelf->_startedTransitionIn();
                         }
                     }
-                }];
+                } file:__FILE_NAME__ line:__LINE__];
             } else {
                 if (_startedTransitionIn) {
                     _startedTransitionIn();
@@ -902,6 +941,7 @@ static CGFloat transformRotation(CGAffineTransform transform)
     positionAnimation.removedOnCompletion = true;
     positionAnimation.fillMode = kCAFillModeForwards;
     positionAnimation.durationFactor = durationFactor;
+    adjustFrameRate(positionAnimation);
     TGAnimationBlockDelegate *delegate = [[TGAnimationBlockDelegate alloc] initWithLayer:view.layer];
     delegate.completion = ^(BOOL finished)
     {
@@ -924,6 +964,7 @@ static CGFloat transformRotation(CGAffineTransform transform)
         scaleAnimation.removedOnCompletion = true;
         scaleAnimation.fillMode = kCAFillModeForwards;
         scaleAnimation.durationFactor = durationFactor;
+        adjustFrameRate(scaleAnimation);
         [view.layer addAnimation:scaleAnimation forKey:@"transform.scale.x"];
     }
     {
@@ -935,6 +976,7 @@ static CGFloat transformRotation(CGAffineTransform transform)
         scaleAnimation.removedOnCompletion = true;
         scaleAnimation.fillMode = kCAFillModeForwards;
         scaleAnimation.durationFactor = durationFactor;
+        adjustFrameRate(scaleAnimation);
         [view.layer addAnimation:scaleAnimation forKey:@"transform.scale.y"];
     }
     
@@ -1731,6 +1773,28 @@ static CGFloat transformRotation(CGAffineTransform transform)
     }
 }
 
+- (bool)_canBeginEditingCaptionFromKeyCommand
+{
+    UIView<TGModernGalleryInterfaceView> *interfaceView = _view.interfaceView;
+    if (interfaceView == nil) {
+        return false;
+    }
+
+    if (![interfaceView respondsToSelector:@selector(beginEditingCaption)]) {
+        return false;
+    }
+
+    if ([interfaceView respondsToSelector:@selector(canBeginEditingCaption)] && ![interfaceView canBeginEditingCaption]) {
+        return false;
+    }
+
+    if (TGModernGalleryViewHasFirstResponder(_view)) {
+        return false;
+    }
+
+    return true;
+}
+
 - (void)processKeyCommand:(UIKeyCommand *)keyCommand
 {
     if ([keyCommand.input isEqualToString:UIKeyInputLeftArrow])
@@ -1749,17 +1813,27 @@ static CGFloat transformRotation(CGAffineTransform transform)
     {
         _view.transitionOut(0.0f);
     }
+    else if ([keyCommand.input isEqualToString:@"\r"])
+    {
+        if ([self _canBeginEditingCaptionFromKeyCommand])
+            [_view.interfaceView beginEditingCaption];
+    }
 }
 
 - (NSArray *)availableKeyCommands
 {
-    return @
+    NSMutableArray *commands = [[NSMutableArray alloc] initWithArray:@
     [
         [TGKeyCommand keyCommandWithTitle:nil input:UIKeyInputLeftArrow modifierFlags:0],
         [TGKeyCommand keyCommandWithTitle:nil input:UIKeyInputRightArrow modifierFlags:0],
         [TGKeyCommand keyCommandWithTitle:nil input:UIKeyInputEscape modifierFlags:0],
         [TGKeyCommand keyCommandWithTitle:nil input:@"\t" modifierFlags:0]
-    ];
+    ]];
+
+    if ([self _canBeginEditingCaptionFromKeyCommand])
+        [commands addObject:[TGKeyCommand keyCommandWithTitle:nil input:@"\r" modifierFlags:0]];
+
+    return commands;
 }
 
 - (bool)isExclusive

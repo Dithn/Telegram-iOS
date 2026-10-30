@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import TelegramCore
-import Postbox
 import SwiftSignalKit
 import Display
 import TelegramPresentationData
@@ -13,16 +12,21 @@ import RadialStatusNode
 import PhotoResources
 import TelegramStringFormatting
 import ChatPresentationInterfaceState
+import TextNodeWithEntities
+import AnimationCache
+import MultiAnimationRenderer
+import TextFormat
+import AccessoryPanelNode
 
 final class EditAccessoryPanelNode: AccessoryPanelNode {
     let dateTimeFormat: PresentationDateTimeFormat
-    let messageId: MessageId
+    let messageId: EngineMessage.Id
     
     let closeButton: HighlightableButtonNode
     let lineNode: ASImageNode
     let iconNode: ASImageNode
     let titleNode: ImmediateTextNode
-    let textNode: ImmediateTextNode
+    let textNode: ImmediateTextNodeWithEntities
     let imageNode: TransformImageNode
     let dimNode: ASDisplayNode
     let drawIconNode: ASImageNode
@@ -37,14 +41,14 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
     private let editingMessageDisposable = MetaDisposable()
     
     private var isPhoto = false
-    private var currentMessage: Message?
+    private var currentMessage: EngineMessage?
     private var currentEditMediaReference: AnyMediaReference?
     private var previousMediaReference: AnyMediaReference?
     
     override var interfaceInteraction: ChatPanelInterfaceInteraction? {
         didSet {
             if let statuses = self.interfaceInteraction?.statuses {
-                self.editingMessageDisposable.set(statuses.editingMessage.start(next: { [weak self] value in
+                self.editingMessageDisposable.set(statuses.editingMessage.startStrict(next: { [weak self] value in
                     if let strongSelf = self {
                         if let value = value {
                             if value.isZero {
@@ -71,7 +75,7 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
     
     private var validLayout: (size: CGSize, inset: CGFloat, interfaceState: ChatPresentationInterfaceState)?
     
-    init(context: AccountContext, messageId: MessageId, theme: PresentationTheme, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat) {
+    init(context: AccountContext, messageId: EngineMessage.Id, theme: PresentationTheme, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, animationCache: AnimationCache?, animationRenderer: MultiAnimationRenderer?) {
         self.context = context
         self.messageId = messageId
         self.theme = theme
@@ -99,10 +103,21 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
         self.titleNode.maximumNumberOfLines = 1
         self.titleNode.displaysAsynchronously = false
         
-        self.textNode = ImmediateTextNode()
+        self.textNode = ImmediateTextNodeWithEntities()
         self.textNode.maximumNumberOfLines = 1
         self.textNode.displaysAsynchronously = false
         self.textNode.isUserInteractionEnabled = true
+        self.textNode.visibility = true
+        
+        if let animationCache = animationCache, let animationRenderer = animationRenderer {
+            self.textNode.arguments = TextNodeWithEntities.Arguments(
+                context: context,
+                cache: animationCache,
+                renderer: animationRenderer,
+                placeholderColor: theme.list.mediaPlaceholderColor,
+                attemptSynchronous: false
+            )
+        }
         
         self.imageNode = TransformImageNode()
         self.imageNode.contentAnimations = [.subsequentUpdates]
@@ -145,8 +160,8 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
         self.addSubnode(self.tapNode)
         self.addSubnode(self.actionArea)
         self.messageDisposable.set((context.account.postbox.messageAtId(messageId)
-        |> deliverOnMainQueue).start(next: { [weak self] message in
-            self?.updateMessage(message)
+        |> deliverOnMainQueue).startStrict(next: { [weak self] message in
+            self?.updateMessage(message.flatMap(EngineMessage.init))
         }))
     }
     
@@ -161,8 +176,9 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
         self.tapNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.contentTap(_:))))
     }
     
-    private func updateMessage(_ message: Message?) {
+    private func updateMessage(_ message: EngineMessage?) {
         self.currentMessage = message
+        let message = message?._asMessage()
         
         var text = ""
         if let message = message {
@@ -170,7 +186,8 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
             if let currentEditMediaReference = self.currentEditMediaReference {
                 effectiveMessage = effectiveMessage.withUpdatedMedia([currentEditMediaReference.media])
             }
-            (text, _, _) = descriptionStringForMessage(contentSettings: context.currentContentSettings.with { $0 }, message: EngineMessage(effectiveMessage), strings: self.strings, nameDisplayOrder: self.nameDisplayOrder, dateTimeFormat: self.dateTimeFormat, accountPeerId: self.context.account.peerId)
+            let (attributedText, _, _) = descriptionStringForMessage(contentSettings: context.currentContentSettings.with { $0 }, message: EngineMessage(effectiveMessage), strings: self.strings, nameDisplayOrder: self.nameDisplayOrder, dateTimeFormat: self.dateTimeFormat, accountPeerId: self.context.account.peerId)
+            text = attributedText.string
         }
         
         var updatedMediaReference: AnyMediaReference?
@@ -216,18 +233,20 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
         }
         self.previousMediaReference = updatedMediaReference
         
+        let hasSpoiler = message?.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute }) ?? false
+        
         var isPhoto = false
         var updateImageSignal: Signal<(TransformImageArguments) -> DrawingContext?, NoError>?
         if mediaUpdated {
             if let updatedMediaReference = updatedMediaReference, imageDimensions != nil {
                 if let imageReference = updatedMediaReference.concrete(TelegramMediaImage.self) {
-                    updateImageSignal = chatMessagePhotoThumbnail(account: self.context.account, photoReference: imageReference)
+                    updateImageSignal = chatMessagePhotoThumbnail(account: self.context.account, userLocation: (message?.id.peerId).flatMap(MediaResourceUserLocation.peer) ?? .other, photoReference: imageReference, blurred: hasSpoiler)
                     isPhoto = true
                 } else if let fileReference = updatedMediaReference.concrete(TelegramMediaFile.self) {
                     if fileReference.media.isVideo {
-                        updateImageSignal = chatMessageVideoThumbnail(account: self.context.account, fileReference: fileReference)
+                        updateImageSignal = chatMessageVideoThumbnail(account: self.context.account, userLocation: (message?.id.peerId).flatMap(MediaResourceUserLocation.peer) ?? .other, fileReference: fileReference, blurred: hasSpoiler)
                     } else if let iconImageRepresentation = smallestImageRepresentation(fileReference.media.previewRepresentations) {
-                        updateImageSignal = chatWebpageSnippetFile(account: self.context.account, mediaReference: fileReference.abstract, representation: iconImageRepresentation)
+                        updateImageSignal = chatWebpageSnippetFile(account: self.context.account, userLocation: (message?.id.peerId).flatMap(MediaResourceUserLocation.peer) ?? .other, mediaReference: fileReference.abstract, representation: iconImageRepresentation)
                     }
                 }
             } else {
@@ -237,6 +256,7 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
         self.isPhoto = isPhoto
         
         let isMedia: Bool
+        let isText: Bool
         if let message = message {
             var effectiveMessage = message
             if let currentEditMediaReference = self.currentEditMediaReference {
@@ -246,11 +266,14 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
             switch messageContentKind(contentSettings: self.context.currentContentSettings.with { $0 }, message: EngineMessage(effectiveMessage), strings: strings, nameDisplayOrder: nameDisplayOrder, dateTimeFormat: presentationData.dateTimeFormat, accountPeerId: self.context.account.peerId) {
                 case .text:
                     isMedia = false
+                    isText = true
                 default:
                     isMedia = true
+                    isText = false
             }
         } else {
             isMedia = false
+            isText = true
         }
         
         let canEditMedia: Bool
@@ -261,13 +284,37 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
         }
         
         let titleString: String
-        if canEditMedia {
+        if let message, message.id.namespace == Namespaces.Message.QuickReplyCloud {
+            titleString = self.strings.Conversation_EditingQuickReplyPanelTitle
+        } else if canEditMedia {
             titleString = isPhoto ? self.strings.Conversation_EditingPhotoPanelTitle : self.strings.Conversation_EditingCaptionPanelTitle
         } else {
             titleString = self.strings.Conversation_EditingMessagePanelTitle
         }
         self.titleNode.attributedText = NSAttributedString(string: titleString, font: Font.medium(15.0), textColor: self.theme.chat.inputPanel.panelControlAccentColor)
-        self.textNode.attributedText = NSAttributedString(string: text, font: Font.regular(15.0), textColor: isMedia ? self.theme.chat.inputPanel.secondaryTextColor : self.theme.chat.inputPanel.primaryTextColor)
+        
+        let textFont = Font.regular(14.0)
+        let messageText: NSAttributedString
+        if isText, let message = message {
+            let entities = (message.textEntitiesAttribute?.entities ?? []).filter { entity in
+                switch entity.type {
+                case .Spoiler, .CustomEmoji:
+                    return true
+                default:
+                    return false
+                }
+            }
+            let textColor = self.theme.chat.inputPanel.primaryTextColor
+            if entities.count > 0 {
+                messageText = stringWithAppliedEntities(trimToLineCount(message.text, lineCount: 1), entities: entities, baseColor: textColor, linkColor: textColor, baseFont: textFont, linkFont: textFont, boldFont: textFont, italicFont: textFont, boldItalicFont: textFont, fixedFont: textFont, blockQuoteFont: textFont,  underlineLinks: false, message: message)
+            } else {
+                messageText = NSAttributedString(string: text, font: textFont, textColor: isMedia ? self.theme.chat.inputPanel.secondaryTextColor : self.theme.chat.inputPanel.primaryTextColor)
+            }
+        } else {
+            messageText = NSAttributedString(string: text, font: Font.regular(15.0), textColor: isMedia ? self.theme.chat.inputPanel.secondaryTextColor : self.theme.chat.inputPanel.primaryTextColor)
+        }
+        
+        self.textNode.attributedText = messageText
         
         let headerString: String = titleString
         self.actionArea.accessibilityLabel = "\(headerString).\n\(text)"
@@ -324,8 +371,10 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
                 self.titleNode.attributedText = NSAttributedString(string: text, font: Font.medium(15.0), textColor: self.theme.chat.inputPanel.panelControlAccentColor)
             }
             
-            if let text = self.textNode.attributedText?.string {
-                self.textNode.attributedText = NSAttributedString(string: text, font: Font.regular(15.0), textColor: self.theme.chat.inputPanel.primaryTextColor)
+            if let text = self.textNode.attributedText {
+                let mutableText = NSMutableAttributedString(attributedString: text)
+                mutableText.addAttribute(NSAttributedString.Key.foregroundColor, value: self.theme.chat.inputPanel.primaryTextColor, range: NSRange(location: 0, length: mutableText.length))
+                self.textNode.attributedText = mutableText
             }
             
             if let (size, inset, interfaceState) = self.validLayout {

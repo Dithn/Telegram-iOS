@@ -1,5 +1,5 @@
 import Foundation
-import TelegramApi
+internal import TelegramApi
 import Postbox
 import SwiftSignalKit
 import MtProtoKit
@@ -22,10 +22,12 @@ public struct TermsOfServiceUpdate: Equatable {
 extension TermsOfServiceUpdate {
     init?(apiTermsOfService: Api.help.TermsOfService) {
         switch apiTermsOfService {
-            case let .termsOfService(_, id, text, entities, minAgeConfirm):
+            case let .termsOfService(termsOfServiceData):
+                let (_, id, text, entities, minAgeConfirm) = (termsOfServiceData.flags, termsOfServiceData.id, termsOfServiceData.text, termsOfServiceData.entities, termsOfServiceData.minAgeConfirm)
                 let idData: String
                 switch id {
-                case let .dataJSON(data):
+                case let .dataJSON(dataJSONData):
+                    let data = dataJSONData.data
                     idData = data
                 }
                 self.init(id: idData, text: text, entities: messageTextEntitiesFromApiEntities(entities), ageConfirmation: minAgeConfirm)
@@ -34,7 +36,7 @@ extension TermsOfServiceUpdate {
 }
 
 func _internal_acceptTermsOfService(account: Account, id: String) -> Signal<Void, NoError> {
-    return account.network.request(Api.functions.help.acceptTermsOfService(id: .dataJSON(data: id)))
+    return account.network.request(Api.functions.help.acceptTermsOfService(id: .dataJSON(.init(data: id))))
     |> `catch` { _ -> Signal<Api.Bool, NoError> in
         return .complete()
     }
@@ -44,19 +46,14 @@ func _internal_acceptTermsOfService(account: Account, id: String) -> Signal<Void
     }
 }
 
-func _internal_resetAccountDueTermsOfService(network: Network) -> Signal<Void, NoError> {
-    return network.request(Api.functions.account.deleteAccount(reason: "Decline ToS update"))
-    |> retryRequest
-    |> map { _ in return }
-}
-
 func managedTermsOfServiceUpdates(postbox: Postbox, network: Network, stateManager: AccountStateManager) -> Signal<Void, NoError> {
     let poll = network.request(Api.functions.help.getTermsOfServiceUpdate())
     |> retryRequest
     |> mapToSignal { [weak stateManager] result -> Signal<Void, NoError> in
         var updated: TermsOfServiceUpdate?
         switch result {
-            case let .termsOfServiceUpdate(_, termsOfService):
+            case let .termsOfServiceUpdate(termsOfServiceUpdateData):
+                let (_, termsOfService) = (termsOfServiceUpdateData.expires, termsOfServiceUpdateData.termsOfService)
                 updated = TermsOfServiceUpdate(apiTermsOfService: termsOfService)
             case .termsOfServiceUpdateEmpty:
                 break

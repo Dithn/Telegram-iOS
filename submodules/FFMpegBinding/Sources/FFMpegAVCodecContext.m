@@ -3,7 +3,12 @@
 #import <FFMpegBinding/FFMpegAVFrame.h>
 #import <FFMpegBinding/FFMpegAVCodec.h>
 
+#import "libavformat/avformat.h"
 #import "libavcodec/avcodec.h"
+
+static enum AVPixelFormat getPreferredPixelFormat(__unused AVCodecContext *ctx, __unused const enum AVPixelFormat *pix_fmts) {
+    return AV_PIX_FMT_VIDEOTOOLBOX;
+}
 
 @interface FFMpegAVCodecContext () {
     FFMpegAVCodec *_codec;
@@ -19,6 +24,7 @@
     if (self != nil) {
         _codec = codec;
         _impl = avcodec_alloc_context3((AVCodec *)[codec impl]);
+        _impl->max_pixels = 4 * 1024 * 4 * 1024;
     }
     return self;
 }
@@ -34,7 +40,11 @@
 }
 
 - (int32_t)channels {
+    #if LIBAVFORMAT_VERSION_MAJOR >= 59
+    return (int32_t)_impl->ch_layout.nb_channels;
+    #else
     return (int32_t)_impl->channels;
+    #endif
 }
 
 - (int32_t)sampleRate {
@@ -53,6 +63,15 @@
 - (bool)sendEnd {
     int status = avcodec_send_packet(_impl, nil);
     return status == 0;
+}
+
+- (void)setupHardwareAccelerationIfPossible {
+    av_hwdevice_ctx_create(&_impl->hw_device_ctx, AV_HWDEVICE_TYPE_VIDEOTOOLBOX, nil, nil, 0);
+    _impl->get_format = getPreferredPixelFormat;
+}
+
+- (void)setSkipLoopFilterToAll {
+    _impl->skip_loop_filter = AVDISCARD_ALL;
 }
 
 - (FFMpegAVCodecContextReceiveResult)receiveIntoFrame:(FFMpegAVFrame *)frame {

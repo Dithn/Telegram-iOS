@@ -1,16 +1,40 @@
 import Foundation
+import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
 import TelegramPresentationData
+import WallpaperBackgroundNode
 
 final class ChatHistoryNavigationButtons: ASDisplayNode {
+    struct ButtonState: Equatable {
+        var isEnabled: Bool
+        
+        init(isEnabled: Bool) {
+            self.isEnabled = isEnabled
+        }
+    }
+    
+    struct DirectionState: Equatable {
+        var up: ButtonState?
+        var down: ButtonState?
+        
+        init(up: ButtonState?, down: ButtonState?) {
+            self.up = up
+            self.down = down
+        }
+    }
+    
     private var theme: PresentationTheme
+    private var preferClearGlass: Bool
     private var dateTimeFormat: PresentationDateTimeFormat
+    private let isChatRotated: Bool
     
     let reactionsButton: ChatHistoryNavigationButtonNode
+    let pollVotesButton: ChatHistoryNavigationButtonNode
     let mentionsButton: ChatHistoryNavigationButtonNode
-    private let downButton: ChatHistoryNavigationButtonNode
+    let downButton: ChatHistoryNavigationButtonNode
+    let upButton: ChatHistoryNavigationButtonNode
     
     var downPressed: (() -> Void)? {
         didSet {
@@ -18,12 +42,19 @@ final class ChatHistoryNavigationButtons: ASDisplayNode {
         }
     }
     
+    var upPressed: (() -> Void)? {
+        didSet {
+            self.upButton.tapped = self.upPressed
+        }
+    }
+    
     var reactionsPressed: (() -> Void)?
+    var pollVotesPressed: (() -> Void)?
     var mentionsPressed: (() -> Void)?
     
-    var displayDownButton: Bool = false {
+    var directionButtonState: DirectionState = DirectionState(up: nil, down: nil) {
         didSet {
-            if oldValue != self.displayDownButton {
+            if oldValue != self.directionButtonState {
                 let _ = self.updateLayout(transition: .animated(duration: 0.3, curve: .spring))
             }
         }
@@ -67,30 +98,60 @@ final class ChatHistoryNavigationButtons: ASDisplayNode {
         }
     }
     
-    init(theme: PresentationTheme, dateTimeFormat: PresentationDateTimeFormat) {
+    var pollVotesCount: Int32 = 0 {
+        didSet {
+            if self.pollVotesCount != 0 {
+                self.pollVotesButton.badge = compactNumericCountString(Int(self.pollVotesCount), decimalSeparator: self.dateTimeFormat.decimalSeparator)
+            } else {
+                self.pollVotesButton.badge = ""
+            }
+            
+            if (oldValue != 0) != (self.pollVotesCount != 0) {
+                let _ = self.updateLayout(transition: .animated(duration: 0.3, curve: .spring))
+            }
+        }
+    }
+    
+    init(theme: PresentationTheme, preferClearGlass: Bool, dateTimeFormat: PresentationDateTimeFormat, backgroundNode: WallpaperBackgroundNode, isChatRotated: Bool) {
+        self.isChatRotated = isChatRotated
         self.theme = theme
+        self.preferClearGlass = preferClearGlass
         self.dateTimeFormat = dateTimeFormat
         
-        self.mentionsButton = ChatHistoryNavigationButtonNode(theme: theme, type: .mentions)
+        self.mentionsButton = ChatHistoryNavigationButtonNode(theme: theme, preferClearGlass: preferClearGlass, backgroundNode: backgroundNode, type: .mentions)
         self.mentionsButton.alpha = 0.0
         self.mentionsButton.isHidden = true
         
-        self.reactionsButton = ChatHistoryNavigationButtonNode(theme: theme, type: .reactions)
+        self.reactionsButton = ChatHistoryNavigationButtonNode(theme: theme, preferClearGlass: preferClearGlass, backgroundNode: backgroundNode, type: .reactions)
         self.reactionsButton.alpha = 0.0
         self.reactionsButton.isHidden = true
         
-        self.downButton = ChatHistoryNavigationButtonNode(theme: theme, type: .down)
+        self.pollVotesButton = ChatHistoryNavigationButtonNode(theme: theme, preferClearGlass: preferClearGlass, backgroundNode: backgroundNode, type: .pollVotes)
+        self.pollVotesButton.alpha = 0.0
+        self.pollVotesButton.isHidden = true
+        
+        self.downButton = ChatHistoryNavigationButtonNode(theme: theme, preferClearGlass: preferClearGlass, backgroundNode: backgroundNode, type: isChatRotated ? .down : .up)
         self.downButton.alpha = 0.0
         self.downButton.isHidden = true
+        
+        self.upButton = ChatHistoryNavigationButtonNode(theme: theme, preferClearGlass: preferClearGlass, backgroundNode: backgroundNode, type: isChatRotated ? .up : .down)
+        self.upButton.alpha = 0.0
+        self.upButton.isHidden = true
         
         super.init()
         
         self.addSubnode(self.reactionsButton)
+        self.addSubnode(self.pollVotesButton)
         self.addSubnode(self.mentionsButton)
         self.addSubnode(self.downButton)
+        self.addSubnode(self.upButton)
         
         self.reactionsButton.tapped = { [weak self] in
             self?.reactionsPressed?()
+        }
+        
+        self.pollVotesButton.tapped = { [weak self] in
+            self?.pollVotesPressed?()
         }
         
         self.mentionsButton.tapped = { [weak self] in
@@ -98,31 +159,69 @@ final class ChatHistoryNavigationButtons: ASDisplayNode {
         }
         
         self.downButton.isGestureEnabled = false
+        self.upButton.isGestureEnabled = false
     }
     
     override func didLoad() {
         super.didLoad()
     }
     
-    func update(theme: PresentationTheme, dateTimeFormat: PresentationDateTimeFormat) {
-        if self.theme !== theme || self.dateTimeFormat != dateTimeFormat {
-            self.theme = theme
-            self.dateTimeFormat = dateTimeFormat
-            
-            self.reactionsButton.updateTheme(theme: theme)
-            self.mentionsButton.updateTheme(theme: theme)
-            self.downButton.updateTheme(theme: theme)
-        }
+    func update(theme: PresentationTheme, preferClearGlass: Bool, dateTimeFormat: PresentationDateTimeFormat, backgroundNode: WallpaperBackgroundNode) {
+        self.theme = theme
+        self.preferClearGlass = preferClearGlass
+        self.dateTimeFormat = dateTimeFormat
+        
+        self.reactionsButton.updateTheme(theme: theme, preferClearGlass: preferClearGlass, backgroundNode: backgroundNode)
+        self.pollVotesButton.updateTheme(theme: theme, preferClearGlass: preferClearGlass, backgroundNode: backgroundNode)
+        self.mentionsButton.updateTheme(theme: theme, preferClearGlass: preferClearGlass, backgroundNode: backgroundNode)
+        self.downButton.updateTheme(theme: theme, preferClearGlass: preferClearGlass, backgroundNode: backgroundNode)
+        self.upButton.updateTheme(theme: theme, preferClearGlass: preferClearGlass, backgroundNode: backgroundNode)
+    }
+    
+    private var absoluteRect: (CGRect, CGSize)?
+    func update(rect: CGRect, within containerSize: CGSize, transition: ContainedViewLayoutTransition) {
+        self.absoluteRect = (rect, containerSize)
+        
+        var reactionsFrame = self.reactionsButton.frame
+        reactionsFrame.origin.x += rect.minX
+        reactionsFrame.origin.y += rect.minY
+        self.reactionsButton.update(rect: reactionsFrame, within: containerSize, transition: transition)
+        
+        var pollVotesFrame = self.pollVotesButton.frame
+        pollVotesFrame.origin.x += rect.minX
+        pollVotesFrame.origin.y += rect.minY
+        self.pollVotesButton.update(rect: pollVotesFrame, within: containerSize, transition: transition)
+        
+        var mentionsFrame = self.mentionsButton.frame
+        mentionsFrame.origin.x += rect.minX
+        mentionsFrame.origin.y += rect.minY
+        self.mentionsButton.update(rect: mentionsFrame, within: containerSize, transition: transition)
+        
+        var upFrame = self.upButton.frame
+        upFrame.origin.x += rect.minX
+        upFrame.origin.y += rect.minY
+        self.upButton.update(rect: upFrame, within: containerSize, transition: transition)
+        
+        var downFrame = self.downButton.frame
+        downFrame.origin.x += rect.minX
+        downFrame.origin.y += rect.minY
+        self.downButton.update(rect: downFrame, within: containerSize, transition: transition)
     }
     
     func updateLayout(transition: ContainedViewLayoutTransition) -> CGSize {
-        let buttonSize = CGSize(width: 38.0, height: 38.0)
-        let completeSize = CGSize(width: buttonSize.width, height: buttonSize.height * 2.0 + 12.0)
+        let buttonSize = CGSize(width: 40.0, height: 40.0)
+        let completeSize = CGSize(width: buttonSize.width, height: buttonSize.height * 2.0 + 8.0)
+        var upOffset: CGFloat = 0.0
         var mentionsOffset: CGFloat = 0.0
         var reactionsOffset: CGFloat = 0.0
+        var pollVotesOffset: CGFloat = 0.0
         
-        if self.displayDownButton {
+        if let down = self.directionButtonState.down {
+            self.downButton.imageView.alpha = down.isEnabled ? 1.0 : 0.5
+            self.downButton.isEnabled = down.isEnabled
+            
             mentionsOffset += buttonSize.height + 12.0
+            upOffset += buttonSize.height + 12.0
 
             self.downButton.isHidden = false
             transition.updateAlpha(node: self.downButton, alpha: 1.0)
@@ -135,6 +234,25 @@ final class ChatHistoryNavigationButtons: ASDisplayNode {
                 strongSelf.downButton.isHidden = true
             })
             transition.updateTransformScale(node: self.downButton, scale: 0.2)
+        }
+        
+        if let up = self.directionButtonState.up {
+            self.upButton.imageView.alpha = up.isEnabled ? 1.0 : 0.5
+            self.upButton.isEnabled = up.isEnabled
+            
+            mentionsOffset += buttonSize.height + 12.0
+
+            self.upButton.isHidden = false
+            transition.updateAlpha(node: self.upButton, alpha: 1.0)
+            transition.updateTransformScale(node: self.upButton, scale: 1.0)
+        } else {
+            transition.updateAlpha(node: self.upButton, alpha: 0.0, completion: { [weak self] completed in
+                guard let strongSelf = self, completed else {
+                    return
+                }
+                strongSelf.upButton.isHidden = true
+            })
+            transition.updateTransformScale(node: self.upButton, scale: 0.2)
         }
         
         if self.mentionCount != 0 {
@@ -154,6 +272,7 @@ final class ChatHistoryNavigationButtons: ASDisplayNode {
         }
         
         if self.reactionsCount != 0 {
+            pollVotesOffset += buttonSize.height + 12.0
             self.reactionsButton.isHidden = false
             transition.updateAlpha(node: self.reactionsButton, alpha: 1.0)
             transition.updateTransformScale(node: self.reactionsButton, scale: 1.0)
@@ -167,11 +286,37 @@ final class ChatHistoryNavigationButtons: ASDisplayNode {
             transition.updateTransformScale(node: self.reactionsButton, scale: 0.2)
         }
         
-        transition.updatePosition(node: self.downButton, position: CGRect(origin: CGPoint(x: 0.0, y: completeSize.height - buttonSize.height), size: buttonSize).center)
+        if self.pollVotesCount != 0 {
+            self.pollVotesButton.isHidden = false
+            transition.updateAlpha(node: self.pollVotesButton, alpha: 1.0)
+            transition.updateTransformScale(node: self.pollVotesButton, scale: 1.0)
+        } else {
+            transition.updateAlpha(node: self.pollVotesButton, alpha: 0.0, completion: { [weak self] completed in
+                guard let strongSelf = self, completed else {
+                    return
+                }
+                strongSelf.pollVotesButton.isHidden = true
+            })
+            transition.updateTransformScale(node: self.pollVotesButton, scale: 0.2)
+        }
         
-        transition.updatePosition(node: self.mentionsButton, position: CGRect(origin: CGPoint(x: 0.0, y: completeSize.height - buttonSize.height - mentionsOffset), size: buttonSize).center)
+        if self.isChatRotated {
+            transition.updatePosition(node: self.downButton, position: CGRect(origin: CGPoint(x: 0.0, y: completeSize.height - buttonSize.height), size: buttonSize).center)
+            transition.updatePosition(node: self.upButton, position: CGRect(origin: CGPoint(x: 0.0, y: completeSize.height - buttonSize.height - upOffset), size: buttonSize).center)
+            transition.updatePosition(node: self.mentionsButton, position: CGRect(origin: CGPoint(x: 0.0, y: completeSize.height - buttonSize.height - mentionsOffset), size: buttonSize).center)
+            transition.updatePosition(node: self.reactionsButton, position: CGRect(origin: CGPoint(x: 0.0, y: completeSize.height - buttonSize.height - mentionsOffset - reactionsOffset), size: buttonSize).center)
+            transition.updatePosition(node: self.pollVotesButton, position: CGRect(origin: CGPoint(x: 0.0, y: completeSize.height - buttonSize.height - mentionsOffset - reactionsOffset - pollVotesOffset), size: buttonSize).center)
+        } else {
+            transition.updatePosition(node: self.downButton, position: CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: buttonSize).center)
+            transition.updatePosition(node: self.upButton, position: CGRect(origin: CGPoint(x: 0.0, y: upOffset), size: buttonSize).center)
+            transition.updatePosition(node: self.mentionsButton, position: CGRect(origin: CGPoint(x: 0.0, y: mentionsOffset), size: buttonSize).center)
+            transition.updatePosition(node: self.reactionsButton, position: CGRect(origin: CGPoint(x: 0.0, y: mentionsOffset + reactionsOffset), size: buttonSize).center)
+            transition.updatePosition(node: self.pollVotesButton, position: CGRect(origin: CGPoint(x: 0.0, y: mentionsOffset + reactionsOffset + pollVotesOffset), size: buttonSize).center)
+        }
         
-        transition.updatePosition(node: self.reactionsButton, position: CGRect(origin: CGPoint(x: 0.0, y: completeSize.height - buttonSize.height - mentionsOffset - reactionsOffset), size: buttonSize).center)
+        if let (rect, containerSize) = self.absoluteRect {
+            self.update(rect: rect, within: containerSize, transition: transition)
+        }
         
         return completeSize
     }

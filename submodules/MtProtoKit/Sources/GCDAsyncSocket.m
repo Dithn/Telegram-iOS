@@ -2401,25 +2401,15 @@ enum GCDAsyncSocketConfig
 	
 	int nosigpipe = 1;
 	setsockopt(socketFD, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
-    
-    int32_t rcvBuf = 1024 * 1024;
-    setsockopt(socketFD, SOL_SOCKET, SO_RCVBUF, &rcvBuf, 4);
-    
-    int32_t checkRcvBuf = 0;
-    unsigned int checkRcvBufLen = sizeof(checkRcvBuf);
-    getsockopt(socketFD, SOL_SOCKET, SO_RCVBUF, &checkRcvBuf, &checkRcvBufLen);
-    
-    int32_t sndBuf = 1024 * 1024;
-    setsockopt(socketFD, SOL_SOCKET, SO_SNDBUF, &sndBuf, 4);
-    
-    int32_t checkSndBuf = 0;
-    unsigned int checkSndBufLen = sizeof(checkSndBuf);
-    getsockopt(socketFD, SOL_SOCKET, SO_SNDBUF, &checkSndBuf, &checkSndBufLen);
-    
+
+    // Socket buffer sizes are left to the kernel. An explicit SO_RCVBUF/SO_SNDBUF
+    // clears SB_AUTOSIZE in XNU, which pinned every MTProto socket at 1 MiB and
+    // capped a single stream at 1 MiB per RTT on high-latency links.
+
     if (_useTcpNodelay || true)
     {
         int flag = 1;
-        setsockopt(socketFD, SOL_SOCKET, TCP_NODELAY, &flag, sizeof(flag));
+        setsockopt(socketFD, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
     }
 	
 	// Start the connection process in a background queue
@@ -2432,7 +2422,7 @@ enum GCDAsyncSocketConfig
 		int result = connect(socketFD, (const struct sockaddr *)[address bytes], (socklen_t)[address length]);
 		if (result == 0)
 		{
-            bool isWifi = false;
+            bool isWifi = true;
             
             struct sockaddr_in addr;
             struct ifaddrs* ifaddr;
@@ -4294,7 +4284,7 @@ enum GCDAsyncSocketConfig
 		return;
 	}
 	
-	BOOL hasBytesAvailable;
+	BOOL hasBytesAvailable = false;
 	unsigned long estimatedBytesAvailable;
 	
 	if ([self usingCFStreamForTLS])
@@ -5119,14 +5109,15 @@ enum GCDAsyncSocketConfig
 		result = [NSData dataWithBytesNoCopy:buffer length:currentRead->bytesDone freeWhenDone:NO];
 	}
 	
-	if (delegateQueue && [delegate respondsToSelector:@selector(socket:didReadData:withTag:)])
+    if (delegateQueue && [delegate respondsToSelector:@selector(socket:didReadData:withTag:networkType:)])
 	{
 		__strong id theDelegate = delegate;
 		GCDAsyncReadPacket *theRead = currentRead; // Ensure currentRead retained since result may not own buffer
+        int32_t networkType = _interface == MTNetworkUsageManagerInterfaceOther ? 0 : 1;
 		
 		dispatch_async(delegateQueue, ^{ @autoreleasepool {
 			
-			[theDelegate socket:self didReadData:result withTag:theRead->tag];
+			[theDelegate socket:self didReadData:result withTag:theRead->tag networkType:networkType];
 		}});
 	}
 	

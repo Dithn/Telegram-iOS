@@ -1,11 +1,12 @@
-#import "TGModernConversationInputMicButton.h"
+#import <LegacyComponents/TGModernConversationInputMicButton.h>
 
 #import "LegacyComponentsInternal.h"
 
 #import <LegacyComponents/TGModernButton.h>
-#import "TGOverlayController.h"
+#import <LegacyComponents/TGOverlayController.h>
 #import "TGColor.h"
-#import "TGImageUtils.h"
+#import <LegacyComponents/TGImageUtils.h>
+#import <LegacyComponents/TGPhotoEditorSparseView.h>
 
 static const CGFloat innerCircleRadius = 110.0f;
 static const CGFloat outerCircleRadius = innerCircleRadius + 50.0f;
@@ -97,6 +98,17 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
 
 @end
 
+@interface TGModernConversationInputMicButtonLockPanelViewNativeImpl : UIImageView<TGModernConversationInputMicButtonLockPanelView>
+
+@end
+
+@implementation TGModernConversationInputMicButtonLockPanelViewNativeImpl
+
+- (void)updateSize:(CGSize)size {
+}
+
+@end
+
 @interface TGModernConversationInputMicButton () <UIGestureRecognizerDelegate>
 {
     CGPoint _touchLocation;
@@ -115,7 +127,7 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     UIImageView *_innerIconView;
     
     UIView *_lockPanelWrapperView;
-    UIImageView *_lockPanelView;
+    UIView<TGModernConversationInputMicButtonLockPanelView> *_lockPanelView;
     UIImageView *_lockArrowView;
     TGModernConversationInputLockView *_lockView;
     UIImage *_previousIcon;
@@ -135,6 +147,8 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     CGFloat _inputLevel;
     bool _animatedIn;
     
+    bool _hidesPanelOnLock;
+    
     UIImage *_icon;
     
     id<TGModernConversationInputMicButtonPresentation> _presentation;
@@ -143,6 +157,8 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     
     BOOL _xFeedbackOccured;
     BOOL _yFeedbackOccured;
+    
+    bool _skipCancelUpdate;
 }
 
 @end
@@ -233,6 +249,39 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     _innerIconView.center = center;
 }
 
+// While the keyboard is up, -[ChatTextInputMediaRecordingButtonPresenter present] parks the overlay
+// container in UIRemoteKeyboardWindow, so the button and the overlay end up in two different windows.
+// On iOS 27 that keyboard window is hosted on a DIFFERENT UIScreen object than the app's window, even
+// though both cover the same display (measured; see docs/ios27-windows-and-touches.md). UIKit refuses to
+// convert between two screens' coordinate spaces: -convertPoint:toWindow: logs "Invalid UIScreen
+// coordinate space conversion" and returns a point derived from CGRectNull, whose infinite origin becomes
+// a NaN layer position at the assignments below and kills the app with CALayerInvalidGeometry. This runs
+// on every display-link tick while recording, so the mismatch has to be predicted rather than detected
+// after the fact - otherwise the invalid conversion is logged at frame rate.
+- (CGPoint)overlayCenterInView:(UIView *)parentView
+{
+    UIWindow *selfWindow = self.window;
+    CGPoint centerPointInSelfWindow = [selfWindow convertPoint:self.center fromView:self.superview];
+    
+    UIWindow *parentWindow = parentView.window;
+    if (parentWindow == nil || parentWindow == selfWindow) {
+        return [parentView convertPoint:centerPointInSelfWindow fromView:selfWindow];
+    }
+    
+    CGPoint centerPointInParentWindow;
+    if (parentWindow.screen == selfWindow.screen) {
+        centerPointInParentWindow = [selfWindow convertPoint:centerPointInSelfWindow toWindow:parentWindow];
+    } else {
+        // Both windows describe the same display, so relate them by their frames - which is what
+        // -convertPoint:toWindow: would have done had it accepted the pair. For two full-screen windows
+        // this is the identity.
+        centerPointInParentWindow = CGPointMake(centerPointInSelfWindow.x + CGRectGetMinX(selfWindow.frame) - CGRectGetMinX(parentWindow.frame),
+                                                centerPointInSelfWindow.y + CGRectGetMinY(selfWindow.frame) - CGRectGetMinY(parentWindow.frame));
+    }
+    
+    return [parentView convertPoint:centerPointInParentWindow fromView:parentWindow];
+}
+
 - (void)updateOverlay
 {
     if (_presentation == nil) {
@@ -240,16 +289,17 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     }
     UIView *parentView = [_presentation view];
     
-    CGPoint centerPointInSelfWindow = [self.window convertPoint:self.center fromView:self.superview];
-    CGPoint centerPointInParentViewWindow = [self.window convertPoint:centerPointInSelfWindow toWindow:parentView.window];
-    CGPoint centerPoint = [parentView.window convertPoint:centerPointInParentViewWindow toView:parentView];
+    CGPoint centerPoint = [self overlayCenterInView:parentView];
     
     centerPoint.x += _centerOffset.x;
     centerPoint.y += _centerOffset.y;
     _innerCircleView.center = centerPoint;
     _outerCircleView.center = centerPoint;
-    _decoration.center = centerPoint;
-    _innerIconWrapperView.center = CGPointMake(_decoration.frame.size.width / 2.0f, _decoration.frame.size.height / 2.0f);
+    // A decoration the host is flying into the sent message is positioned by the flight.
+    if (!_decorationAnimatesOutExternally) {
+        _decoration.center = centerPoint;
+        _innerIconWrapperView.center = CGPointMake(CGRectGetMidX(_decoration.bounds), CGRectGetMidY(_decoration.bounds));
+    }
     
     _lockPanelWrapperView.frame = CGRectMake(floor(centerPoint.x - _lockPanelWrapperView.frame.size.width / 2.0f), floor(centerPoint.y - 122.0f - _lockPanelWrapperView.frame.size.height / 2.0f), _lockPanelWrapperView.frame.size.width, _lockPanelWrapperView.frame.size.height);
     
@@ -263,7 +313,9 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     if (!update)
         return;
     
-    _lockPanelView.image = [self panelBackgroundImage];
+    if ([_lockPanelView isKindOfClass:[UIImageView class]]) {
+        ((UIImageView *)_lockPanelView).image = [self panelBackgroundImage];
+    }
     _lockArrowView.image = TGTintedImage(TGComponentsImageNamed(@"VideoRecordArrow"), self.pallete != nil ? self.pallete.lockColor : UIColorRGB(0x9597a0));
     _lockView.color = self.pallete.lockColor;
     
@@ -312,24 +364,31 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     CGContextSetStrokeColorWithColor(context, (self.pallete != nil ? self.pallete.borderColor : UIColorRGB(0xb2b2b2)).CGColor);
     CGContextSetLineWidth(context, TGScreenPixel);
     
-    CGRect rect1 = CGRectMake(TGScreenPixel / 2.0f, TGScreenPixel / 2.0f, 40.0f - TGScreenPixel, 40.0 - TGScreenPixel);
-    CGContextFillEllipseInRect(context, rect1);
-    CGContextStrokeEllipseInRect(context, rect1);
     
-    CGRect iconRect = CGRectInset(rect1, 12.0f, 12.0f);
-    CGFloat radius = 1.0f;
+    CGContextAddPath(context, [UIBezierPath bezierPathWithRoundedRect:CGRectMake(12.0, 12.0, 5.0, 14.0) cornerRadius:1.0].CGPath);
+    CGContextFillPath(context);
     
-    CGFloat minx = CGRectGetMinX(iconRect), midx = CGRectGetMidX(iconRect), maxx = CGRectGetMaxX(iconRect);
-    CGFloat miny = CGRectGetMinY(iconRect), midy = CGRectGetMidY(iconRect), maxy = CGRectGetMaxY(iconRect);
+    CGContextAddPath(context, [UIBezierPath bezierPathWithRoundedRect:CGRectMake(40.0 - 12.0 - 5.0, 12.0, 5.0, 14.0) cornerRadius:1.0].CGPath);
+    CGContextFillPath(context);
     
-    CGContextSetFillColorWithColor(context, [UIColor clearColor].CGColor);
-    
-    CGContextMoveToPoint(context, minx, midy);
-    CGContextAddArcToPoint(context, minx, miny, midx, miny, radius);
-    CGContextAddArcToPoint(context, maxx, miny, maxx, midy, radius);
-    CGContextAddArcToPoint(context, maxx, maxy, midx, maxy, radius);
-    CGContextAddArcToPoint(context, minx, maxy, minx, midy, radius);
-    CGContextClosePath(context);
+//    CGRect rect1 = CGRectMake(TGScreenPixel / 2.0f, TGScreenPixel / 2.0f, 40.0f - TGScreenPixel, 40.0 - TGScreenPixel);
+//    CGContextFillEllipseInRect(context, rect1);
+//    CGContextStrokeEllipseInRect(context, rect1);
+//    
+//    CGRect iconRect = CGRectInset(rect1, 12.0f, 12.0f);
+//    CGFloat radius = 1.0f;
+//    
+//    CGFloat minx = CGRectGetMinX(iconRect), midx = CGRectGetMidX(iconRect), maxx = CGRectGetMaxX(iconRect);
+//    CGFloat miny = CGRectGetMinY(iconRect), midy = CGRectGetMidY(iconRect), maxy = CGRectGetMaxY(iconRect);
+//    
+//    CGContextSetFillColorWithColor(context, [UIColor clearColor].CGColor);
+//    
+//    CGContextMoveToPoint(context, minx, midy);
+//    CGContextAddArcToPoint(context, minx, miny, midx, miny, radius);
+//    CGContextAddArcToPoint(context, maxx, miny, maxx, midy, radius);
+//    CGContextAddArcToPoint(context, maxx, maxy, midx, maxy, radius);
+//    CGContextAddArcToPoint(context, minx, maxy, minx, midy, radius);
+//    CGContextClosePath(context);
     
     CGContextSetFillColorWithColor(context, (self.pallete != nil ? self.pallete.buttonColor : TGAccentColor()).CGColor);
     CGContextDrawPath(context, kCGPathFill);
@@ -337,6 +396,13 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     UIImage *stopButtonImage = [UIGraphicsGetImageFromCurrentImageContext() stretchableImageWithLeftCapWidth:19 topCapHeight:19];
     UIGraphicsEndImageContext();
     return stopButtonImage;
+}
+
+- (UIView<TGModernConversationInputMicButtonLockPanelView> *)createLockPanelView {
+    TGModernConversationInputMicButtonLockPanelViewNativeImpl *view = [[TGModernConversationInputMicButtonLockPanelViewNativeImpl alloc] initWithFrame:CGRectMake(0.0f, 0.0f, 40.0f, 72.0f)];
+    view.userInteractionEnabled = true;
+    view.image = [self panelBackgroundImage];
+    return view;
 }
 
 - (void)animateIn {
@@ -368,12 +434,10 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
             };
         }
                 
-        _lockPanelWrapperView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, 40.0f, 72.0f)];
+        _lockPanelWrapperView = [[TGPhotoEditorSparseView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, 40.0f, 72.0f)];
         [[_presentation view] addSubview:_lockPanelWrapperView];
         
-        _lockPanelView = [[UIImageView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, 40.0f, 72.0f)];
-        _lockPanelView.userInteractionEnabled = true;
-        _lockPanelView.image = [self panelBackgroundImage];
+        _lockPanelView = [self createLockPanelView];
         
         [_lockPanelWrapperView addSubview:_lockPanelView];
         
@@ -426,7 +490,10 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
         if (_lock == nil) {
             _stopButton = [[TGModernButton alloc] initWithFrame:CGRectMake(0.0f, 0.0f, 40.0f, 40.0f)];
             _stopButton.accessibilityLabel = TGLocalized(@"VoiceOver.Recording.StopAndPreview");
+            #pragma clang diagnostic push
+            #pragma clang diagnostic ignored "-Wdeprecated-declarations" // legacy non-configuration UIButton: property is still honored
             _stopButton.adjustsImageWhenHighlighted = false;
+            #pragma clang diagnostic pop
             _stopButton.exclusiveTouch = true;
             [_stopButton setImage:[self stopButtonImage] forState:UIControlStateNormal];
             _stopButton.userInteractionEnabled = false;
@@ -456,7 +523,7 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     _outerCircleView.alpha = 0.2f;
     _decoration.alpha = 0.2;
     
-    _lockPanelWrapperView.transform = CGAffineTransformMakeTranslation(0.0f, 100.0f);
+    _lockPanelWrapperView.transform = CGAffineTransformMakeTranslation(0.0f, _locked ? 36.0 : 100.0f);
     _lockPanelWrapperView.alpha = 0.0f;
     
     _lock.transform = CGAffineTransformIdentity;
@@ -490,7 +557,9 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     [self displayLink].paused = false;
     
     if (_locked) {
+        _skipCancelUpdate = true;
         [self animateLock];
+        _skipCancelUpdate = false;
     }
 }
 
@@ -513,7 +582,10 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     [UIView animateWithDuration:0.18 animations:^{
         _innerCircleView.transform = CGAffineTransformMakeScale(0.2f, 0.2f);
         _outerCircleView.transform = CGAffineTransformMakeScale(0.2f, 0.2f);
-        if (toSmallSize) {
+        if (_decorationAnimatesOutExternally) {
+            // The host is flying the decoration into the sent message; only the icon on it fades.
+            _innerIconWrapperView.alpha = 0.0f;
+        } else if (toSmallSize) {
             _decoration.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.33f, 0.33f), CGAffineTransformMakeTranslation(0, 2 - TGScreenPixel));
             //_innerIconWrapperView.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.492f, 0.492f), CGAffineTransformMakeTranslation(-TGScreenPixel, 1));
         } else {
@@ -537,8 +609,11 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
         _stopButton.alpha = 0.0f;
     } completion:^(BOOL finished) {
         if (finished || [[[LegacyComponentsGlobals provider] applicationInstance] applicationState] == UIApplicationStateBackground) {
-            [_presentation dismiss];
-            _presentation = nil;
+            // A host flying the decoration out dismisses the presentation itself, once the decoration has arrived.
+            if (!_decorationAnimatesOutExternally) {
+                [_presentation dismiss];
+                _presentation = nil;
+            }
             
             id<TGModernConversationInputMicButtonDelegate> delegate = _delegate;
             if ([delegate respondsToSelector:@selector(micButtonInteractionUpdateCancelTranslation:)])
@@ -557,6 +632,30 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     _presentation = nil;
 }
 
+- (void)setHidesPanelOnLock {
+    _hidesPanelOnLock = true;
+}
+
++ (UIImage *)stopIconImage
+{
+    static dispatch_once_t onceToken;
+    static UIImage *iconImage;
+    dispatch_once(&onceToken, ^
+    {
+        CGRect rect = CGRectMake(0, 0, 22.0f, 22.0f);
+        UIGraphicsBeginImageContextWithOptions(rect.size, false, 0);
+        CGContextRef context = UIGraphicsGetCurrentContext();
+        
+        CGContextAddPath(context, [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, 22, 22) cornerRadius:7].CGPath);
+        CGContextSetFillColorWithColor(context, UIColorRGBA(0x0ffffff, 1.3f).CGColor);
+        CGContextFillPath(context);
+        
+        iconImage = UIGraphicsGetImageFromCurrentImageContext();
+        UIGraphicsEndImageContext();
+    });
+    return iconImage;
+}
+
 - (void)animateLock {
     if (!_animatedIn) {
         return;
@@ -569,13 +668,14 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     snapshotView.frame = _innerIconView.frame;
     [_innerIconWrapperView insertSubview:snapshotView atIndex:0];
     
+    UIImage *icon = _hidesPanelOnLock ? [TGModernConversationInputMicButton stopIconImage] : TGComponentsImageNamed(@"RecordSendIcon");
     _previousIcon = _innerIconView.image;
-    [self setIcon:TGTintedImage(TGComponentsImageNamed(@"RecordSendIcon"), _pallete != nil ? _pallete.iconColor : [UIColor whiteColor])];
+    [self setIcon:TGTintedImage(icon, _pallete != nil && !_hidesPanelOnLock ? _pallete.iconColor : [UIColor whiteColor])];
     
     _currentScale = 1;
     _cancelTargetTranslation = 0;
     id<TGModernConversationInputMicButtonDelegate> delegate = _delegate;
-    if ([delegate respondsToSelector:@selector(micButtonInteractionUpdateCancelTranslation:)])
+    if ([delegate respondsToSelector:@selector(micButtonInteractionUpdateCancelTranslation:)] && !_skipCancelUpdate)
         [delegate micButtonInteractionUpdateCancelTranslation:-_cancelTargetTranslation];
     
     _innerIconView.transform = CGAffineTransformMakeScale(0.3f, 0.3f);
@@ -588,6 +688,8 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
         [snapshotView removeFromSuperview];
     }];
     
+    [_lockPanelView updateSize:CGSizeMake(_lockPanelView.frame.size.width, 72.0f - 32.0f)];
+    
     [UIView animateWithDuration:0.2 animations:^
     {
         snapshotView.alpha = 0.0f;
@@ -598,6 +700,15 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
         _lock.transform = CGAffineTransformMakeTranslation(0.0f, -16.0f);
         _lockArrowView.transform = CGAffineTransformMakeTranslation(0.0f, -39.0f);
         _lockArrowView.alpha = 0.0f;
+        
+        if (_hidesPanelOnLock) {
+            _lockPanelView.transform = CGAffineTransformScale(_lockPanelView.transform, 0.01, 0.01);
+            _lockPanelView.alpha = 0.0;
+        }
+    } completion:^(BOOL finished) {
+        if (_hidesPanelOnLock) {
+            [_lockPanelWrapperView removeFromSuperview];
+        }
     }];
     
     if (_lock == nil) {
@@ -850,6 +961,8 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
     _currentTranslation = MIN(0.0, _currentTranslation * 0.7f + _targetTranslation * 0.3f);
     _cancelTranslation = MIN(0.0, _cancelTranslation * 0.7f + _cancelTargetTranslation * 0.3f);
     
+    [self updateOverlay];
+    
     if (t > _animationStartTime) {
         CGFloat outerScale = outerCircleMinScale + _currentLevel * (1.0f - outerCircleMinScale);
         CGAffineTransform translation = CGAffineTransformMakeTranslation(0, _currentTranslation);
@@ -865,7 +978,9 @@ static const CGFloat outerCircleMinScale = innerCircleRadius / outerCircleRadius
         
         _innerCircleView.transform = transform;
         //_innerIconWrapperView.transform = transform;
-        _decoration.transform = transform;
+        if (!_decorationAnimatesOutExternally) {
+            _decoration.transform = transform;
+        }
     }
 }
 

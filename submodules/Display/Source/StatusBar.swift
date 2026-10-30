@@ -26,6 +26,11 @@ public class StatusBarSurface {
 }
 
 open class CallStatusBarNode: ASDisplayNode {
+    /// How far the node draws below its bounds. The bar slides this much further out when it is shown or hidden.
+    open var bottomOverhang: CGFloat {
+        return 0.0
+    }
+    
     open func update(size: CGSize) {
         
     }
@@ -81,7 +86,7 @@ public final class StatusBar: ASDisplayNode {
         }
     }
     
-    var alphaUpdated: ((ContainedViewLayoutTransition) -> Void)?
+    public var alphaUpdated: ((ContainedViewLayoutTransition) -> Void)?
     
     public func updateAlpha(_ alpha: CGFloat, transition: ContainedViewLayoutTransition) {
         self.alpha = alpha

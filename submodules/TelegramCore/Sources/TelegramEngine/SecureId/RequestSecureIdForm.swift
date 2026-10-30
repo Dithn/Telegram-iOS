@@ -2,7 +2,7 @@ import Foundation
 import Postbox
 import MtProtoKit
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 
 
 public enum RequestSecureIdFormError {
@@ -44,7 +44,8 @@ private func parseSecureValueType(_ type: Api.SecureValueType, selfie: Bool, tra
 
 private func parseSecureData(_ value: Api.SecureData) -> (data: Data, hash: Data, secret: Data) {
     switch value {
-        case let .secureData(data, dataHash, secret):
+        case let .secureData(secureDataData):
+            let (data, dataHash, secret) = (secureDataData.data, secureDataData.dataHash, secureDataData.secret)
             return (data.makeData(), dataHash.makeData(), secret.makeData())
     }
 }
@@ -55,7 +56,8 @@ struct ParsedSecureValue {
 
 func parseSecureValue(context: SecureIdAccessContext, value: Api.SecureValue, errors: [Api.SecureValueError]) -> ParsedSecureValue? {
     switch value {
-        case let .secureValue(_, type, data, frontSide, reverseSide, selfie, translation, files, plainData, hash):
+        case let .secureValue(secureValueData):
+            let (_, type, data, frontSide, reverseSide, selfie, translation, files, plainData, hash) = (secureValueData.flags, secureValueData.type, secureValueData.data, secureValueData.frontSide, secureValueData.reverseSide, secureValueData.selfie, secureValueData.translation, secureValueData.files, secureValueData.plainData, secureValueData.hash)
             let parsedFileReferences = files.flatMap { $0.compactMap(SecureIdFileReference.init) } ?? []
             let parsedFiles = parsedFileReferences.map(SecureIdVerificationDocumentReference.remote)
             let parsedTranslationReferences = translation.flatMap { $0.compactMap(SecureIdFileReference.init) } ?? []
@@ -204,7 +206,8 @@ func parseSecureValue(context: SecureIdAccessContext, value: Api.SecureValue, er
                         return nil
                     }
                     switch publicData {
-                        case let .securePlainPhone(phone):
+                        case let .securePlainPhone(securePlainPhoneData):
+                            let (phone) = (securePlainPhoneData.phone)
                             value = .phone(SecureIdPhoneValue(phone: phone))
                         default:
                             return nil
@@ -214,7 +217,8 @@ func parseSecureValue(context: SecureIdAccessContext, value: Api.SecureValue, er
                         return nil
                     }
                     switch publicData {
-                        case let .securePlainEmail(email):
+                        case let .securePlainEmail(securePlainEmailData):
+                            let (email) = (securePlainEmailData.email)
                             value = .email(SecureIdEmailValue(email: email))
                         default:
                             return nil
@@ -240,7 +244,7 @@ public struct EncryptedSecureIdForm {
     let errors: [Api.SecureValueError]
 }
 
-public func requestSecureIdForm(postbox: Postbox, network: Network, peerId: PeerId, scope: String, publicKey: String) -> Signal<EncryptedSecureIdForm, RequestSecureIdFormError> {
+public func requestSecureIdForm(accountPeerId: PeerId, postbox: Postbox, network: Network, peerId: PeerId, scope: String, publicKey: String) -> Signal<EncryptedSecureIdForm, RequestSecureIdFormError> {
     if peerId.namespace != Namespaces.Peer.CloudUser {
         return .fail(.serverError("BOT_INVALID"))
     }
@@ -262,24 +266,21 @@ public func requestSecureIdForm(postbox: Postbox, network: Network, peerId: Peer
     |> mapToSignal { result -> Signal<EncryptedSecureIdForm, RequestSecureIdFormError> in
         return postbox.transaction { transaction -> EncryptedSecureIdForm in
             switch result {
-                case let .authorizationForm(_, requiredTypes, values, errors, users, termsUrl):
-                    var peers: [Peer] = []
-                    for user in users {
-                        let parsed = TelegramUser(user: user)
-                        peers.append(parsed)
-                    }
-                    updatePeers(transaction: transaction, peers: peers, update: { _, updated in
-                        return updated
-                    })
+                case let .authorizationForm(authorizationFormData):
+                    let (_, requiredTypes, values, errors, users, termsUrl) = (authorizationFormData.flags, authorizationFormData.requiredTypes, authorizationFormData.values, authorizationFormData.errors, authorizationFormData.users, authorizationFormData.privacyPolicyUrl)
+                    updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: AccumulatedPeers(users: users))
                     
                     return EncryptedSecureIdForm(peerId: peerId, requestedFields: requiredTypes.map { requiredType in
                         switch requiredType {
-                            case let .secureRequiredType(flags, type):
+                            case let .secureRequiredType(secureRequiredTypeData):
+                                let (flags, type) = (secureRequiredTypeData.flags, secureRequiredTypeData.type)
                                 return .just(parseSecureValueType(type, selfie: (flags & 1 << 1) != 0, translation: (flags & 1 << 2) != 0, nativeNames: (flags & 1 << 0) != 0))
-                            case let .secureRequiredTypeOneOf(types):
+                            case let .secureRequiredTypeOneOf(secureRequiredTypeOneOfData):
+                                let (types) = (secureRequiredTypeOneOfData.types)
                                 let parsedInnerTypes = types.compactMap { innerType -> SecureIdRequestedFormFieldValue? in
                                     switch innerType {
-                                        case let .secureRequiredType(flags, type):
+                                        case let .secureRequiredType(secureRequiredTypeData):
+                                            let (flags, type) = (secureRequiredTypeData.flags, secureRequiredTypeData.type)
                                             return parseSecureValueType(type, selfie: (flags & 1 << 1) != 0, translation: (flags & 1 << 2) != 0, nativeNames: (flags & 1 << 0) != 0)
                                         case .secureRequiredTypeOneOf:
                                             return nil

@@ -1,4 +1,4 @@
-#import "TGMenuSheetItemView.h"
+#import <LegacyComponents/TGMenuSheetItemView.h>
 
 #import "LegacyComponentsInternal.h"
 
@@ -117,22 +117,6 @@
 }
 
 - (void)menuView:(TGMenuSheetView *)__unused menuView didDisappearAnimated:(bool)__unused animated
-{
-}
-
-#pragma mark - 
-
-- (UIView *)previewSourceView
-{
-    return nil;
-}
-
-- (UIViewController *)previewingContext:(id<UIViewControllerPreviewing>)__unused previewingContext viewControllerForLocation:(CGPoint)__unused location
-{
-    return nil;
-}
-
-- (void)previewingContext:(id<UIViewControllerPreviewing>)__unused previewingContext commitViewController:(UIViewController *)__unused viewControllerToCommit
 {
 }
 

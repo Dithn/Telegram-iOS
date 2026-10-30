@@ -1,4 +1,5 @@
 import Foundation
+import LottieSettings
 import UIKit
 import AsyncDisplayKit
 import Display
@@ -26,7 +27,7 @@ final class LocationPlaceholderNode: ASDisplayNode {
     var settingsPressed: () -> Void = {}
     var cameraPressed: () -> Void = {}
     
-    init(content: Content) {
+    init(content: Content, lottieSettings: LottieRenderingSettings) {
         self.content = content
         
         let name: String
@@ -37,7 +38,7 @@ final class LocationPlaceholderNode: ASDisplayNode {
                 playbackMode = .loop
         }
         
-        self.animationNode = AnimatedStickerNode()
+        self.animationNode = DefaultAnimatedStickerNodeImpl(lottieSettings: lottieSettings)
         self.animationNode.setup(source: AnimatedStickerNodeLocalFileSource(name: name), width: 320, height: 320, playbackMode: playbackMode, mode: .direct(cachePathPrefix: nil))
         self.animationNode.visibility = true
         
@@ -52,7 +53,7 @@ final class LocationPlaceholderNode: ASDisplayNode {
         self.textNode.textAlignment = .center
         self.textNode.maximumNumberOfLines = 0
         
-        self.buttonNode = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(backgroundColor: .black, foregroundColor: .white), height: 50.0, cornerRadius: 12.0, gloss: true)
+        self.buttonNode = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(backgroundColor: .black, foregroundColor: .white), height: 50.0, cornerRadius: 11.0, isShimmering: true)
         
         self.cameraTextNode = ImmediateTextNode()
         self.cameraTextNode.isUserInteractionEnabled = false
@@ -80,7 +81,7 @@ final class LocationPlaceholderNode: ASDisplayNode {
         
         var imageSize = CGSize(width: 144.0, height: 144.0)
         var insets = layout.insets(options: [])
-        if layout.size.width == 460.0 {
+        if layout.size.width == 320.0 {
             insets.top += -60.0
             imageSize = CGSize(width: 112.0, height: 112.0)
         } else {

@@ -22,6 +22,11 @@ swift_library(
         "//submodules/LocalizedPeerData:LocalizedPeerData",
         "//submodules/AccountContext:AccountContext",
         "//submodules/CheckNode:CheckNode",
+        "//submodules/ComponentFlow:ComponentFlow",
+        "//submodules/TelegramUI/Components/EmojiStatusComponent:EmojiStatusComponent",
+        "//submodules/TelegramUIPreferences",
+        "//submodules/TelegramUI/Components/AnimationCache",
+        "//submodules/TelegramUI/Components/MultiAnimationRenderer",
     ],
     visibility = [
         "//visibility:public",

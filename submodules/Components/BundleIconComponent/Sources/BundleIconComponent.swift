@@ -7,10 +7,22 @@ import Display
 public final class BundleIconComponent: Component {
     public let name: String
     public let tintColor: UIColor?
+    public let maxSize: CGSize?
+    public let scaleFactor: CGFloat
+    public let shadowColor: UIColor?
+    public let shadowBlur: CGFloat
+    public let flipHorizontally: Bool
+    public let flipVertically: Bool
     
-    public init(name: String, tintColor: UIColor?) {
+    public init(name: String, tintColor: UIColor?, maxSize: CGSize? = nil, scaleFactor: CGFloat = 1.0, shadowColor: UIColor? = nil, shadowBlur: CGFloat = 0.0, flipHorizontally: Bool = false, flipVertically: Bool = false) {
         self.name = name
         self.tintColor = tintColor
+        self.maxSize = maxSize
+        self.scaleFactor = scaleFactor
+        self.shadowColor = shadowColor
+        self.shadowBlur = shadowBlur
+        self.flipHorizontally = flipHorizontally
+        self.flipVertically = flipVertically
     }
     
     public static func ==(lhs: BundleIconComponent, rhs: BundleIconComponent) -> Bool {
@@ -20,7 +32,25 @@ public final class BundleIconComponent: Component {
         if lhs.tintColor != rhs.tintColor {
             return false
         }
-        return false
+        if lhs.maxSize != rhs.maxSize {
+            return false
+        }
+        if lhs.scaleFactor != rhs.scaleFactor {
+            return false
+        }
+        if lhs.shadowColor != rhs.shadowColor {
+            return false
+        }
+        if lhs.shadowBlur != rhs.shadowBlur {
+            return false
+        }
+        if lhs.flipHorizontally != rhs.flipHorizontally {
+            return false
+        }
+        if lhs.flipVertically != rhs.flipVertically {
+            return false
+        }
+        return true
     }
     
     public final class View: UIImageView {
@@ -34,17 +64,42 @@ public final class BundleIconComponent: Component {
             fatalError("init(coder:) has not been implemented")
         }
         
-        func update(component: BundleIconComponent, availableSize: CGSize, transition: Transition) -> CGSize {
-            if self.component?.name != component.name || self.component?.tintColor != component.tintColor {
+        func update(component: BundleIconComponent, availableSize: CGSize, transition: ComponentTransition) -> CGSize {
+            if self.component?.name != component.name || self.component?.tintColor != component.tintColor || self.component?.shadowColor != component.shadowColor || self.component?.shadowBlur != component.shadowBlur || self.component?.flipVertically != component.flipVertically {
+                var image: UIImage?
                 if let tintColor = component.tintColor {
-                    self.image = generateTintedImage(image: UIImage(bundleImageName: component.name), color: tintColor, backgroundColor: nil)
+                    image = generateTintedImage(image: UIImage(bundleImageName: component.name), color: tintColor, backgroundColor: nil)
                 } else {
-                    self.image = UIImage(bundleImageName: component.name)
+                    image = UIImage(bundleImageName: component.name)
+                }
+                if let imageValue = image, let shadowColor = component.shadowColor, component.shadowBlur != 0.0 {
+                    image = generateImage(CGSize(width: imageValue.size.width + component.shadowBlur * 2.0, height: imageValue.size.height + component.shadowBlur * 2.0), contextGenerator: { size, context in
+                        context.clear(CGRect(origin: CGPoint(), size: size))
+                        context.setShadow(offset: CGSize(), blur: component.shadowBlur, color: shadowColor.cgColor)
+                        
+                        if let cgImage = imageValue.cgImage {
+                            context.draw(cgImage, in: CGRect(origin: CGPoint(x: component.shadowBlur, y: component.shadowBlur), size: imageValue.size))
+                        }
+                    })
+                }
+                if component.flipHorizontally, let cgImage = image?.cgImage {
+                    self.image = UIImage(cgImage: cgImage, scale: image?.scale ?? 0.0, orientation: .upMirrored)
+                } else if component.flipVertically, let cgImage = image?.cgImage {
+                    self.image = UIImage(cgImage: cgImage, scale: image?.scale ?? 0.0, orientation: .down)
+                } else {
+                    self.image = image
                 }
             }
             self.component = component
             
-            let imageSize = self.image?.size ?? CGSize()
+            var imageSize = self.image?.size ?? CGSize()
+            if let maxSize = component.maxSize {
+                imageSize = imageSize.aspectFitted(maxSize)
+            }
+            if component.scaleFactor != 1.0 {
+                imageSize.width = floor(imageSize.width * component.scaleFactor)
+                imageSize.height = floor(imageSize.height * component.scaleFactor)
+            }
             
             return CGSize(width: min(imageSize.width, availableSize.width), height: min(imageSize.height, availableSize.height))
         }
@@ -54,7 +109,7 @@ public final class BundleIconComponent: Component {
         return View(frame: CGRect())
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, transition: transition)
     }
 }

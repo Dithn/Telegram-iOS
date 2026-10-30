@@ -1,17 +1,21 @@
 import Foundation
 import Postbox
-import TelegramApi
+internal import TelegramApi
 
 
 extension TelegramPeerNotificationSettings {
     convenience init(apiSettings: Api.PeerNotifySettings) {
         switch apiSettings {
-        case let .peerNotifySettings(_, showPreviews, _, muteUntil, iosSound, _, desktopSound):
+        case let .peerNotifySettings(peerNotifySettingsData):
+            let (showPreviews, muteUntil, iosSound, desktopSound, storiesMuted, storiesHideSender, storiesIosSound, storiesDesktopSound) = (peerNotifySettingsData.showPreviews, peerNotifySettingsData.muteUntil, peerNotifySettingsData.iosSound, peerNotifySettingsData.otherSound, peerNotifySettingsData.storiesMuted, peerNotifySettingsData.storiesHideSender, peerNotifySettingsData.storiesIosSound, peerNotifySettingsData.storiesOtherSound)
             let sound: Api.NotificationSound?
+            let storiesSound: Api.NotificationSound?
             #if os(iOS)
             sound = iosSound
+            storiesSound = storiesIosSound
             #elseif os(macOS)
             sound = desktopSound
+            storiesSound = storiesDesktopSound
             #endif
             
             let muteState: PeerMuteState
@@ -34,7 +38,26 @@ extension TelegramPeerNotificationSettings {
             } else {
                 displayPreviews = .default
             }
-            self.init(muteState: muteState, messageSound: PeerMessageSound(apiSound: sound ?? .notificationSoundDefault), displayPreviews: displayPreviews)
+            
+            let storiesMutedValue: PeerStoryNotificationSettings.Mute
+            if let storiesMuted = storiesMuted {
+                storiesMutedValue = storiesMuted == .boolTrue ? .muted : .unmuted
+            } else {
+                storiesMutedValue = .default
+            }
+            
+            var storiesHideSenderValue: PeerStoryNotificationSettings.HideSender
+            if let storiesHideSender = storiesHideSender {
+                storiesHideSenderValue = storiesHideSender == .boolTrue ? .hide : .show
+            } else {
+                storiesHideSenderValue = .default
+            }
+            
+            self.init(muteState: muteState, messageSound: PeerMessageSound(apiSound: sound ?? .notificationSoundDefault), displayPreviews: displayPreviews, storySettings: PeerStoryNotificationSettings(
+                mute: storiesMutedValue,
+                hideSender: storiesHideSenderValue,
+                sound: PeerMessageSound(apiSound: storiesSound ?? .notificationSoundDefault)
+            ))
         }
     }
 }
@@ -46,7 +69,8 @@ extension PeerMessageSound {
             self = .default
         case .notificationSoundNone:
             self = .none
-        case let .notificationSoundLocal(_, data):
+        case let .notificationSoundLocal(notificationSoundLocalData):
+            let (_, data) = (notificationSoundLocalData.title, notificationSoundLocalData.data)
             var rawApiSound = data
             if let index = rawApiSound.firstIndex(of: ".") {
                 rawApiSound = String(rawApiSound[..<index])
@@ -72,7 +96,8 @@ extension PeerMessageSound {
                 }
             }
             self = parsedSound
-        case let .notificationSoundRingtone(id):
+        case let .notificationSoundRingtone(notificationSoundRingtoneData):
+            let id = notificationSoundRingtoneData.id
             self = .cloud(fileId: id)
         }
     }
@@ -85,12 +110,12 @@ extension PeerMessageSound {
             return .notificationSoundDefault
         case let .bundledModern(id):
             let string = "\(id + 100)"
-            return .notificationSoundLocal(title: string, data: string)
+            return .notificationSoundLocal(.init(title: string, data: string))
         case let .bundledClassic(id):
             let string = "\(id + 2)"
-            return .notificationSoundLocal(title: string, data: string)
+            return .notificationSoundLocal(.init(title: string, data: string))
         case let .cloud(fileId):
-            return .notificationSoundRingtone(id: fileId)
+            return .notificationSoundRingtone(.init(id: fileId))
         }
     }
 }

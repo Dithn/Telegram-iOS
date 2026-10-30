@@ -1,31 +1,30 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 
 func _internal_requestStartBot(account: Account, botPeerId: PeerId, payload: String?) -> Signal<Void, NoError> {
     if let payload = payload, !payload.isEmpty {
         return account.postbox.loadedPeerWithId(botPeerId)
-            |> mapToSignal { botPeer -> Signal<Void, NoError> in
-                if let inputUser = apiInputUser(botPeer) {
-                    let r = account.network.request(Api.functions.messages.startBot(bot: inputUser, peer: .inputPeerEmpty, randomId: Int64.random(in: Int64.min ... Int64.max), startParam: payload))
-                        |> mapToSignal { result -> Signal<Void, MTRpcError> in
-                            account.stateManager.addUpdates(result)
-                            return .complete()
-                        }
-                        |> `catch` { _ -> Signal<Void, MTRpcError> in
-                            return .complete()
-                        }
-                    return r
-                        |> retryRequest
-                } else {
+        |> mapToSignal { botPeer -> Signal<Void, NoError> in
+            if let inputUser = apiInputUser(botPeer) {
+                return account.network.request(Api.functions.messages.startBot(bot: inputUser, peer: .inputPeerEmpty, randomId: Int64.random(in: Int64.min ... Int64.max), startParam: payload))
+                |> mapToSignal { result -> Signal<Void, MTRpcError> in
+                    account.stateManager.addUpdates(result)
                     return .complete()
                 }
+                |> `catch` { _ -> Signal<Void, MTRpcError> in
+                    return .complete()
+                }
+                |> retryRequest
+            } else {
+                return .complete()
             }
+        }
     } else {
-        return enqueueMessages(account: account, peerId: botPeerId, messages: [.message(text: "/start", attributes: [], mediaReference: nil, replyToMessageId: nil, localGroupingKey: nil, correlationId: nil)]) |> mapToSignal { _ -> Signal<Void, NoError> in
+        return enqueueMessages(account: account, peerId: botPeerId, messages: [.message(text: "/start", attributes: [], inlineStickers: [:], mediaReference: nil, threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])]) |> mapToSignal { _ -> Signal<Void, NoError> in
             return .complete()
         }
     }
@@ -59,11 +58,11 @@ func _internal_requestStartBotInGroup(account: Account, botPeerId: PeerId, group
                     |> mapToSignal { participant -> Signal<StartBotInGroupResult, RequestStartBotInGroupError> in
                         return account.postbox.transaction { transaction -> StartBotInGroupResult in
                             if let participant = participant, let peer = transaction.getPeer(participant.peerId) {
-                                var peers: [PeerId: Peer] = [:]
+                                var peers: [EnginePeer.Id: EnginePeer] = [:]
                                 let presences: [PeerId: PeerPresence] = [:]
-                                
-                                peers[peer.id] = peer
-                                return .channelParticipant(RenderedChannelParticipant(participant: participant, peer: peer, peers: peers, presences: presences))
+
+                                peers[peer.id] = EnginePeer(peer)
+                                return .channelParticipant(RenderedChannelParticipant(participant: participant, peer: EnginePeer(peer), peers: peers, presences: presences))
                             } else {
                                 return .none
                             }

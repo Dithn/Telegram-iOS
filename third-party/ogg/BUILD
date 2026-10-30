@@ -1,8 +1,8 @@
- 
-objc_library(
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
     name = "ogg",
-    enable_modules = True,
-    module_name = "ogg",
     srcs = glob([
         "Sources/*.c",
         "Sources/*.h",

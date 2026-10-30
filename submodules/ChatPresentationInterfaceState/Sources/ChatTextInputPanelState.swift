@@ -3,13 +3,53 @@ import AccountContext
 import SwiftSignalKit
 
 public enum ChatTextInputAccessoryItem: Equatable {
-    case keyboard
-    case stickers(Bool)
-    case inputButtons
+    public enum Key: Hashable {
+        case input
+        case botInput
+        case commands
+        case silentPost
+        case messageAutoremoveTimeout
+        case scheduledMessages
+        case gift
+        case suggestPost
+    }
+    
+    public enum InputMode: Hashable {
+        case keyboard
+        case stickers
+        case emoji
+        case bot
+    }
+    case input(isEnabled: Bool, inputMode: InputMode)
+    case botInput(isEnabled: Bool, inputMode: InputMode)
+        
     case commands
     case silentPost(Bool)
     case messageAutoremoveTimeout(Int32?)
     case scheduledMessages
+    case gift
+    case suggestPost
+    
+    public var key: Key {
+        switch self {
+        case .input:
+            return .input
+        case .botInput:
+            return .botInput
+        case .commands:
+            return .commands
+        case .silentPost:
+            return .silentPost
+        case .messageAutoremoveTimeout:
+            return .messageAutoremoveTimeout
+        case .scheduledMessages:
+            return .scheduledMessages
+        case .gift:
+            return .gift
+        case .suggestPost:
+            return .suggestPost
+        }
+    }
 }
 
 public final class InstantVideoControllerRecordingStatus {

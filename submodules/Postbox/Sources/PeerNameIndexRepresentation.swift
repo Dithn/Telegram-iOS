@@ -1,27 +1,27 @@
 import Foundation
 
 public enum PeerIndexNameRepresentation: Equatable {
-    case title(title: String, addressName: String?)
-    case personName(first: String, last: String, addressName: String?, phoneNumber: String?)
+    case title(title: String, addressNames: [String])
+    case personName(first: String, last: String, addressNames: [String], phoneNumber: String?)
     
     public var isEmpty: Bool {
         switch self {
-            case let .title(title, addressName):
+            case let .title(title, addressNames):
                 if !title.isEmpty {
                     return false
                 }
-                if let addressName = addressName, !addressName.isEmpty {
+                if !addressNames.isEmpty {
                     return false
                 }
                 return true
-            case let .personName(first, last, addressName, phoneNumber):
+            case let .personName(first, last, addressNames, phoneNumber):
                 if !first.isEmpty {
                     return false
                 }
                 if !last.isEmpty {
                     return false
                 }
-                if let addressName = addressName, !addressName.isEmpty {
+                if !addressNames.isEmpty {
                     return false
                 }
                 if let phoneNumber = phoneNumber, !phoneNumber.isEmpty {
@@ -70,18 +70,37 @@ extension PeerIndexNameRepresentation {
         return foundAtLeastOne
     }
     
+    public func matchesByTokens(_ other: [ValueBoxKey]) -> Bool {
+        var foundAtLeastOne = false
+        for searchToken in other {
+            var found = false
+            for token in self.indexTokens {
+                if searchToken.isPrefix(to: token) {
+                    found = true
+                    break
+                }
+            }
+            if !found {
+                return false
+            }
+            foundAtLeastOne = true
+            break
+        }
+        return foundAtLeastOne
+    }
+    
     public var indexTokens: [ValueBoxKey] {
         switch self {
-            case let .title(title, addressName):
+            case let .title(title, addressNames):
                 var tokens: [ValueBoxKey] = stringIndexTokens(title, transliteration: .combined)
-                if let addressName = addressName {
+                for addressName in addressNames {
                     tokens.append(contentsOf: stringIndexTokens(addressName, transliteration: .none))
                 }
                 return tokens
-            case let .personName(first, last, addressName, phoneNumber):
+            case let .personName(first, last, addressNames, phoneNumber):
                 var tokens: [ValueBoxKey] = stringIndexTokens(first, transliteration: .combined)
                 tokens.append(contentsOf: stringIndexTokens(last, transliteration: .combined))
-                if let addressName = addressName {
+                for addressName in addressNames {
                     tokens.append(contentsOf: stringIndexTokens(addressName, transliteration: .none))
                 }
                 if let phoneNumber = phoneNumber {

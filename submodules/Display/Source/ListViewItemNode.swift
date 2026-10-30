@@ -15,6 +15,16 @@ var testSpringFreeResistance: CGFloat = 0.676197171211243
 var testSpringResistanceScrollingLimits: (CGFloat, CGFloat) = (0.1, 1.0)
 var testSpringScrollingResistance: CGFloat = 0.6721
 
+public struct ListViewItemAnimationOptions {
+    public let short: Bool
+    public let invertOffsetDirection: Bool
+    
+    public init(short: Bool = false, invertOffsetDirection: Bool = false) {
+        self.short = short
+        self.invertOffsetDirection = invertOffsetDirection
+    }
+}
+
 struct ListViewItemSpring {
     let stiffness: CGFloat
     let damping: CGFloat
@@ -49,37 +59,22 @@ public struct ListViewItemNodeLayout {
 
 public enum ListViewItemNodeVisibility: Equatable {
     case none
-    case visible(CGFloat)
-    
-    public static func ==(lhs: ListViewItemNodeVisibility, rhs: ListViewItemNodeVisibility) -> Bool {
-        switch lhs {
-            case .none:
-                if case .none = rhs {
-                    return true
-                } else {
-                    return false
-                }
-            case let .visible(fraction):
-                if case .visible(fraction) = rhs {
-                    return true
-                } else {
-                    return false
-                }
-        }
-    }
+    case visible(CGFloat, CGRect)
 }
 
-public struct ListViewItemLayoutParams {
+public struct ListViewItemLayoutParams: Equatable {
     public let width: CGFloat
     public let leftInset: CGFloat
     public let rightInset: CGFloat
     public let availableHeight: CGFloat
+    public let isStandalone: Bool
     
-    public init(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, availableHeight: CGFloat) {
+    public init(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, availableHeight: CGFloat, isStandalone: Bool = false) {
         self.width = width
         self.leftInset = leftInset
         self.rightInset = rightInset
         self.availableHeight = availableHeight
+        self.isStandalone = isStandalone
     }
 }
 
@@ -105,7 +100,14 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
     }
 
     let rotated: Bool
-    final var index: Int?
+    public internal(set) final var index: Int?
+
+    /// The neighbors value the current layout was computed with.
+    ///
+    /// ListView relayouts a node exactly when this differs from its current neighbors, which is
+    /// why `ListViewItem.neighborDescriptor` must encode everything a neighbor reads — a fact
+    /// omitted there is a fact that will not trigger a relayout when it changes.
+    public internal(set) final var appliedNeighbors: ListViewItemNeighbors = .none
     
     public var isHighlightedInOverlay: Bool = false
     
@@ -134,7 +136,6 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
         return nil
     }
     
-    private final var spring: ListViewItemSpring?
     private final var animations: [(String, ListViewAnimation)] = []
     private final var pendingControlledTransitions: [ControlledTransition] = []
     private final var controlledTransitions: [ControlledTransitionContext] = []
@@ -144,10 +145,28 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
 
     public internal(set) var attachedHeaderNodes: [ListViewItemHeaderNode] = []
 
+    /// Replaces the header nodes bound to this row, for a list backend that lives outside this module
+    /// and so cannot reach the `internal` setter. `ListViewImpl` keeps maintaining the array directly.
+    ///
+    /// Assign-and-notify is one operation deliberately: a caller that could do either half alone would
+    /// eventually do only the first, and a row whose bound headers changed without
+    /// `attachedHeaderNodesUpdated()` keeps pushing its state to headers it no longer owns — silently,
+    /// since nothing reads the array back.
+    ///
+    /// The unchanged case must also be silent, which is why the comparison is here rather than left to
+    /// the caller: a backend recomputing this binding per scroll frame would otherwise re-push every
+    /// frame, and `attachedHeaderNodesUpdated` re-applies transform state that may be mid-animation.
+    public func setAttachedHeaderNodes(_ nodes: [ListViewItemHeaderNode]) {
+        if self.attachedHeaderNodes.count == nodes.count
+            && zip(self.attachedHeaderNodes, nodes).allSatisfy({ $0 === $1 }) {
+            return
+        }
+        self.attachedHeaderNodes = nodes
+        self.attachedHeaderNodesUpdated()
+    }
+
     open func attachedHeaderNodesUpdated() {
     }
-    
-    final let wantsScrollDynamics: Bool
     
     open var preferredAnimationCurve: (CGFloat) -> CGFloat {
         return listViewAnimationCurveSystem
@@ -162,6 +181,10 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
     open var visibility: ListViewItemNodeVisibility = .none
     
     open var canBeSelected: Bool {
+        return true
+    }
+    
+    open func visibleForSelection(at point: CGPoint) -> Bool {
         return true
     }
     
@@ -183,8 +206,35 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
     open func longTapped() {
     }
     
+    /// Frame-ownership override for hosts that position this node themselves.
+    ///
+    /// By default this node writes its OWN `frame` and `bounds` as a side effect of being told its
+    /// layout: assigning `contentSize` or `insets` resizes the frame (`:contentSize`/`:insets`
+    /// below), and `contentSize` is not even stored — it round-trips through the frame, which is what
+    /// derives `_contentSize`. Reporting a new layout is therefore indistinguishable from committing
+    /// it, and a host cannot animate the box: by the time it sees the new height the old one is
+    /// already gone, and every frame setter it might use no-ops on an equality guard
+    /// (`CoreListTransition.setFrame`, `ContainedViewLayoutTransition.updateFrame(node:)`,
+    /// `CALayer.animateFrame`) because the destination is already installed.
+    ///
+    /// With this set, `contentSize` and `insets` are plain stored properties and the node writes no
+    /// geometry of its own. The host owns `frame`/`bounds` outright, and owes the node two things it
+    /// would otherwise have done for itself: the box, and the content-offset convention
+    /// `bounds.origin.y == -insets.top` that the item's own layout is expressed against.
+    ///
+    /// Only the `-insets.top` term, because the other two summands of that expression are inert here.
+    /// `contentOffset` is assigned nowhere in the codebase, and `transitionOffset` is written only by
+    /// `ListViewImpl` (`ListView.swift:2516/2557/2584/2597/3064/3068`) and by its own display-link
+    /// animation — neither of which runs under a host that sets this.
+    ///
+    /// Defaults to false: `ListViewImpl` depends on the self-writes.
+    public var hostOwnsFrame: Bool = false
+
     public final var insets: UIEdgeInsets = UIEdgeInsets() {
         didSet {
+            if self.hostOwnsFrame {
+                return
+            }
             let effectiveInsets = self.insets
             self.frame = CGRect(origin: self.frame.origin, size: CGSize(width: self.contentSize.width, height: self.contentSize.height + effectiveInsets.top + effectiveInsets.bottom))
             let bounds = self.bounds
@@ -197,13 +247,23 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
         get {
             return self._contentSize
         } set(value) {
+            if self.hostOwnsFrame {
+                // Stored outright. Without the frame round-trip there is nothing else to derive it
+                // from, and the host reads it back (as the content-box term of the row's height and
+                // of the visibility fraction) before it has applied any geometry.
+                self._contentSize = value
+                return
+            }
             let effectiveInsets = self.insets
             self.frame = CGRect(origin: self.frame.origin, size: CGSize(width: value.width, height: value.height + effectiveInsets.top + effectiveInsets.bottom))
         }
     }
-    
+
     private var contentOffset: CGFloat = 0.0 {
         didSet {
+            if self.hostOwnsFrame {
+                return
+            }
             let effectiveInsets = self.insets
             let bounds = self.bounds
             self.bounds = CGRect(origin: CGPoint(x: bounds.origin.x, y: -effectiveInsets.top + self.contentOffset + self.transitionOffset), size: bounds.size)
@@ -212,6 +272,9 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
     
     public var transitionOffset: CGFloat = 0.0 {
         didSet {
+            if self.hostOwnsFrame {
+                return
+            }
             let effectiveInsets = self.insets
             let bounds = self.bounds
             self.bounds = CGRect(origin: CGPoint(x: bounds.origin.x, y: -effectiveInsets.top + self.contentOffset + self.transitionOffset), size: bounds.size)
@@ -237,12 +300,7 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
         return .complete()
     }
     
-    public init(layerBacked: Bool, dynamicBounce: Bool = true, rotated: Bool = false, seeThrough: Bool = false) {
-        if dynamicBounce {
-            self.spring = ListViewItemSpring(stiffness: -280.0, damping: -24.0, mass: 0.85)
-        }
-        self.wantsScrollDynamics = dynamicBounce
-        
+    public init(layerBacked: Bool, rotated: Bool = false, seeThrough: Bool = false) {
         self.rotated = rotated
         
         super.init()
@@ -250,7 +308,7 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
         self.isLayerBacked = layerBacked
     }
     
-    var apparentHeight: CGFloat = 0.0
+    open var apparentHeight: CGFloat = 0.0
     public private(set) var apparentHeightTransition: (CGFloat, CGFloat)?
     private var _bounds: CGRect = CGRect()
     private var _position: CGPoint = CGPoint()
@@ -264,9 +322,14 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
             super.frame = value
             self._bounds.size = value.size
             self._position = CGPoint(x: value.midX, y: value.midY)
-            let effectiveInsets = self.insets
-            self._contentSize = CGSize(width: value.size.width, height: value.size.height - effectiveInsets.top - effectiveInsets.bottom)
-            
+            // Under `hostOwnsFrame` the layout is the authority and the box is the host's rendering of
+            // it, so the two are allowed to disagree — that disagreement is what an animated box IS.
+            // Re-deriving here would let the frame overwrite the layout the item just reported.
+            if !self.hostOwnsFrame {
+                let effectiveInsets = self.insets
+                self._contentSize = CGSize(width: value.size.width, height: value.size.height - effectiveInsets.top - effectiveInsets.bottom)
+            }
+
             if previousSize != value.size {
                 if let headerAccessoryItemNode = self.headerAccessoryItemNode {
                     self.layoutHeaderAccessoryItemNode(headerAccessoryItemNode)
@@ -283,9 +346,12 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
             
             super.bounds = value
             self._bounds = value
-            let effectiveInsets = self.insets
-            self._contentSize = CGSize(width: value.size.width, height: value.size.height - effectiveInsets.top - effectiveInsets.bottom)
-            
+            // See the note in the `frame` setter.
+            if !self.hostOwnsFrame {
+                let effectiveInsets = self.insets
+                self._contentSize = CGSize(width: value.size.width, height: value.size.height - effectiveInsets.top - effectiveInsets.bottom)
+            }
+
             if previousSize != value.size {
                 if let headerAccessoryItemNode = self.headerAccessoryItemNode {
                     self.layoutHeaderAccessoryItemNode(headerAccessoryItemNode)
@@ -339,61 +405,23 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
     }
     
     final func addScrollingOffset(_ scrollingOffset: CGFloat) {
-        if self.spring != nil {
-            self.contentOffset += scrollingOffset
-        }
     }
     
     func initializeDynamicsFromSibling(_ itemView: ListViewItemNode, additionalOffset: CGFloat) {
-        if let itemViewSpring = itemView.spring {
-            self.contentOffset = itemView.contentOffset + additionalOffset
-            self.spring?.velocity = itemViewSpring.velocity
-        }
     }
     
-    public func animate(_ timestamp: Double) -> Bool {
+    public func animate(timestamp: Double, invertOffsetDirection: inout Bool) -> Bool {
         var continueAnimations = false
-        
-        if let _ = self.spring {
-            var offset = self.contentOffset
-            
-            let frictionConstant: CGFloat = testSpringFriction
-            let springConstant: CGFloat = testSpringConstant
-            let time: CGFloat = 1.0 / 60.0
-            
-            // friction force = velocity * friction constant
-            let frictionForce = self.spring!.velocity * frictionConstant
-            // spring force = (target point - current position) * spring constant
-            let springForce = -self.contentOffset * springConstant
-            // force = spring force - friction force
-            let force = springForce - frictionForce
-            
-            // velocity = current velocity + force * time / mass
-            self.spring!.velocity = self.spring!.velocity + force * time
-            // position = current position + velocity * time
-            offset = self.contentOffset + self.spring!.velocity * time
-            
-            offset = offset.isNaN ? 0.0 : offset
-            
-            let epsilon: CGFloat = 0.1
-            if abs(offset) < epsilon && abs(self.spring!.velocity) < epsilon {
-                offset = 0.0
-                self.spring!.velocity = 0.0
-            } else {
-                continueAnimations = true
-            }
-            
-            if abs(offset) > 250.0 {
-                offset = offset < 0.0 ? -250.0 : 250.0
-            }
-            self.contentOffset = offset
-        }
         
         var i = 0
         var animationCount = self.animations.count
         while i < animationCount {
             let (_, animation) = self.animations[i]
             animation.applyAt(timestamp)
+            
+            if animation.invertOffsetDirection {
+                invertOffsetDirection = true
+            }
             
             if animation.completeAt(timestamp) {
                 self.animations.remove(at: i)
@@ -435,7 +463,7 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
         return continueAnimations
     }
     
-    open func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, previousItem: ListViewItem?, nextItem: ListViewItem?) {
+    open func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, neighbors: ListViewItemNeighbors) {
     }
     
     public func animationForKey(_ key: String) -> ListViewAnimation? {
@@ -538,9 +566,9 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
         }
     }
     
-    public func addApparentHeightAnimation(_ value: CGFloat, duration: Double, beginAt: Double, update: ((CGFloat, CGFloat) -> Void)? = nil) {
+    public func addApparentHeightAnimation(_ value: CGFloat, duration: Double, beginAt: Double, invertOffsetDirection: Bool = false, update: ((CGFloat, CGFloat) -> Void)? = nil) {
         self.apparentHeightTransition = (self.apparentHeight, value)
-        let animation = ListViewAnimation(from: self.apparentHeight, to: value, duration: duration, curve: self.preferredAnimationCurve, beginAt: beginAt, update: { [weak self] progress, currentValue in
+        let animation = ListViewAnimation(from: self.apparentHeight, to: value, duration: duration, invertOffsetDirection: invertOffsetDirection, curve: self.preferredAnimationCurve, beginAt: beginAt, update: { [weak self] progress, currentValue in
             if let strongSelf = self {
                 strongSelf.apparentHeight = currentValue
                 if let update = update {
@@ -584,7 +612,15 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
         self.setAnimationForKey("transitionOffset", animation: animation)
     }
     
-    open func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    open func insertionAnimationDuration() -> Double? {
+        return nil
+    }
+    
+    open func updateAnimationDuration() -> Double? {
+        return nil
+    }
+    
+    open func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
     }
     
     open func animateAdded(_ currentTimestamp: Double, duration: Double) {
@@ -597,6 +633,9 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
     }
     
     open func selected() {
+    }
+    
+    open func secondaryAction(at point: CGPoint) {
     }
     
     open func isReorderable(at point: CGPoint) -> Bool {
@@ -623,9 +662,16 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
         (self.supernode as? ListView)?.ensureItemNodeVisible(self, animated: false, overflow: 22.0, allowIntersection: true)
     }
     
-    public func updateFrame(_ frame: CGRect, within containerSize: CGSize, updateFrame: Bool = true) {
+    public func updateFrame(_ frame: CGRect, within containerSize: CGSize, updateFrame: Bool = true, transition: ControlledTransition? = nil) {
         if updateFrame {
-            self.frame = frame
+            if let transition {
+                let previousFrame = self.frame
+                self.frame = frame
+                
+                transition.legacyAnimator.transition.animatePositionAdditive(layer: self.layer, offset: CGPoint(x: previousFrame.minX - frame.minX, y: previousFrame.minY - frame.minY))
+            } else {
+                self.frame = frame
+            }
         }
         if frame.maxY < 0.0 || frame.minY > containerSize.height {
         } else {
@@ -637,13 +683,6 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
     }
     
     open func updateAbsoluteRect(_ rect: CGRect, within containerSize: CGSize) {
-    }
-    
-    open func applyAbsoluteOffset(value: CGPoint, animationCurve: ContainedViewLayoutTransitionCurve, duration: Double) {
-        if let extractedBackgroundNode = self.extractedBackgroundNode {
-            let transition: ContainedViewLayoutTransition = .animated(duration: duration, curve: animationCurve)
-            transition.animatePositionAdditive(node: extractedBackgroundNode, offset: CGPoint(x: -value.x, y: -value.y))
-        }
     }
     
     open func snapshotForReordering() -> UIView? {

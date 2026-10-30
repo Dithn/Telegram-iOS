@@ -52,13 +52,13 @@ public final class ToolbarNode: ASDisplayNode {
         
         self.leftTitle = ImmediateTextNode()
         self.leftTitle.displaysAsynchronously = false
-        self.leftButton = HighlightTrackingButtonNode()
+        self.leftButton = HighlightTrackingButtonNode(pointerStyle: .insetRectangle(2.0, 2.0))
         self.rightTitle = ImmediateTextNode()
         self.rightTitle.displaysAsynchronously = false
-        self.rightButton = HighlightTrackingButtonNode()
+        self.rightButton = HighlightTrackingButtonNode(pointerStyle: .insetRectangle(2.0, 2.0))
         self.middleTitle = ImmediateTextNode()
         self.middleTitle.displaysAsynchronously = false
-        self.middleButton = HighlightTrackingButtonNode()
+        self.middleButton = HighlightTrackingButtonNode(pointerStyle: .insetRectangle(2.0, 2.0))
         
         super.init()
         
@@ -130,7 +130,7 @@ public final class ToolbarNode: ASDisplayNode {
         self.backgroundNode.update(size: size, transition: transition)
         transition.updateFrame(node: self.separatorNode, frame: CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: size.width, height: UIScreenPixel)))
         
-        var sideInset: CGFloat = 16.0
+        var sideInset: CGFloat = 16.0 + 8.0
         
         self.leftTitle.attributedText = NSAttributedString(string: toolbar.leftAction?.title ?? "", font: Font.regular(17.0), textColor: (toolbar.leftAction?.isEnabled ?? false) ? self.theme.barSelectedTextColor : self.theme.barTextColor)
         self.leftButton.accessibilityLabel = toolbar.leftAction?.title

@@ -2,14 +2,14 @@ import Foundation
 import CoreMedia
 import UIKit
 import SwiftSignalKit
-import Postbox
 import Display
 import TelegramCore
 import Compression
 import GZip
-import RLottieBinding
+import LottieBinding
+import LottieSettings
 import MediaResources
-import MobileCoreServices
+import UniformTypeIdentifiers
 import MediaResources
 import YuvConversion
 import AnimatedStickerNode
@@ -17,7 +17,7 @@ import ManagedFile
 import UniversalMediaPlayer
 import SoftwareVideo
 
-public func fetchCompressedLottieFirstFrameAJpeg(data: Data, size: CGSize, fitzModifier: EmojiFitzModifier? = nil, cacheKey: String) -> Signal<TempBoxFile, NoError> {
+public func fetchCompressedLottieFirstFrameAJpeg(data: Data, size: CGSize, fitzModifier: EmojiFitzModifier? = nil, cacheKey: String, lottieSettings: LottieRenderingSettings) -> Signal<EngineTempBoxFile, NoError> {
     return Signal({ subscriber in
         let queue = Queue()
         
@@ -30,12 +30,15 @@ public func fetchCompressedLottieFirstFrameAJpeg(data: Data, size: CGSize, fitzM
             
             let decompressedData = TGGUnzipData(data, 8 * 1024 * 1024)
             if let decompressedData = decompressedData {
-                if let player = LottieInstance(data: decompressedData, fitzModifier: fitzModifier?.lottieFitzModifier ?? .none, colorReplacements: nil, cacheKey: cacheKey) {
+                if let player = makeLottieInstance(data: decompressedData, fitzModifier: fitzModifier?.lottieFitzModifier ?? .none, colorReplacements: nil, cacheKey: cacheKey, settings: lottieSettings) {
                     if cancelled.with({ $0 }) {
                         return
                     }
                     
-                    let context = DrawingContext(size: size, scale: 1.0, clear: true)
+                    guard let context = DrawingContext(size: size, scale: 1.0, clear: true) else {
+                        subscriber.putCompletion()
+                        return
+                    }
                     player.renderFrame(with: 0, into: context.bytes.assumingMemoryBound(to: UInt8.self), width: Int32(size.width), height: Int32(size.height), bytesPerRow: Int32(context.bytesPerRow))
                     
                     let yuvaPixelsPerAlphaRow = (Int(size.width) + 1) & (~1)
@@ -49,11 +52,13 @@ public func fetchCompressedLottieFirstFrameAJpeg(data: Data, size: CGSize, fitzM
                         free(yuvaFrameData)
                     }
                     
-                    encodeRGBAToYUVA(yuvaFrameData.assumingMemoryBound(to: UInt8.self), context.bytes.assumingMemoryBound(to: UInt8.self), Int32(size.width), Int32(size.height), Int32(context.bytesPerRow), true)
+                    encodeRGBAToYUVA(yuvaFrameData.assumingMemoryBound(to: UInt8.self), context.bytes.assumingMemoryBound(to: UInt8.self), Int32(size.width), Int32(size.height), Int32(context.bytesPerRow), true, true)
                     decodeYUVAToRGBA(yuvaFrameData.assumingMemoryBound(to: UInt8.self), context.bytes.assumingMemoryBound(to: UInt8.self), Int32(size.width), Int32(size.height), Int32(context.bytesPerRow))
                     
                     if let colorSourceImage = context.generateImage(), let alphaImage = generateGrayscaleAlphaMaskImage(image: colorSourceImage) {
-                        let colorContext = DrawingContext(size: size, scale: 1.0, clear: false)
+                        guard let colorContext = DrawingContext(size: size, scale: 1.0, clear: false) else {
+                            return
+                        }
                         colorContext.withFlippedContext { c in
                             c.setFillColor(UIColor.black.cgColor)
                             c.fill(CGRect(origin: CGPoint(), size: size))
@@ -66,9 +71,9 @@ public func fetchCompressedLottieFirstFrameAJpeg(data: Data, size: CGSize, fitzM
                         let colorData = NSMutableData()
                         let alphaData = NSMutableData()
                         
-                        if let colorDestination = CGImageDestinationCreateWithData(colorData as CFMutableData, kUTTypeJPEG, 1, nil), let alphaDestination = CGImageDestinationCreateWithData(alphaData as CFMutableData, kUTTypeJPEG, 1, nil) {
-                            CGImageDestinationSetProperties(colorDestination, [:] as CFDictionary)
-                            CGImageDestinationSetProperties(alphaDestination, [:] as CFDictionary)
+                        if let colorDestination = CGImageDestinationCreateWithData(colorData as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil), let alphaDestination = CGImageDestinationCreateWithData(alphaData as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil) {
+                            CGImageDestinationSetProperties(colorDestination, NSDictionary() as CFDictionary)
+                            CGImageDestinationSetProperties(alphaDestination, NSDictionary() as CFDictionary)
                             
                             let colorQuality: Float
                             let alphaQuality: Float
@@ -92,7 +97,7 @@ public func fetchCompressedLottieFirstFrameAJpeg(data: Data, size: CGSize, fitzM
                                 finalData.append(&alphaSize, length: 4)
                                 finalData.append(alphaData as Data)
                                 
-                                let tempFile = TempBox.shared.tempFile(fileName: "image.ajpg")
+                                let tempFile = EngineTempBox.shared.tempFile(fileName: "image.ajpg")
                                 let _ = try? finalData.write(to: URL(fileURLWithPath: tempFile.path), options: [])
                                 subscriber.putNext(tempFile)
                                 subscriber.putCompletion()
@@ -112,7 +117,7 @@ private let threadPool: ThreadPool = {
     return ThreadPool(threadCount: 3, threadPriority: 0.5)
 }()
 
-public func cacheAnimatedStickerFrames(data: Data, size: CGSize, fitzModifier: EmojiFitzModifier? = nil, cacheKey: String) -> Signal<CachedMediaResourceRepresentationResult, NoError> {
+public func cacheAnimatedStickerFrames(data: Data, size: CGSize, fitzModifier: EmojiFitzModifier? = nil, cacheKey: String, lottieSettings: LottieRenderingSettings) -> Signal<EngineCachedMediaResourceRepresentationResult, NoError> {
     return Signal({ subscriber in
         let cancelled = Atomic<Bool>(value: false)
         
@@ -128,7 +133,7 @@ public func cacheAnimatedStickerFrames(data: Data, size: CGSize, fitzModifier: E
        
             let decompressedData = TGGUnzipData(data, 8 * 1024 * 1024)
             if let decompressedData = decompressedData {
-                if let player = LottieInstance(data: decompressedData, fitzModifier: fitzModifier?.lottieFitzModifier ?? .none, colorReplacements: nil, cacheKey: cacheKey) {
+                if let player = makeLottieInstance(data: decompressedData, fitzModifier: fitzModifier?.lottieFitzModifier ?? .none, colorReplacements: nil, cacheKey: cacheKey, settings: lottieSettings) {
                     let endFrame = Int(player.frameCount)
                     
                     if cancelled.with({ $0 }) {
@@ -139,7 +144,7 @@ public func cacheAnimatedStickerFrames(data: Data, size: CGSize, fitzModifier: E
                     
                     var currentFrame: Int32 = 0
                     
-                    let tempFile = TempBox.shared.tempFile(fileName: "result.asticker")
+                    let tempFile = EngineTempBox.shared.tempFile(fileName: "result.asticker")
                     guard let file = ManagedFile(queue: nil, path: tempFile.path, mode: .readwrite) else {
                         return
                     }
@@ -201,7 +206,7 @@ public func cacheAnimatedStickerFrames(data: Data, size: CGSize, fitzModifier: E
                         
                         let appendStartTime = CACurrentMediaTime()
                         
-                        encodeRGBAToYUVA(yuvaFrameData.assumingMemoryBound(to: UInt8.self), currentFrameData.assumingMemoryBound(to: UInt8.self), Int32(size.width), Int32(size.height), Int32(bytesPerRow), true)
+                        encodeRGBAToYUVA(yuvaFrameData.assumingMemoryBound(to: UInt8.self), currentFrameData.assumingMemoryBound(to: UInt8.self), Int32(size.width), Int32(size.height), Int32(bytesPerRow), true, true)
                         
                         appendingTime += CACurrentMediaTime() - appendStartTime
                         
@@ -244,12 +249,6 @@ public func cacheAnimatedStickerFrames(data: Data, size: CGSize, fitzModifier: E
                                         
                     subscriber.putNext(.tempFile(tempFile))
                     subscriber.putCompletion()
-                    /*print("animation render time \(CACurrentMediaTime() - startTime)")
-                    print("of which drawing time \(drawingTime)")
-                    print("of which appending time \(appendingTime)")
-                    print("of which delta time \(deltaTime)")
-                    
-                    print("of which compression time \(compressionTime)")*/
                 }
             }
         }))
@@ -259,11 +258,11 @@ public func cacheAnimatedStickerFrames(data: Data, size: CGSize, fitzModifier: E
     })
 }
 
-public func cacheVideoStickerFrames(path: String, size: CGSize, cacheKey: String) -> Signal<CachedMediaResourceRepresentationResult, NoError> {
+public func cacheVideoStickerFrames(path: String, size: CGSize, cacheKey: String) -> Signal<EngineCachedMediaResourceRepresentationResult, NoError> {
     return Signal { subscriber in
         let cancelled = Atomic<Bool>(value: false)
 
-        let source = SoftwareVideoSource(path: path, hintVP9: true)
+        let source = SoftwareVideoSource(path: path, hintVP9: true, unpremultiplyAlpha: true)
         let queue = ThreadPoolQueue(threadPool: softwareVideoWorkers)
         
         queue.addTask(ThreadPoolTask({ _ in
@@ -279,7 +278,7 @@ public func cacheVideoStickerFrames(path: String, size: CGSize, cacheKey: String
             
             var currentFrame: Int32 = 0
             
-            let tempFile = TempBox.shared.tempFile(fileName: "result.vsticker")
+            let tempFile = EngineTempBox.shared.tempFile(fileName: "result.vsticker")
             guard let file = ManagedFile(queue: nil, path: tempFile.path, mode: .readwrite) else {
                 return
             }
@@ -388,18 +387,12 @@ public func cacheVideoStickerFrames(path: String, size: CGSize, cacheKey: String
             }
             
             if frameCount > 0 {
-                file.seek(position: 4)
+                let _ = file.seek(position: 4)
                 let _ = file.write(&frameCount, count: 4)
             }
             
             subscriber.putNext(.tempFile(tempFile))
             subscriber.putCompletion()
-            /*print("animation render time \(CACurrentMediaTime() - startTime)")
-            print("of which drawing time \(drawingTime)")
-            print("of which appending time \(appendingTime)")
-            print("of which delta time \(deltaTime)")
-            
-            print("of which compression time \(compressionTime)")*/
         }))
                                           
         return ActionDisposable {

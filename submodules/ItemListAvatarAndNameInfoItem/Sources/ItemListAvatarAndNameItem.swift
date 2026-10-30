@@ -14,6 +14,7 @@ import PeerPresenceStatusManager
 import AppBundle
 import PhoneNumberFormat
 import AccountContext
+import ListItemComponentAdaptor
 
 private let updatingAvatarOverlayImage = generateFilledCircleImage(diameter: 66.0, color: UIColor(white: 0.0, alpha: 0.4), backgroundColor: nil)
 
@@ -60,7 +61,7 @@ public enum ItemListAvatarAndNameInfoItemName: Equatable {
         }
     }
     
-    public func composedDisplayTitle(strings: PresentationStrings) -> String {
+    public func composedDisplayTitle(context: AccountContext?, strings: PresentationStrings) -> String {
         switch self {
         case let .personName(firstName, lastName, phone):
             if !firstName.isEmpty {
@@ -72,7 +73,11 @@ public enum ItemListAvatarAndNameInfoItemName: Equatable {
             } else if !lastName.isEmpty {
                 return lastName
             } else if !phone.isEmpty {
-                return formatPhoneNumber("+\(phone)")
+                if let context {
+                    return formatPhoneNumber(context: context, number: "+\(phone)")
+                } else {
+                    return "+\(phone)"
+                }
             } else {
                 return strings.User_DeletedAccount
             }
@@ -109,7 +114,7 @@ public final class ItemListAvatarAndNameInfoItemContext {
     }
 }
 
-public enum ItemListAvatarAndNameInfoItemStyle {
+public enum ItemListAvatarAndNameInfoItemStyle: Equatable {
     case plain
     case blocks(withTopInset: Bool, withExtendedBottomInset: Bool)
 }
@@ -126,9 +131,21 @@ public enum ItemListAvatarAndNameInfoItemMode {
     case editSettings
 }
 
-public class ItemListAvatarAndNameInfoItem: ListViewItem, ItemListItem {
-    let accountContext: AccountContext
+public class ItemListAvatarAndNameInfoItem: ListViewItem, ItemListItem, ListItemComponentAdaptor.ItemGenerator {
+    public enum ItemContext {
+        case accountContext(AccountContext)
+        case other(accountPeerId: EnginePeer.Id, stateManager: AccountStateManager)
+        
+        var accountContext: AccountContext? {
+            if case let .accountContext(accountContext) = self {
+                return accountContext
+            }
+            return nil
+        }
+    }
+    let itemContext: ItemContext
     let presentationData: ItemListPresentationData
+    let systemStyle: ItemListSystemStyle
     let dateTimeFormat: PresentationDateTimeFormat
     let mode: ItemListAvatarAndNameInfoItemMode
     let peer: EnginePeer?
@@ -150,9 +167,10 @@ public class ItemListAvatarAndNameInfoItem: ListViewItem, ItemListItem {
     
     public let selectable: Bool
 
-    public init(accountContext: AccountContext, presentationData: ItemListPresentationData, dateTimeFormat: PresentationDateTimeFormat, mode: ItemListAvatarAndNameInfoItemMode, peer: EnginePeer?, presence: EnginePeer.Presence?, label: String? = nil, memberCount: Int?, state: ItemListAvatarAndNameInfoItemState, sectionId: ItemListSectionId, style: ItemListAvatarAndNameInfoItemStyle, editingNameUpdated: @escaping (ItemListAvatarAndNameInfoItemName) -> Void, editingNameCompleted: @escaping () -> Void = {}, avatarTapped: @escaping () -> Void, context: ItemListAvatarAndNameInfoItemContext? = nil, updatingImage: ItemListAvatarAndNameInfoItemUpdatingAvatar? = nil, call: (() -> Void)? = nil, action: (() -> Void)? = nil, longTapAction: (() -> Void)? = nil, tag: ItemListItemTag? = nil) {
-        self.accountContext = accountContext
+    public init(itemContext: ItemContext, presentationData: ItemListPresentationData, systemStyle: ItemListSystemStyle = .legacy, dateTimeFormat: PresentationDateTimeFormat, mode: ItemListAvatarAndNameInfoItemMode, peer: EnginePeer?, presence: EnginePeer.Presence?, label: String? = nil, memberCount: Int?, state: ItemListAvatarAndNameInfoItemState, sectionId: ItemListSectionId, style: ItemListAvatarAndNameInfoItemStyle, editingNameUpdated: @escaping (ItemListAvatarAndNameInfoItemName) -> Void, editingNameCompleted: @escaping () -> Void = {}, avatarTapped: @escaping () -> Void, context: ItemListAvatarAndNameInfoItemContext? = nil, updatingImage: ItemListAvatarAndNameInfoItemUpdatingAvatar? = nil, call: (() -> Void)? = nil, action: (() -> Void)? = nil, longTapAction: (() -> Void)? = nil, tag: ItemListItemTag? = nil) {
+        self.itemContext = itemContext
         self.presentationData = presentationData
+        self.systemStyle = systemStyle
         self.dateTimeFormat = dateTimeFormat
         self.mode = mode
         self.peer = peer
@@ -175,14 +193,14 @@ public class ItemListAvatarAndNameInfoItem: ListViewItem, ItemListItem {
         if case .settings = mode {
             self.selectable = true
         } else {
-            self.selectable = false
+            self.selectable = action != nil
         }
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = ItemListAvatarAndNameInfoItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -193,7 +211,7 @@ public class ItemListAvatarAndNameInfoItem: ListViewItem, ItemListItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? ItemListAvatarAndNameInfoItemNode {
                 var animated = true
@@ -203,7 +221,7 @@ public class ItemListAvatarAndNameInfoItem: ListViewItem, ItemListItem {
                 let makeLayout = nodeValue.asyncLayout()
                 
                 async {
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply(animated, false)
@@ -217,6 +235,53 @@ public class ItemListAvatarAndNameInfoItem: ListViewItem, ItemListItem {
     public func selected(listView: ListView){
         listView.clearHighlightAnimated(true)
         self.action?()
+    }
+    
+    public func item() -> ListViewItem {
+        return self
+    }
+    
+    public static func ==(lhs: ItemListAvatarAndNameInfoItem, rhs: ItemListAvatarAndNameInfoItem) -> Bool {
+        if lhs.presentationData !== rhs.presentationData {
+            return false
+        }
+        if lhs.systemStyle != rhs.systemStyle {
+            return false
+        }
+        if lhs.dateTimeFormat != rhs.dateTimeFormat {
+            return false
+        }
+        if lhs.mode != rhs.mode {
+            return false
+        }
+        if lhs.peer != rhs.peer {
+            return false
+        }
+        if lhs.presence != rhs.presence {
+            return false
+        }
+        if lhs.label != rhs.label {
+            return false
+        }
+        if lhs.memberCount != rhs.memberCount {
+            return false
+        }
+        if lhs.state != rhs.state {
+            return false
+        }
+        if lhs.sectionId != rhs.sectionId {
+            return false
+        }
+        if lhs.style != rhs.style {
+            return false
+        }
+        if lhs.context !== rhs.context {
+            return false
+        }
+        if lhs.updatingImage != rhs.updatingImage {
+            return false
+        }
+        return true
     }
 }
 
@@ -309,7 +374,7 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
         
         self.callButton = HighlightableButtonNode()
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
         
         self.isAccessibilityElement = true
         
@@ -346,7 +411,7 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
         
         let currentItem = self.item
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             let baseWidth = params.width - params.leftInset - params.rightInset
             
             let nameFont = Font.medium(floor(item.presentationData.fontSize.itemListBaseFontSize * 19.0 / 17.0))
@@ -356,6 +421,13 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
             
             if currentItem?.presentationData.theme !== item.presentationData.theme {
                 updatedTheme = item.presentationData.theme
+            }
+            
+            let premiumConfiguration: PremiumConfiguration
+            if case let .accountContext(context) = item.itemContext {
+                premiumConfiguration = PremiumConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
+            } else {
+                premiumConfiguration = .defaultValue
             }
             
             var credibilityIconImage: UIImage?
@@ -369,6 +441,8 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                     credibilityIconOffset = 2.0
                 } else if peer.isVerified {
                     credibilityIconImage = PresentationResourcesItemList.verifiedPeerIcon(item.presentationData.theme)
+                } else if peer.isPremium && !premiumConfiguration.isPremiumDisabled {
+                    credibilityIconImage = PresentationResourcesChatList.premiumIcon(item.presentationData.theme)
                 }
             }
             
@@ -391,7 +465,7 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                 nameMaximumNumberOfLines = 2
             }
             
-            let (nameNodeLayout, nameNodeApply) = layoutNameNode(TextNodeLayoutArguments(attributedString: NSAttributedString(string: displayTitle.composedDisplayTitle(strings: item.presentationData.strings), font: nameFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: nameMaximumNumberOfLines, truncationType: .end, constrainedSize: CGSize(width: baseWidth - 20 - 94.0 - (item.call != nil ? 36.0 : 0.0) - additionalTitleInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let (nameNodeLayout, nameNodeApply) = layoutNameNode(TextNodeLayoutArguments(attributedString: NSAttributedString(string: displayTitle.composedDisplayTitle(context: item.itemContext.accountContext, strings: item.presentationData.strings), font: nameFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: nameMaximumNumberOfLines, truncationType: .end, constrainedSize: CGSize(width: baseWidth - 20 - 94.0 - (item.call != nil ? 36.0 : 0.0) - additionalTitleInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
             var statusText: String = ""
             let statusColor: UIColor
@@ -400,9 +474,13 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                 switch item.mode {
                     case .settings:
                         if let phone = peer.phone, !phone.isEmpty {
-                            statusText += formatPhoneNumber(phone)
+                            if let accountContext = item.itemContext.accountContext {
+                                statusText += formatPhoneNumber(context: accountContext, number: phone)
+                            } else {
+                                statusText += formatPhoneNumber(phone)
+                            }
                         }
-                        if let username = peer.username, !username.isEmpty {
+                        if let username = peer.addressName, !username.isEmpty {
                             if !statusText.isEmpty {
                                 statusText += "\n"
                             }
@@ -416,11 +494,15 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                         } else if peer.flags.contains(.isSupport), !servicePeer {
                             statusText = item.presentationData.strings.Bot_GenericSupportStatus
                             statusColor = item.presentationData.theme.list.itemSecondaryTextColor
-                        } else if peer.id.isReplies {
+                        } else if peer.id.isRepliesOrVerificationCodes {
                             statusText = ""
                             statusColor = item.presentationData.theme.list.itemPrimaryTextColor
                         } else if let _ = peer.botInfo {
-                            statusText = item.presentationData.strings.Bot_GenericBotStatus
+                            if let subscriberCount = peer.subscriberCount {
+                                statusText = item.presentationData.strings.Conversation_StatusBotSubscribers(subscriberCount)
+                            } else {
+                                statusText = item.presentationData.strings.Bot_GenericBotStatus
+                            }
                             statusColor = item.presentationData.theme.list.itemSecondaryTextColor
                         } else if case .generic = item.mode, !servicePeer, let presence = item.presence {
                             let timestamp = CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970
@@ -478,6 +560,7 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
             let (statusNodeLayout, statusNodeApply) = layoutStatusNode(TextNodeLayoutArguments(attributedString: NSAttributedString(string: statusText, font: statusFont, textColor: statusColor), backgroundColor: nil, maximumNumberOfLines: 3, truncationType: .end, constrainedSize: CGSize(width: availableStatusWidth, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
             let separatorHeight = UIScreenPixel
+            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
             
             let nameSpacing: CGFloat = 3.0
             
@@ -495,7 +578,13 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                 contentSize = CGSize(width: params.width, height: max(baseHeight, verticalInset * 2.0 + 66.0))
                 insets = itemListNeighborsPlainInsets(neighbors)
             case let .blocks(withTopInset, withExtendedBottomInset):
-                let verticalInset: CGFloat = 13.0
+                let verticalInset: CGFloat
+                switch item.systemStyle {
+                case .glass:
+                    verticalInset = 17.0
+                case .legacy:
+                    verticalInset = 13.0
+                }
                 itemBackgroundColor = item.presentationData.theme.list.itemBlocksBackgroundColor
                 itemSeparatorColor = item.presentationData.theme.list.itemBlocksSeparatorColor
                 let baseHeight = nameNodeLayout.size.height + nameSpacing + statusNodeLayout.size.height + 30.0
@@ -634,13 +723,13 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                                     strongSelf.bottomStripeNode.isHidden = hasCorners
                             }
                             
-                            strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                            strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                         
                             strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: params.width, height: contentSize.height))
-                            strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                            strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                             strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: contentSize.height + UIScreenPixel))
                             strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: layoutSize.width, height: separatorHeight))
-                            strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: layoutSize.height - insets.top - insets.bottom), size: CGSize(width: layoutSize.width - bottomStripeInset, height: separatorHeight))
+                            strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: layoutSize.height - insets.top - insets.bottom), size: CGSize(width: layoutSize.width - bottomStripeInset - separatorRightInset, height: separatorHeight))
                     }
                     
                     let _ = nameNodeApply()
@@ -660,12 +749,18 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                                     overrideImage = .image(representation)
                             }
                         } else if case .editSettings = item.mode {
-                            overrideImage = AvatarNodeImageOverride.editAvatarIcon
+                            overrideImage = AvatarNodeImageOverride.editAvatarIcon(forceNone: false)
                         } else if peer.isDeleted {
                             overrideImage = .deletedIcon
                         }
                         
-                        strongSelf.avatarNode.setPeer(context: item.accountContext, theme: item.presentationData.theme, peer: peer, overrideImage: overrideImage, emptyColor: ignoreEmpty ? nil : item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: synchronousLoads)
+                        switch item.itemContext {
+                        case let .accountContext(context):
+                            strongSelf.avatarNode.setPeer(context: context, theme: item.presentationData.theme, peer: peer, overrideImage: overrideImage, emptyColor: ignoreEmpty ? nil : item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: synchronousLoads)
+                        case let .other(accountPeerId, stateManager):
+                            strongSelf.avatarNode.setPeer(accountPeerId: accountPeerId, postbox: stateManager.postbox, network: stateManager.network, contentSettings: .default, theme: item.presentationData.theme, peer: peer, authorOfMessage: nil, overrideImage: overrideImage, emptyColor: ignoreEmpty ? nil : item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: synchronousLoads)
+                        }
+                        
                     }
                     
                     let avatarFrame = CGRect(origin: CGPoint(x: params.leftInset + 15.0, y: floor((layout.contentSize.height - 66.0) / 2.0)), size: CGSize(width: 66.0, height: 66.0))
@@ -781,7 +876,7 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                                     strongSelf.addSubnode(strongSelf.inputSecondClearButton!)
                                 }
                                 
-                                strongSelf.inputSeparator?.frame = CGRect(origin: CGPoint(x: params.leftInset + 100.0, y: 46.0), size: CGSize(width: params.width - params.leftInset - 100.0, height: separatorHeight))
+                                strongSelf.inputSeparator?.frame = CGRect(origin: CGPoint(x: params.leftInset + 100.0, y: 46.0), size: CGSize(width: params.width - params.leftInset - 100.0 - separatorRightInset, height: separatorHeight))
                                 strongSelf.inputFirstField?.frame = CGRect(origin: CGPoint(x: params.leftInset + 111.0, y: 12.0), size: CGSize(width: params.width - params.leftInset - params.rightInset - 111.0 - 36.0, height: 30.0))
                                 strongSelf.inputSecondField?.frame = CGRect(origin: CGPoint(x: params.leftInset + 111.0, y: 52.0), size: CGSize(width: params.width - params.leftInset - params.rightInset - 111.0 - 36.0, height: 30.0))
                                 
@@ -843,8 +938,13 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                                     strongSelf.addSubnode(strongSelf.inputFirstClearButton!)
                                 }
                                 
-                                strongSelf.inputSeparator?.frame = CGRect(origin: CGPoint(x: params.leftInset + 100.0, y: 64.0), size: CGSize(width: params.width - params.leftInset - 100.0, height: separatorHeight))
-                                strongSelf.inputFirstField?.frame = CGRect(origin: CGPoint(x: params.leftInset + 111.0, y: 28.0), size: CGSize(width: params.width - params.leftInset - params.rightInset - 111.0 - 36.0, height: 35.0))
+                                let inputFieldHeight: CGFloat = 35.0
+                                let inputFieldFrame = CGRect(
+                                    origin: CGPoint(x: params.leftInset + 111.0, y: floorToScreenPixels((contentSize.height - inputFieldHeight) * 0.5)),
+                                    size: CGSize(width: params.width - params.leftInset - params.rightInset - 111.0 - 36.0, height: inputFieldHeight)
+                                )
+                                strongSelf.inputSeparator?.frame = CGRect(origin: CGPoint(x: params.leftInset + 100.0, y: floor(inputFieldFrame.maxY + 1.0)), size: CGSize(width: params.width - params.leftInset - 100.0 - separatorRightInset, height: separatorHeight))
+                                strongSelf.inputFirstField?.frame = inputFieldFrame
                                 
                                 if let image = strongSelf.inputFirstClearButton?.image(for: []), let inputFieldFrame = strongSelf.inputFirstField?.frame {
                                     strongSelf.inputFirstClearButton?.frame = CGRect(origin: CGPoint(x: inputFieldFrame.maxX, y: inputFieldFrame.minY + floor((inputFieldFrame.size.height - image.size.height) / 2.0) - 1.0 + UIScreenPixel), size: image.size)
@@ -1112,6 +1212,10 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
     
     public func focus() {
         self.inputFirstField?.becomeFirstResponder()
+    }
+    
+    public func selectAll() {
+        self.inputFirstField?.selectAll(nil)
     }
     
     override public func longTapped() {

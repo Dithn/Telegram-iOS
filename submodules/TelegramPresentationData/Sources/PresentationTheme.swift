@@ -17,6 +17,10 @@ public final class PresentationThemeGradientColors {
         return (self.topColor, self.bottomColor)
     }
     
+    public var array: [UIColor] {
+        return [self.topColor, self.bottomColor]
+    }
+    
     public func withUpdated(topColor: UIColor? = nil, bottomColor: UIColor? = nil) -> PresentationThemeGradientColors {
         return PresentationThemeGradientColors(topColor: topColor ?? self.topColor, bottomColor: bottomColor ?? self.bottomColor)
     }
@@ -154,6 +158,18 @@ public final class PresentationThemeRootNavigationBar {
         let resolvedClearButtonBackgroundColor = clearButtonBackgroundColor ?? self.clearButtonBackgroundColor
         let resolvedClearButtonForegroundColor = clearButtonForegroundColor ?? self.clearButtonForegroundColor
         return PresentationThemeRootNavigationBar(buttonColor: buttonColor ?? self.buttonColor, disabledButtonColor: disabledButtonColor ?? self.disabledButtonColor, primaryTextColor: primaryTextColor ?? self.primaryTextColor, secondaryTextColor: secondaryTextColor ?? self.secondaryTextColor, controlColor: controlColor ?? self.controlColor, accentTextColor: accentTextColor ?? self.accentTextColor, blurredBackgroundColor: blurredBackgroundColor ?? self.blurredBackgroundColor, opaqueBackgroundColor: opaqueBackgroundColor ?? self.opaqueBackgroundColor, separatorColor: separatorColor ?? self.separatorColor, badgeBackgroundColor: badgeBackgroundColor ?? self.badgeBackgroundColor, badgeStrokeColor: badgeStrokeColor ?? self.badgeStrokeColor, badgeTextColor: badgeTextColor ?? self.badgeTextColor, segmentedBackgroundColor: segmentedBackgroundColor ?? self.segmentedBackgroundColor, segmentedForegroundColor: segmentedForegroundColor ?? self.segmentedForegroundColor, segmentedTextColor: segmentedTextColor ?? self.segmentedTextColor, segmentedDividerColor: segmentedDividerColor ?? self.segmentedDividerColor, clearButtonBackgroundColor: resolvedClearButtonBackgroundColor, clearButtonForegroundColor: resolvedClearButtonForegroundColor)
+    }
+    
+    public var glassBarButtonBackgroundColor: UIColor {
+        return self.opaqueBackgroundColor.mixedWith(self.primaryTextColor, alpha: 0.1).withAlphaComponent(0.85)
+    }
+    
+    public var glassBarButtonForegroundColor: UIColor {
+        if self.primaryTextColor.lightness > 0.8 {
+            return self.primaryTextColor.withAlphaComponent(0.8)
+        } else {
+            return self.primaryTextColor.withAlphaComponent(0.57)
+        }
     }
 }
 
@@ -427,7 +443,9 @@ public final class PresentationThemeList {
     }
 
     public let blocksBackgroundColor: UIColor
+    public let modalBlocksBackgroundColor: UIColor
     public let plainBackgroundColor: UIColor
+    public let modalPlainBackgroundColor: UIColor
     public let itemPrimaryTextColor: UIColor
     public let itemSecondaryTextColor: UIColor
     public let itemDisabledTextColor: UIColor
@@ -436,6 +454,7 @@ public final class PresentationThemeList {
     public let itemDestructiveColor: UIColor
     public let itemPlaceholderTextColor: UIColor
     public let itemBlocksBackgroundColor: UIColor
+    public let itemModalBlocksBackgroundColor: UIColor
     public let itemHighlightedBackgroundColor: UIColor
     public let itemBlocksSeparatorColor: UIColor
     public let itemPlainSeparatorColor: UIColor
@@ -461,7 +480,9 @@ public final class PresentationThemeList {
     
     public init(
         blocksBackgroundColor: UIColor,
+        modalBlocksBackgroundColor: UIColor,
         plainBackgroundColor: UIColor,
+        modalPlainBackgroundColor: UIColor,
         itemPrimaryTextColor: UIColor,
         itemSecondaryTextColor: UIColor,
         itemDisabledTextColor: UIColor,
@@ -470,6 +491,7 @@ public final class PresentationThemeList {
         itemDestructiveColor: UIColor,
         itemPlaceholderTextColor: UIColor,
         itemBlocksBackgroundColor: UIColor,
+        itemModalBlocksBackgroundColor: UIColor,
         itemHighlightedBackgroundColor: UIColor,
         itemBlocksSeparatorColor: UIColor,
         itemPlainSeparatorColor: UIColor,
@@ -494,7 +516,9 @@ public final class PresentationThemeList {
         paymentOption: PaymentOption
     ) {
         self.blocksBackgroundColor = blocksBackgroundColor
+        self.modalBlocksBackgroundColor = modalBlocksBackgroundColor
         self.plainBackgroundColor = plainBackgroundColor
+        self.modalPlainBackgroundColor = modalPlainBackgroundColor
         self.itemPrimaryTextColor = itemPrimaryTextColor
         self.itemSecondaryTextColor = itemSecondaryTextColor
         self.itemDisabledTextColor = itemDisabledTextColor
@@ -505,6 +529,7 @@ public final class PresentationThemeList {
         self.itemBlocksBackgroundColor = itemBlocksBackgroundColor
         self.itemHighlightedBackgroundColor = itemHighlightedBackgroundColor
         self.itemBlocksSeparatorColor = itemBlocksSeparatorColor
+        self.itemModalBlocksBackgroundColor = itemModalBlocksBackgroundColor
         self.itemPlainSeparatorColor = itemPlainSeparatorColor
         self.disclosureArrowColor = disclosureArrowColor
         self.sectionHeaderTextColor = sectionHeaderTextColor
@@ -527,8 +552,12 @@ public final class PresentationThemeList {
         self.paymentOption = paymentOption
     }
     
-    public func withUpdated(blocksBackgroundColor: UIColor? = nil, plainBackgroundColor: UIColor? = nil, itemPrimaryTextColor: UIColor? = nil, itemSecondaryTextColor: UIColor? = nil, itemDisabledTextColor: UIColor? = nil, itemAccentColor: UIColor? = nil, itemHighlightedColor: UIColor? = nil, itemDestructiveColor: UIColor? = nil, itemPlaceholderTextColor: UIColor? = nil, itemBlocksBackgroundColor: UIColor? = nil, itemHighlightedBackgroundColor: UIColor? = nil, itemBlocksSeparatorColor: UIColor? = nil, itemPlainSeparatorColor: UIColor? = nil, disclosureArrowColor: UIColor? = nil, sectionHeaderTextColor: UIColor? = nil, freeTextColor: UIColor? = nil, freeTextErrorColor: UIColor? = nil, freeTextSuccessColor: UIColor? = nil, freeMonoIconColor: UIColor? = nil, itemSwitchColors: PresentationThemeSwitch? = nil, itemDisclosureActions: PresentationThemeItemDisclosureActions? = nil, itemCheckColors: PresentationThemeFillStrokeForeground? = nil, controlSecondaryColor: UIColor? = nil, freeInputField: PresentationInputFieldTheme? = nil, freePlainInputField: PresentationInputFieldTheme? = nil, mediaPlaceholderColor: UIColor? = nil, scrollIndicatorColor: UIColor? = nil, pageIndicatorInactiveColor: UIColor? = nil, inputClearButtonColor: UIColor? = nil, itemBarChart: PresentationThemeItemBarChart? = nil, itemInputField: PresentationInputFieldTheme? = nil, paymentOption: PaymentOption? = nil) -> PresentationThemeList {
-        return PresentationThemeList(blocksBackgroundColor: blocksBackgroundColor ?? self.blocksBackgroundColor, plainBackgroundColor: plainBackgroundColor ?? self.plainBackgroundColor, itemPrimaryTextColor: itemPrimaryTextColor ?? self.itemPrimaryTextColor, itemSecondaryTextColor: itemSecondaryTextColor ?? self.itemSecondaryTextColor, itemDisabledTextColor: itemDisabledTextColor ?? self.itemDisabledTextColor, itemAccentColor: itemAccentColor ?? self.itemAccentColor, itemHighlightedColor: itemHighlightedColor ?? self.itemHighlightedColor, itemDestructiveColor: itemDestructiveColor ?? self.itemDestructiveColor, itemPlaceholderTextColor: itemPlaceholderTextColor ?? self.itemPlaceholderTextColor, itemBlocksBackgroundColor: itemBlocksBackgroundColor ?? self.itemBlocksBackgroundColor, itemHighlightedBackgroundColor: itemHighlightedBackgroundColor ?? self.itemHighlightedBackgroundColor, itemBlocksSeparatorColor: itemBlocksSeparatorColor ?? self.itemBlocksSeparatorColor, itemPlainSeparatorColor: itemPlainSeparatorColor ?? self.itemPlainSeparatorColor, disclosureArrowColor: disclosureArrowColor ?? self.disclosureArrowColor, sectionHeaderTextColor: sectionHeaderTextColor ?? self.sectionHeaderTextColor, freeTextColor: freeTextColor ?? self.freeTextColor, freeTextErrorColor: freeTextErrorColor ?? self.freeTextErrorColor, freeTextSuccessColor: freeTextSuccessColor ?? self.freeTextSuccessColor, freeMonoIconColor: freeMonoIconColor ?? self.freeMonoIconColor, itemSwitchColors: itemSwitchColors ?? self.itemSwitchColors, itemDisclosureActions: itemDisclosureActions ?? self.itemDisclosureActions, itemCheckColors: itemCheckColors ?? self.itemCheckColors, controlSecondaryColor: controlSecondaryColor ?? self.controlSecondaryColor, freeInputField: freeInputField ?? self.freeInputField, freePlainInputField: freePlainInputField ?? self.freePlainInputField, mediaPlaceholderColor: mediaPlaceholderColor ?? self.mediaPlaceholderColor, scrollIndicatorColor: scrollIndicatorColor ?? self.scrollIndicatorColor, pageIndicatorInactiveColor: pageIndicatorInactiveColor ?? self.pageIndicatorInactiveColor, inputClearButtonColor: inputClearButtonColor ?? self.inputClearButtonColor, itemBarChart: itemBarChart ?? self.itemBarChart, itemInputField: itemInputField ?? self.itemInputField, paymentOption: paymentOption ?? self.paymentOption)
+    public func withUpdated(blocksBackgroundColor: UIColor? = nil, modalBlocksBackgroundColor: UIColor? = nil, plainBackgroundColor: UIColor? = nil, modalPlainBackgroundColor: UIColor? = nil, itemPrimaryTextColor: UIColor? = nil, itemSecondaryTextColor: UIColor? = nil, itemDisabledTextColor: UIColor? = nil, itemAccentColor: UIColor? = nil, itemHighlightedColor: UIColor? = nil, itemDestructiveColor: UIColor? = nil, itemPlaceholderTextColor: UIColor? = nil, itemBlocksBackgroundColor: UIColor? = nil, itemModalBlocksBackgroundColor: UIColor? = nil, itemHighlightedBackgroundColor: UIColor? = nil, itemBlocksSeparatorColor: UIColor? = nil, itemPlainSeparatorColor: UIColor? = nil, disclosureArrowColor: UIColor? = nil, sectionHeaderTextColor: UIColor? = nil, freeTextColor: UIColor? = nil, freeTextErrorColor: UIColor? = nil, freeTextSuccessColor: UIColor? = nil, freeMonoIconColor: UIColor? = nil, itemSwitchColors: PresentationThemeSwitch? = nil, itemDisclosureActions: PresentationThemeItemDisclosureActions? = nil, itemCheckColors: PresentationThemeFillStrokeForeground? = nil, controlSecondaryColor: UIColor? = nil, freeInputField: PresentationInputFieldTheme? = nil, freePlainInputField: PresentationInputFieldTheme? = nil, mediaPlaceholderColor: UIColor? = nil, scrollIndicatorColor: UIColor? = nil, pageIndicatorInactiveColor: UIColor? = nil, inputClearButtonColor: UIColor? = nil, itemBarChart: PresentationThemeItemBarChart? = nil, itemInputField: PresentationInputFieldTheme? = nil, paymentOption: PaymentOption? = nil) -> PresentationThemeList {
+        return PresentationThemeList(blocksBackgroundColor: blocksBackgroundColor ?? self.blocksBackgroundColor, modalBlocksBackgroundColor: modalBlocksBackgroundColor ?? self.modalBlocksBackgroundColor, plainBackgroundColor: plainBackgroundColor ?? self.plainBackgroundColor, modalPlainBackgroundColor: modalPlainBackgroundColor ?? self.modalPlainBackgroundColor, itemPrimaryTextColor: itemPrimaryTextColor ?? self.itemPrimaryTextColor, itemSecondaryTextColor: itemSecondaryTextColor ?? self.itemSecondaryTextColor, itemDisabledTextColor: itemDisabledTextColor ?? self.itemDisabledTextColor, itemAccentColor: itemAccentColor ?? self.itemAccentColor, itemHighlightedColor: itemHighlightedColor ?? self.itemHighlightedColor, itemDestructiveColor: itemDestructiveColor ?? self.itemDestructiveColor, itemPlaceholderTextColor: itemPlaceholderTextColor ?? self.itemPlaceholderTextColor, itemBlocksBackgroundColor: itemBlocksBackgroundColor ?? self.itemBlocksBackgroundColor, itemModalBlocksBackgroundColor: itemModalBlocksBackgroundColor ?? self.itemModalBlocksBackgroundColor, itemHighlightedBackgroundColor: itemHighlightedBackgroundColor ?? self.itemHighlightedBackgroundColor, itemBlocksSeparatorColor: itemBlocksSeparatorColor ?? self.itemBlocksSeparatorColor, itemPlainSeparatorColor: itemPlainSeparatorColor ?? self.itemPlainSeparatorColor, disclosureArrowColor: disclosureArrowColor ?? self.disclosureArrowColor, sectionHeaderTextColor: sectionHeaderTextColor ?? self.sectionHeaderTextColor, freeTextColor: freeTextColor ?? self.freeTextColor, freeTextErrorColor: freeTextErrorColor ?? self.freeTextErrorColor, freeTextSuccessColor: freeTextSuccessColor ?? self.freeTextSuccessColor, freeMonoIconColor: freeMonoIconColor ?? self.freeMonoIconColor, itemSwitchColors: itemSwitchColors ?? self.itemSwitchColors, itemDisclosureActions: itemDisclosureActions ?? self.itemDisclosureActions, itemCheckColors: itemCheckColors ?? self.itemCheckColors, controlSecondaryColor: controlSecondaryColor ?? self.controlSecondaryColor, freeInputField: freeInputField ?? self.freeInputField, freePlainInputField: freePlainInputField ?? self.freePlainInputField, mediaPlaceholderColor: mediaPlaceholderColor ?? self.mediaPlaceholderColor, scrollIndicatorColor: scrollIndicatorColor ?? self.scrollIndicatorColor, pageIndicatorInactiveColor: pageIndicatorInactiveColor ?? self.pageIndicatorInactiveColor, inputClearButtonColor: inputClearButtonColor ?? self.inputClearButtonColor, itemBarChart: itemBarChart ?? self.itemBarChart, itemInputField: itemInputField ?? self.itemInputField, paymentOption: paymentOption ?? self.paymentOption)
+    }
+    
+    public var itemSearchHighlightColor: UIColor {
+        return self.itemAccentColor.withMultipliedAlpha(0.2)
     }
 }
 
@@ -552,6 +581,7 @@ public final class PresentationThemeChatList {
     public let itemBackgroundColor: UIColor
     public let pinnedItemBackgroundColor: UIColor
     public let itemHighlightedBackgroundColor: UIColor
+    public let pinnedItemHighlightedBackgroundColor: UIColor
     public let itemSelectedBackgroundColor: UIColor
     public let titleColor: UIColor
     public let secretTitleColor: UIColor
@@ -581,6 +611,9 @@ public final class PresentationThemeChatList {
     public let pinnedArchiveAvatarColor: PresentationThemeArchiveAvatarColors
     public let unpinnedArchiveAvatarColor: PresentationThemeArchiveAvatarColors
     public let onlineDotColor: UIColor
+    public let storyUnseenColors: PresentationThemeGradientColors
+    public let storyUnseenPrivateColors: PresentationThemeGradientColors
+    public let storySeenColors: PresentationThemeGradientColors
     
     init(
         backgroundColor: UIColor,
@@ -588,6 +621,7 @@ public final class PresentationThemeChatList {
         itemBackgroundColor: UIColor,
         pinnedItemBackgroundColor: UIColor,
         itemHighlightedBackgroundColor: UIColor,
+        pinnedItemHighlightedBackgroundColor: UIColor,
         itemSelectedBackgroundColor: UIColor,
         titleColor: UIColor,
         secretTitleColor: UIColor,
@@ -616,13 +650,17 @@ public final class PresentationThemeChatList {
         secretIconColor: UIColor,
         pinnedArchiveAvatarColor: PresentationThemeArchiveAvatarColors,
         unpinnedArchiveAvatarColor: PresentationThemeArchiveAvatarColors,
-        onlineDotColor: UIColor
+        onlineDotColor: UIColor,
+        storyUnseenColors: PresentationThemeGradientColors,
+        storyUnseenPrivateColors: PresentationThemeGradientColors,
+        storySeenColors: PresentationThemeGradientColors
     ) {
         self.backgroundColor = backgroundColor
         self.itemSeparatorColor = itemSeparatorColor
         self.itemBackgroundColor = itemBackgroundColor
         self.pinnedItemBackgroundColor = pinnedItemBackgroundColor
         self.itemHighlightedBackgroundColor = itemHighlightedBackgroundColor
+        self.pinnedItemHighlightedBackgroundColor = pinnedItemHighlightedBackgroundColor
         self.itemSelectedBackgroundColor = itemSelectedBackgroundColor
         self.titleColor = titleColor
         self.secretTitleColor = secretTitleColor
@@ -652,6 +690,9 @@ public final class PresentationThemeChatList {
         self.pinnedArchiveAvatarColor = pinnedArchiveAvatarColor
         self.unpinnedArchiveAvatarColor = unpinnedArchiveAvatarColor
         self.onlineDotColor = onlineDotColor
+        self.storyUnseenColors = storyUnseenColors
+        self.storyUnseenPrivateColors = storyUnseenPrivateColors
+        self.storySeenColors = storySeenColors
     }
     
     public func withUpdated(
@@ -660,6 +701,7 @@ public final class PresentationThemeChatList {
         itemBackgroundColor: UIColor? = nil,
         pinnedItemBackgroundColor: UIColor? = nil,
         itemHighlightedBackgroundColor: UIColor? = nil,
+        pinnedItemHighlightedBackgroundColor: UIColor? = nil,
         itemSelectedBackgroundColor: UIColor? = nil,
         titleColor: UIColor? = nil,
         secretTitleColor: UIColor? = nil,
@@ -688,7 +730,10 @@ public final class PresentationThemeChatList {
         secretIconColor: UIColor? = nil,
         pinnedArchiveAvatarColor: PresentationThemeArchiveAvatarColors? = nil,
         unpinnedArchiveAvatarColor: PresentationThemeArchiveAvatarColors? = nil,
-        onlineDotColor: UIColor? = nil
+        onlineDotColor: UIColor? = nil,
+        storyUnseenColors: PresentationThemeGradientColors? = nil,
+        storyUnseenPrivateColors: PresentationThemeGradientColors? = nil,
+        storySeenColors: PresentationThemeGradientColors? = nil
     ) -> PresentationThemeChatList {
         return PresentationThemeChatList(
             backgroundColor: backgroundColor ?? self.backgroundColor,
@@ -696,6 +741,7 @@ public final class PresentationThemeChatList {
             itemBackgroundColor: itemBackgroundColor ?? self.itemBackgroundColor,
             pinnedItemBackgroundColor: pinnedItemBackgroundColor ?? self.pinnedItemBackgroundColor,
             itemHighlightedBackgroundColor: itemHighlightedBackgroundColor ?? self.itemHighlightedBackgroundColor,
+            pinnedItemHighlightedBackgroundColor: pinnedItemHighlightedBackgroundColor ?? self.pinnedItemHighlightedBackgroundColor,
             itemSelectedBackgroundColor: itemSelectedBackgroundColor ?? self.itemSelectedBackgroundColor,
             titleColor: titleColor ?? self.titleColor,
             secretTitleColor: secretTitleColor ?? self.secretTitleColor,
@@ -724,7 +770,10 @@ public final class PresentationThemeChatList {
             secretIconColor: secretIconColor ?? self.secretIconColor,
             pinnedArchiveAvatarColor: pinnedArchiveAvatarColor ?? self.pinnedArchiveAvatarColor,
             unpinnedArchiveAvatarColor: unpinnedArchiveAvatarColor ?? self.unpinnedArchiveAvatarColor,
-            onlineDotColor: onlineDotColor ?? self.onlineDotColor
+            onlineDotColor: onlineDotColor ?? self.onlineDotColor,
+            storyUnseenColors: storyUnseenColors ?? self.storyUnseenColors,
+            storyUnseenPrivateColors: storyUnseenPrivateColors ?? self.storyUnseenPrivateColors,
+            storySeenColors: storySeenColors ?? self.storySeenColors
         )
     }
 }
@@ -750,6 +799,12 @@ public final class PresentationThemeBubbleColorComponents {
     public let reactionInactiveForeground: UIColor
     public let reactionActiveBackground: UIColor
     public let reactionActiveForeground: UIColor
+    public let reactionStarsInactiveBackground: UIColor
+    public let reactionStarsInactiveForeground: UIColor
+    public let reactionStarsActiveBackground: UIColor
+    public let reactionStarsActiveForeground: UIColor
+    public let reactionInactiveMediaPlaceholder: UIColor
+    public let reactionActiveMediaPlaceholder: UIColor
     
     public init(
         fill: [UIColor],
@@ -759,7 +814,13 @@ public final class PresentationThemeBubbleColorComponents {
         reactionInactiveBackground: UIColor,
         reactionInactiveForeground: UIColor,
         reactionActiveBackground: UIColor,
-        reactionActiveForeground: UIColor
+        reactionActiveForeground: UIColor,
+        reactionStarsInactiveBackground: UIColor,
+        reactionStarsInactiveForeground: UIColor,
+        reactionStarsActiveBackground: UIColor,
+        reactionStarsActiveForeground: UIColor,
+        reactionInactiveMediaPlaceholder: UIColor,
+        reactionActiveMediaPlaceholder: UIColor
     ) {
         self.fill = fill
         self.highlightedFill = highlightedFill
@@ -769,6 +830,12 @@ public final class PresentationThemeBubbleColorComponents {
         self.reactionInactiveForeground = reactionInactiveForeground
         self.reactionActiveBackground = reactionActiveBackground
         self.reactionActiveForeground = reactionActiveForeground
+        self.reactionStarsInactiveBackground = reactionStarsInactiveBackground
+        self.reactionStarsInactiveForeground = reactionStarsInactiveForeground
+        self.reactionStarsActiveBackground = reactionStarsActiveBackground
+        self.reactionStarsActiveForeground = reactionStarsActiveForeground
+        self.reactionInactiveMediaPlaceholder = reactionInactiveMediaPlaceholder
+        self.reactionActiveMediaPlaceholder = reactionActiveMediaPlaceholder
     }
     
     public func withUpdated(
@@ -778,7 +845,13 @@ public final class PresentationThemeBubbleColorComponents {
         reactionInactiveBackground: UIColor? = nil,
         reactionInactiveForeground: UIColor? = nil,
         reactionActiveBackground: UIColor? = nil,
-        reactionActiveForeground: UIColor? = nil
+        reactionActiveForeground: UIColor? = nil,
+        reactionStarsInactiveBackground: UIColor? = nil,
+        reactionStarsInactiveForeground: UIColor? = nil,
+        reactionStarsActiveBackground: UIColor? = nil,
+        reactionStarsActiveForeground: UIColor? = nil,
+        reactionInactiveMediaPlaceholder: UIColor? = nil,
+        reactionActiveMediaPlaceholder: UIColor? = nil
     ) -> PresentationThemeBubbleColorComponents {
         return PresentationThemeBubbleColorComponents(
             fill: fill ?? self.fill,
@@ -788,7 +861,13 @@ public final class PresentationThemeBubbleColorComponents {
             reactionInactiveBackground: reactionInactiveBackground ?? self.reactionInactiveBackground,
             reactionInactiveForeground: reactionInactiveForeground ?? self.reactionInactiveForeground,
             reactionActiveBackground: reactionActiveBackground ?? self.reactionActiveBackground,
-            reactionActiveForeground: reactionActiveForeground ?? self.reactionActiveForeground
+            reactionActiveForeground: reactionActiveForeground ?? self.reactionActiveForeground,
+            reactionStarsInactiveBackground: reactionStarsInactiveBackground ?? self.reactionStarsInactiveBackground,
+            reactionStarsInactiveForeground: reactionStarsInactiveForeground ?? self.reactionStarsInactiveForeground,
+            reactionStarsActiveBackground: reactionStarsActiveBackground ?? self.reactionStarsActiveBackground,
+            reactionStarsActiveForeground: reactionStarsActiveForeground ?? self.reactionStarsActiveForeground,
+            reactionInactiveMediaPlaceholder: reactionInactiveMediaPlaceholder ?? self.reactionInactiveMediaPlaceholder,
+            reactionActiveMediaPlaceholder: reactionActiveMediaPlaceholder ?? self.reactionActiveMediaPlaceholder
         )
     }
 }
@@ -1133,6 +1212,18 @@ public final class PresentationThemeInputMediaPanel {
     public let panelSeparatorColor: UIColor
     public let panelIconColor: UIColor
     public let panelHighlightedIconBackgroundColor: UIColor
+    public let panelHighlightedIconColor: UIColor
+    public let panelContentVibrantOverlayColor: UIColor
+    public let panelContentControlVibrantOverlayColor: UIColor
+    public let panelContentControlVibrantSelectionColor: UIColor
+    public let panelContentControlOpaqueOverlayColor: UIColor
+    public let panelContentControlOpaqueSelectionColor: UIColor
+    public let panelContentVibrantSearchOverlayColor: UIColor
+    public let panelContentVibrantSearchOverlaySelectedColor: UIColor
+    public let panelContentVibrantSearchOverlayHighlightColor: UIColor
+    public let panelContentOpaqueSearchOverlayColor: UIColor
+    public let panelContentOpaqueSearchOverlaySelectedColor: UIColor
+    public let panelContentOpaqueSearchOverlayHighlightColor: UIColor
     public let stickersBackgroundColor: UIColor
     public let stickersSectionTextColor: UIColor
     public let stickersSearchBackgroundColor: UIColor
@@ -1140,11 +1231,48 @@ public final class PresentationThemeInputMediaPanel {
     public let stickersSearchPrimaryColor: UIColor
     public let stickersSearchControlColor: UIColor
     public let gifsBackgroundColor: UIColor
+    public let backgroundColor: UIColor
     
-    public init(panelSeparatorColor: UIColor, panelIconColor: UIColor, panelHighlightedIconBackgroundColor: UIColor, stickersBackgroundColor: UIColor, stickersSectionTextColor: UIColor, stickersSearchBackgroundColor: UIColor, stickersSearchPlaceholderColor: UIColor, stickersSearchPrimaryColor: UIColor, stickersSearchControlColor: UIColor, gifsBackgroundColor: UIColor) {
+    public init(
+        panelSeparatorColor: UIColor,
+        panelIconColor: UIColor,
+        panelHighlightedIconBackgroundColor: UIColor,
+        panelHighlightedIconColor: UIColor,
+        panelContentVibrantOverlayColor: UIColor,
+        panelContentControlVibrantOverlayColor: UIColor,
+        panelContentControlVibrantSelectionColor: UIColor,
+        panelContentControlOpaqueOverlayColor: UIColor,
+        panelContentControlOpaqueSelectionColor: UIColor,
+        panelContentVibrantSearchOverlayColor: UIColor,
+        panelContentVibrantSearchOverlaySelectedColor: UIColor,
+        panelContentVibrantSearchOverlayHighlightColor: UIColor,
+        panelContentOpaqueSearchOverlayColor: UIColor,
+        panelContentOpaqueSearchOverlaySelectedColor: UIColor,
+        panelContentOpaqueSearchOverlayHighlightColor: UIColor,
+        stickersBackgroundColor: UIColor,
+        stickersSectionTextColor: UIColor,
+        stickersSearchBackgroundColor: UIColor,
+        stickersSearchPlaceholderColor: UIColor,
+        stickersSearchPrimaryColor: UIColor,
+        stickersSearchControlColor: UIColor,
+        gifsBackgroundColor: UIColor,
+        backgroundColor: UIColor
+    ) {
         self.panelSeparatorColor = panelSeparatorColor
         self.panelIconColor = panelIconColor
         self.panelHighlightedIconBackgroundColor = panelHighlightedIconBackgroundColor
+        self.panelHighlightedIconColor = panelHighlightedIconColor
+        self.panelContentVibrantOverlayColor = panelContentVibrantOverlayColor
+        self.panelContentControlVibrantOverlayColor = panelContentControlVibrantOverlayColor
+        self.panelContentControlVibrantSelectionColor = panelContentControlVibrantSelectionColor
+        self.panelContentControlOpaqueOverlayColor = panelContentControlOpaqueOverlayColor
+        self.panelContentControlOpaqueSelectionColor = panelContentControlOpaqueSelectionColor
+        self.panelContentVibrantSearchOverlayColor = panelContentVibrantSearchOverlayColor
+        self.panelContentVibrantSearchOverlaySelectedColor = panelContentVibrantSearchOverlaySelectedColor
+        self.panelContentVibrantSearchOverlayHighlightColor = panelContentVibrantSearchOverlayHighlightColor
+        self.panelContentOpaqueSearchOverlayColor = panelContentOpaqueSearchOverlayColor
+        self.panelContentOpaqueSearchOverlaySelectedColor = panelContentOpaqueSearchOverlaySelectedColor
+        self.panelContentOpaqueSearchOverlayHighlightColor = panelContentOpaqueSearchOverlayHighlightColor
         self.stickersBackgroundColor = stickersBackgroundColor
         self.stickersSectionTextColor = stickersSectionTextColor
         self.stickersSearchBackgroundColor = stickersSearchBackgroundColor
@@ -1152,10 +1280,58 @@ public final class PresentationThemeInputMediaPanel {
         self.stickersSearchPrimaryColor = stickersSearchPrimaryColor
         self.stickersSearchControlColor = stickersSearchControlColor
         self.gifsBackgroundColor = gifsBackgroundColor
+        self.backgroundColor = backgroundColor
     }
     
-    public func withUpdated(panelSeparatorColor: UIColor? = nil, panelIconColor: UIColor? = nil, panelHighlightedIconBackgroundColor: UIColor? = nil, stickersBackgroundColor: UIColor? = nil, stickersSectionTextColor: UIColor? = nil, stickersSearchBackgroundColor: UIColor? = nil, stickersSearchPlaceholderColor: UIColor? = nil, stickersSearchPrimaryColor: UIColor? = nil, stickersSearchControlColor: UIColor? = nil, gifsBackgroundColor: UIColor? = nil) -> PresentationThemeInputMediaPanel {
-        return PresentationThemeInputMediaPanel(panelSeparatorColor: panelSeparatorColor ?? self.panelSeparatorColor, panelIconColor: panelIconColor ?? self.panelIconColor, panelHighlightedIconBackgroundColor: panelHighlightedIconBackgroundColor ?? self.panelHighlightedIconBackgroundColor, stickersBackgroundColor: stickersBackgroundColor ?? self.stickersBackgroundColor, stickersSectionTextColor: stickersSectionTextColor ?? self.stickersSectionTextColor, stickersSearchBackgroundColor: stickersSearchBackgroundColor ?? self.stickersSearchBackgroundColor, stickersSearchPlaceholderColor: stickersSearchPlaceholderColor ?? self.stickersSearchPlaceholderColor, stickersSearchPrimaryColor: stickersSearchPrimaryColor ?? self.stickersSearchPrimaryColor, stickersSearchControlColor: stickersSearchControlColor ?? self.stickersSearchControlColor, gifsBackgroundColor: gifsBackgroundColor ?? self.gifsBackgroundColor)
+    public func withUpdated(
+        panelSeparatorColor: UIColor? = nil,
+        panelIconColor: UIColor? = nil,
+        panelHighlightedIconBackgroundColor: UIColor? = nil,
+        panelHighlightedIconColor: UIColor? = nil,
+        panelContentVibrantOverlayColor: UIColor? = nil,
+        panelContentControlVibrantOverlayColor: UIColor? = nil,
+        panelContentControlVibrantSelectionColor: UIColor? = nil,
+        panelContentControlOpaqueOverlayColor: UIColor? = nil,
+        panelContentControlOpaqueSelectionColor: UIColor? = nil,
+        panelContentVibrantSearchOverlayColor: UIColor? = nil,
+        panelContentVibrantSearchOverlaySelectedColor: UIColor? = nil,
+        panelContentVibrantSearchOverlayHighlightColor: UIColor? = nil,
+        panelContentOpaqueSearchOverlayColor: UIColor? = nil,
+        panelContentOpaqueSearchOverlaySelectedColor: UIColor? = nil,
+        panelContentOpaqueSearchOverlayHighlightColor: UIColor? = nil,
+        stickersBackgroundColor: UIColor? = nil,
+        stickersSectionTextColor: UIColor? = nil,
+        stickersSearchBackgroundColor: UIColor? = nil,
+        stickersSearchPlaceholderColor: UIColor? = nil,
+        stickersSearchPrimaryColor: UIColor? = nil,
+        stickersSearchControlColor: UIColor? = nil,
+        gifsBackgroundColor: UIColor? = nil,
+        backgroundColor: UIColor? = nil
+    ) -> PresentationThemeInputMediaPanel {
+        return PresentationThemeInputMediaPanel(
+            panelSeparatorColor: panelSeparatorColor ?? self.panelSeparatorColor,
+            panelIconColor: panelIconColor ?? self.panelIconColor,
+            panelHighlightedIconBackgroundColor: panelHighlightedIconBackgroundColor ?? self.panelHighlightedIconBackgroundColor,
+            panelHighlightedIconColor: panelHighlightedIconColor ?? self.panelHighlightedIconColor,
+            panelContentVibrantOverlayColor: panelContentVibrantOverlayColor ?? self.panelContentVibrantOverlayColor,
+            panelContentControlVibrantOverlayColor: panelContentControlVibrantOverlayColor ?? self.panelContentControlVibrantOverlayColor,
+            panelContentControlVibrantSelectionColor: panelContentControlVibrantSelectionColor ?? self.panelContentControlVibrantSelectionColor,
+            panelContentControlOpaqueOverlayColor: panelContentControlOpaqueOverlayColor ?? self.panelContentControlOpaqueOverlayColor,
+            panelContentControlOpaqueSelectionColor: panelContentControlOpaqueSelectionColor ?? self.panelContentControlOpaqueSelectionColor,
+            panelContentVibrantSearchOverlayColor: panelContentVibrantSearchOverlayColor ?? self.panelContentVibrantSearchOverlayColor,
+            panelContentVibrantSearchOverlaySelectedColor: panelContentVibrantSearchOverlaySelectedColor ?? self.panelContentVibrantSearchOverlaySelectedColor,
+            panelContentVibrantSearchOverlayHighlightColor: panelContentVibrantSearchOverlayHighlightColor ?? self.panelContentVibrantSearchOverlayHighlightColor,
+            panelContentOpaqueSearchOverlayColor: panelContentOpaqueSearchOverlayColor ?? self.panelContentOpaqueSearchOverlayColor,
+            panelContentOpaqueSearchOverlaySelectedColor: panelContentOpaqueSearchOverlaySelectedColor ?? self.panelContentOpaqueSearchOverlaySelectedColor,
+            panelContentOpaqueSearchOverlayHighlightColor: panelContentOpaqueSearchOverlayHighlightColor ?? self.panelContentOpaqueSearchOverlayHighlightColor,
+            stickersBackgroundColor: stickersBackgroundColor ?? self.stickersBackgroundColor,
+            stickersSectionTextColor: stickersSectionTextColor ?? self.stickersSectionTextColor,
+            stickersSearchBackgroundColor: stickersSearchBackgroundColor ?? self.stickersSearchBackgroundColor,
+            stickersSearchPlaceholderColor: stickersSearchPlaceholderColor ?? self.stickersSearchPlaceholderColor,
+            stickersSearchPrimaryColor: stickersSearchPrimaryColor ?? self.stickersSearchPrimaryColor, stickersSearchControlColor: stickersSearchControlColor ?? self.stickersSearchControlColor,
+            gifsBackgroundColor: gifsBackgroundColor ?? self.gifsBackgroundColor,
+            backgroundColor: backgroundColor ?? self.backgroundColor
+        )
     }
 }
 
@@ -1163,23 +1339,25 @@ public final class PresentationThemeInputButtonPanel {
     public let panelSeparatorColor: UIColor
     public let panelBackgroundColor: UIColor
     public let buttonFillColor: UIColor
+    public let buttonHighlightColor: UIColor
     public let buttonStrokeColor: UIColor
     public let buttonHighlightedFillColor: UIColor
     public let buttonHighlightedStrokeColor: UIColor
     public let buttonTextColor: UIColor
     
-    public init(panelSeparatorColor: UIColor, panelBackgroundColor: UIColor, buttonFillColor: UIColor, buttonStrokeColor: UIColor, buttonHighlightedFillColor: UIColor, buttonHighlightedStrokeColor: UIColor, buttonTextColor: UIColor) {
+    public init(panelSeparatorColor: UIColor, panelBackgroundColor: UIColor, buttonFillColor: UIColor, buttonHighlightColor: UIColor, buttonStrokeColor: UIColor, buttonHighlightedFillColor: UIColor, buttonHighlightedStrokeColor: UIColor, buttonTextColor: UIColor) {
         self.panelSeparatorColor = panelSeparatorColor
         self.panelBackgroundColor = panelBackgroundColor
         self.buttonFillColor = buttonFillColor
+        self.buttonHighlightColor = buttonHighlightColor
         self.buttonStrokeColor = buttonStrokeColor
         self.buttonHighlightedFillColor = buttonHighlightedFillColor
         self.buttonHighlightedStrokeColor = buttonHighlightedStrokeColor
         self.buttonTextColor = buttonTextColor
     }
     
-    public func withUpdated(panelSeparatorColor: UIColor? = nil, panelBackgroundColor: UIColor? = nil, buttonFillColor: UIColor? = nil, buttonStrokeColor: UIColor? = nil, buttonHighlightedFillColor: UIColor? = nil, buttonHighlightedStrokeColor: UIColor? = nil, buttonTextColor: UIColor? = nil) -> PresentationThemeInputButtonPanel {
-        return PresentationThemeInputButtonPanel(panelSeparatorColor: panelSeparatorColor ?? self.panelSeparatorColor, panelBackgroundColor: panelBackgroundColor ?? self.panelBackgroundColor, buttonFillColor: buttonFillColor ?? self.buttonFillColor, buttonStrokeColor: buttonStrokeColor ?? self.buttonStrokeColor, buttonHighlightedFillColor: buttonHighlightedFillColor ?? self.buttonHighlightedFillColor, buttonHighlightedStrokeColor: buttonHighlightedStrokeColor ?? self.buttonHighlightedStrokeColor, buttonTextColor: buttonTextColor ?? self.buttonTextColor)
+    public func withUpdated(panelSeparatorColor: UIColor? = nil, panelBackgroundColor: UIColor? = nil, buttonFillColor: UIColor? = nil, buttonHighlightColor: UIColor? = nil, buttonStrokeColor: UIColor? = nil, buttonHighlightedFillColor: UIColor? = nil, buttonHighlightedStrokeColor: UIColor? = nil, buttonTextColor: UIColor? = nil) -> PresentationThemeInputButtonPanel {
+        return PresentationThemeInputButtonPanel(panelSeparatorColor: panelSeparatorColor ?? self.panelSeparatorColor, panelBackgroundColor: panelBackgroundColor ?? self.panelBackgroundColor, buttonFillColor: buttonFillColor ?? self.buttonFillColor, buttonHighlightColor: buttonHighlightColor ?? self.buttonHighlightColor, buttonStrokeColor: buttonStrokeColor ?? self.buttonStrokeColor, buttonHighlightedFillColor: buttonHighlightedFillColor ?? self.buttonHighlightedFillColor, buttonHighlightedStrokeColor: buttonHighlightedStrokeColor ?? self.buttonHighlightedStrokeColor, buttonTextColor: buttonTextColor ?? self.buttonTextColor)
     }
 }
 
@@ -1412,6 +1590,7 @@ public final class PresentationTheme: Equatable {
     public let chart: PresentationThemeChart
     public let preview: Bool
     public var forceSync: Bool = false
+    public var starGift: StarGift?
     
     public let resourceCache: PresentationsResourceCache = PresentationsResourceCache()
     
@@ -1479,9 +1658,16 @@ public final class PresentationTheme: Equatable {
         return PresentationTheme(name: self.name, index: self.index, referenceTheme: self.referenceTheme, overallDarkAppearance: self.overallDarkAppearance, intro: self.intro, passcode: self.passcode, rootController: self.rootController, list: self.list, chatList: self.chatList, chat: self.chat, actionSheet: self.actionSheet, contextMenu: self.contextMenu, inAppNotification: self.inAppNotification, chart: self.chart, preview: preview)
     }
     
-    public func withInvertedBlocksBackground() -> PresentationTheme {
-        let list = self.list.withUpdated(blocksBackgroundColor: self.list.itemBlocksBackgroundColor, itemBlocksBackgroundColor: self.list.blocksBackgroundColor)
-        
-        return PresentationTheme(name: self.name, index: self.index, referenceTheme: self.referenceTheme, overallDarkAppearance: self.overallDarkAppearance, intro: self.intro, passcode: self.passcode, rootController: self.rootController, list: list, chatList: self.chatList, chat: self.chat, actionSheet: self.actionSheet, contextMenu: self.contextMenu, inAppNotification: self.inAppNotification, chart: self.chart, preview: self.preview)
+    public func withModalBlocksBackground() -> PresentationTheme {
+        if self.list.blocksBackgroundColor.rgb == self.list.plainBackgroundColor.rgb {
+            let list = self.list.withUpdated(
+                blocksBackgroundColor: self.list.modalBlocksBackgroundColor,
+                itemPlaceholderTextColor: self.overallDarkAppearance ? self.list.itemPlaceholderTextColor.withMultipliedBrightnessBy(1.25) : nil,
+                itemBlocksBackgroundColor: self.list.itemModalBlocksBackgroundColor
+            )
+            return PresentationTheme(name: self.name, index: self.index, referenceTheme: self.referenceTheme, overallDarkAppearance: self.overallDarkAppearance, intro: self.intro, passcode: self.passcode, rootController: self.rootController, list: list, chatList: self.chatList, chat: self.chat, actionSheet: self.actionSheet, contextMenu: self.contextMenu, inAppNotification: self.inAppNotification, chart: self.chart, preview: self.preview)
+        } else {
+            return self
+        }
     }
 }

@@ -54,11 +54,17 @@ typedef enum {
 - (void)forceStatusBarAppearanceUpdate;
 - (bool)prefersLightStatusBar;
 
+- (void)lockPortrait;
+- (void)unlockPortrait;
+- (void)disableInteractiveKeyboardGesture;
+
 - (TGNavigationBarPallete *)navigationBarPallete;
 - (TGMenuSheetPallete *)menuSheetPallete;
 - (TGMenuSheetPallete *)darkMenuSheetPallete;
 - (TGMediaAssetsPallete *)mediaAssetsPallete;
 - (TGCheckButtonPallete *)checkButtonPallete;
+
+- (NSArray<NSNumber *> *)cameraZoomLevels;
 
 @required
 
@@ -85,8 +91,17 @@ typedef enum {
 - (NSDictionary *)serverMediaDataForAssetUrl:(NSString *)url;
 
 - (void)presentActionSheet:(NSArray<LegacyComponentsActionSheetAction *> *)actions view:(UIView *)view completion:(void (^)(LegacyComponentsActionSheetAction *))completion;
-- (void)presentActionSheet:(NSArray<LegacyComponentsActionSheetAction *> *)actions view:(UIView *)view sourceRect:(CGRect (^)(void))sourceRect completion:(void (^)(LegacyComponentsActionSheetAction *))completion ;
+- (void)presentActionSheet:(NSArray<LegacyComponentsActionSheetAction *> *)actions view:(UIView *)view sourceRect:(CGRect (^)(void))sourceRect completion:(void (^)(LegacyComponentsActionSheetAction *))completion;
+
+- (void)presentTooltip:(NSString *)text icon:(UIImage *)icon sourceRect:(CGRect)sourceRect;
 
 - (id<LegacyComponentsOverlayWindowManager>)makeOverlayWindowManager;
+
+@optional
+
+// How much further left than the right safe inset a control at the top right of a full-screen interface sits to clear
+// a status island beside its top row (iPhone Duo's unfolded screen in portrait); 0 elsewhere. Such an interface keeps
+// its top row at the top, beside the island, rather than below it.
+- (CGFloat)statusIslandTrailingInset;
 
 @end

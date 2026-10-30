@@ -1,12 +1,12 @@
 #import "TGPassportScanView.h"
-#import "PGCamera.h"
-#import "TGCameraPreviewView.h"
+#import <LegacyComponents/PGCamera.h>
+#import <LegacyComponents/TGCameraPreviewView.h>
 
-#import "TGPassportOCR.h"
+#import <LegacyComponents/TGPassportOCR.h>
 
 #import "LegacyComponentsInternal.h"
 
-#import "TGTimerTarget.h"
+#import <LegacyComponents/TGTimerTarget.h>
 
 @interface TGPassportScanView ()
 {
@@ -68,7 +68,7 @@
     __weak TGPassportScanView *weakSelf = self;
     [_camera captureNextFrameCompletion:^(UIImage *image)
     {
-        [_ocrDisposable setDisposable:[[[TGPassportOCR recognizeDataInImage:image shouldBeDriversLicense:false] deliverOn:[SQueue mainQueue]] startWithNext:^(TGPassportMRZ *next)
+        [_ocrDisposable setDisposable:[[[TGPassportOCR recognizeDataInImage:image shouldBeDriversLicense:false] deliverOn:[SQueue mainQueue]] startStrictWithNext:^(TGPassportMRZ *next)
         {
             __strong TGPassportScanView *strongSelf = weakSelf;
             if (strongSelf == nil)
@@ -85,7 +85,7 @@
             {
                 strongSelf->_timer = [TGTimerTarget scheduledMainThreadTimerWithTarget:self action:@selector(handleNextFrame) interval:0.45 repeat:false];
             }
-        }]];
+        } file:__FILE_NAME__ line:__LINE__]];
     }];
 }
 

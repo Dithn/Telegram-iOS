@@ -3,7 +3,6 @@ import UIKit
 import Display
 import AsyncDisplayKit
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import AccountContext
 import TelegramPresentationData
@@ -71,7 +70,7 @@ private final class MediaPreviewView: SimpleLayer {
                     |> map { image in
                         return image.flatMap(processImage)
                     }
-                    |> deliverOnMainQueue).start(next: { [weak self] image in
+                    |> deliverOnMainQueue).startStrict(next: { [weak self] image in
                         guard let strongSelf = self else {
                             return
                         }
@@ -88,7 +87,7 @@ private final class MediaPreviewView: SimpleLayer {
                             }
                             strongSelf.contents = image.cgImage
                         }
-                    })
+                    }).strict()
                 }
             }
         }
@@ -371,7 +370,7 @@ private final class DayComponent: Component {
         private var currentSelection: DaySelection?
 
         private(set) var timestamp: Int32?
-        private(set) var index: MessageIndex?
+        private(set) var index: EngineMessage.Index?
         private var isHighlightingEnabled: Bool = false
 
         init() {
@@ -405,7 +404,7 @@ private final class DayComponent: Component {
             self.action?()
         }
 
-        func update(component: DayComponent, availableSize: CGSize, environment: Environment<DayEnvironment>, transition: Transition) -> CGSize {
+        func update(component: DayComponent, availableSize: CGSize, environment: Environment<DayEnvironment>, transition: ComponentTransition) -> CGSize {
             let isFirstTime = self.action == nil
 
             self.action = component.action
@@ -614,7 +613,7 @@ private final class DayComponent: Component {
         return View()
     }
 
-    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<DayEnvironment>, transition: Transition) -> CGSize {
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<DayEnvironment>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, environment: environment, transition: transition)
     }
 }
@@ -860,7 +859,7 @@ private final class MonthComponent: CombinedComponent {
                     let delayIndex = dayEnvironment.selectionDelayCoordination
                     context.add(selection
                         .position(CGPoint(x: selectionRect.midX, y: selectionRect.midY))
-                        .appear(Transition.Appear { _, view, transition in
+                        .appear(ComponentTransition.Appear { _, view, transition in
                             if case .none = transition.animation {
                                 return
                             }
@@ -868,7 +867,7 @@ private final class MonthComponent: CombinedComponent {
                             view.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.05, delay: delay)
                             view.layer.animateFrame(from: CGRect(origin: view.frame.origin, size: CGSize(width: selectionRadius, height: view.frame.height)), to: view.frame, duration: 0.25, delay: delay, timingFunction: kCAMediaTimingFunctionSpring)
                         })
-                        .disappear(Transition.Disappear { view, transition, completion in
+                        .disappear(ComponentTransition.Disappear { view, transition, completion in
                             if case .none = transition.animation {
                                 completion()
                                 return
@@ -976,19 +975,19 @@ private func monthMetadata(calendar: Calendar, for baseDate: Date, currentYear: 
 }
 
 public final class CalendarMessageScreen: ViewController {
-    private final class Node: ViewControllerTracingNode, UIScrollViewDelegate {
+    private final class Node: ViewControllerTracingNode, ASScrollViewDelegate {
         struct SelectionState {
             var dayRange: ClosedRange<Int32>?
         }
 
         private weak var controller: CalendarMessageScreen?
         private let context: AccountContext
-        private let peerId: PeerId
+        private let peerId: EnginePeer.Id
         private let initialTimestamp: Int32
         private let enableMessageRangeDeletion: Bool
         private let canNavigateToEmptyDays: Bool
         private let navigateToOffset: (Int, Int32) -> Void
-        private let previewDay: (Int32, MessageIndex?, ASDisplayNode, CGRect, ContextGesture) -> Void
+        private let previewDay: (Int32, EngineMessage.Index?, ASDisplayNode, CGRect, ContextGesture) -> Void
 
         private var presentationData: PresentationData
         private var scrollView: Scroller
@@ -1002,7 +1001,7 @@ public final class CalendarMessageScreen: ViewController {
         private let dayEnvironment: DayEnvironment
 
         private var validLayout: (layout: ContainerViewLayout, navigationHeight: CGFloat)?
-        private var scrollLayout: (width: CGFloat, contentHeight: CGFloat, frames: [Int: CGRect])?
+        private var scrollLayout: (width: CGFloat, sideInsets: UIEdgeInsets, contentHeight: CGFloat, frames: [Int: CGRect])?
 
         private var calendarState: SparseMessageCalendar.State?
 
@@ -1019,13 +1018,13 @@ public final class CalendarMessageScreen: ViewController {
         init(
             controller: CalendarMessageScreen,
             context: AccountContext,
-            peerId: PeerId,
+            peerId: EnginePeer.Id,
             calendarSource: SparseMessageCalendar,
             initialTimestamp: Int32,
             enableMessageRangeDeletion: Bool,
             canNavigateToEmptyDays: Bool,
             navigateToOffset: @escaping (Int, Int32) -> Void,
-            previewDay: @escaping (Int32, MessageIndex?, ASDisplayNode, CGRect, ContextGesture) -> Void
+            previewDay: @escaping (Int32, EngineMessage.Index?, ASDisplayNode, CGRect, ContextGesture) -> Void
         ) {
             self.controller = controller
             self.context = context
@@ -1174,28 +1173,28 @@ public final class CalendarMessageScreen: ViewController {
 
             self.backgroundColor = self.presentationData.theme.list.plainBackgroundColor
 
-            self.scrollView.delegate = self
+            self.scrollView.delegate = self.wrappedScrollViewDelegate
             self.addSubnode(self.contextGestureContainerNode)
             self.contextGestureContainerNode.view.addSubview(self.scrollView)
 
             self.isLoadingMoreDisposable = (self.calendarSource.isLoadingMore
             |> distinctUntilChanged
             |> filter { !$0 }
-            |> deliverOnMainQueue).start(next: { [weak self] _ in
+            |> deliverOnMainQueue).startStrict(next: { [weak self] _ in
                 guard let strongSelf = self else {
                     return
                 }
                 strongSelf.calendarSource.loadMore()
-            })
+            }).strict()
 
             self.stateDisposable = (self.calendarSource.state
-            |> deliverOnMainQueue).start(next: { [weak self] state in
+            |> deliverOnMainQueue).startStrict(next: { [weak self] state in
                 guard let strongSelf = self else {
                     return
                 }
                 strongSelf.calendarState = state
                 strongSelf.reloadMediaInfo()
-            })
+            }).strict()
         }
 
         deinit {
@@ -1204,12 +1203,12 @@ public final class CalendarMessageScreen: ViewController {
         }
 
         func toggleSelectionMode() {
-            var transition: Transition = .immediate
+            var transition: ComponentTransition = .immediate
             if self.selectionState == nil {
                 self.selectionState = SelectionState(dayRange: nil)
             } else {
                 self.selectionState = nil
-                transition = Transition(animation: .curve(duration: 0.25, curve: .easeInOut))
+                transition = ComponentTransition(animation: .curve(duration: 0.25, curve: .easeInOut))
                 transition = transition.withUserData(SelectionTransition.end)
             }
 
@@ -1237,7 +1236,7 @@ public final class CalendarMessageScreen: ViewController {
             self.selectionToolbarActionSelected()
         }
 
-        func containerLayoutUpdated(layout: ContainerViewLayout, navigationHeight: CGFloat, transition: ContainedViewLayoutTransition, componentsTransition: Transition) {
+        func containerLayoutUpdated(layout: ContainerViewLayout, navigationHeight: CGFloat, transition: ContainedViewLayoutTransition, componentsTransition: ComponentTransition) {
             let isFirstLayout = self.validLayout == nil
             self.validLayout = (layout, navigationHeight)
 
@@ -1247,7 +1246,11 @@ public final class CalendarMessageScreen: ViewController {
                 options.insert(.input)
             }
             let bottomInset: CGFloat = layout.insets(options: options).bottom
-            if !layout.safeInsets.left.isZero {
+            // The compact landscape toolbar wherever a compact layout has a side inset in landscape: iPhone Duo's folded
+            // screen has one on the left OR the right (its side strip), so testing the left one alone gave its two
+            // landscapes different toolbars. Elsewhere a left inset implies landscape and the right one is equal.
+            let hasLandscapeSideInset = layout.metrics.widthClass == .compact && layout.size.width > layout.size.height && (!layout.safeInsets.left.isZero || !layout.safeInsets.right.isZero)
+            if !layout.safeInsets.left.isZero || hasLandscapeSideInset {
                 tabBarHeight = 34.0 + bottomInset
             } else {
                 tabBarHeight = 49.0 + bottomInset
@@ -1282,11 +1285,13 @@ public final class CalendarMessageScreen: ViewController {
                     toolbarText = self.presentationData.strings.MessageCalendar_ClearHistoryForTheseDays
                 }
                 
+                // The bottom selection toolbar spans iPhone Duo's side strip; it keeps clear only of a corner block at the bottom.
+                let bottomSideInsets = layout.bottomEdgeSideInsets()
                 if let currrent = self.selectionToolbarNode {
                     selectionToolbarNode = currrent
-                    
+
                     transition.updateFrame(node: selectionToolbarNode, frame: tabBarFrame)
-                    selectionToolbarNode.updateLayout(size: tabBarFrame.size, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, additionalSideInsets: layout.additionalInsets, bottomInset: bottomInset, toolbar: Toolbar(leftAction: nil, rightAction: nil, middleAction: ToolbarAction(title: toolbarText, isEnabled: true, color: .custom(self.selectionState?.dayRange != nil ? self.presentationData.theme.list.itemDestructiveColor : self.presentationData.theme.list.itemDisabledTextColor))), transition: transition)
+                    selectionToolbarNode.updateLayout(size: tabBarFrame.size, leftInset: bottomSideInsets.left, rightInset: bottomSideInsets.right, additionalSideInsets: layout.additionalInsets, bottomInset: bottomInset, toolbar: Toolbar(leftAction: nil, rightAction: nil, middleAction: ToolbarAction(title: toolbarText, isEnabled: true, color: .custom(self.selectionState?.dayRange != nil ? self.presentationData.theme.list.itemDestructiveColor : self.presentationData.theme.list.itemDisabledTextColor))), transition: transition)
                 } else {
                     selectionToolbarNode = ToolbarNode(
                         theme: ToolbarTheme(
@@ -1301,7 +1306,7 @@ public final class CalendarMessageScreen: ViewController {
                         }
                     )
                     selectionToolbarNode.frame = tabBarFrame
-                    selectionToolbarNode.updateLayout(size: tabBarFrame.size, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, additionalSideInsets: layout.additionalInsets, bottomInset: bottomInset, toolbar: Toolbar(leftAction: nil, rightAction: nil, middleAction: ToolbarAction(title: toolbarText, isEnabled: true, color: .custom(self.selectionState?.dayRange != nil ? self.presentationData.theme.list.itemDestructiveColor : self.presentationData.theme.list.itemDisabledTextColor))), transition: .immediate)
+                    selectionToolbarNode.updateLayout(size: tabBarFrame.size, leftInset: bottomSideInsets.left, rightInset: bottomSideInsets.right, additionalSideInsets: layout.additionalInsets, bottomInset: bottomInset, toolbar: Toolbar(leftAction: nil, rightAction: nil, middleAction: ToolbarAction(title: toolbarText, isEnabled: true, color: .custom(self.selectionState?.dayRange != nil ? self.presentationData.theme.list.itemDestructiveColor : self.presentationData.theme.list.itemDisabledTextColor))), transition: .immediate)
                     self.addSubnode(selectionToolbarNode)
                     self.selectionToolbarNode = selectionToolbarNode
                     transition.animatePositionAdditive(node: selectionToolbarNode, offset: CGPoint(x: 0.0, y: tabBarFrame.height))
@@ -1370,7 +1375,7 @@ public final class CalendarMessageScreen: ViewController {
             if self.selectionState?.dayRange == nil {
                 if let selectionToolbarNode = self.selectionToolbarNode {
                     let toolbarFrame = selectionToolbarNode.view.convert(selectionToolbarNode.bounds, to: self.view)
-                    self.controller?.present(TooltipScreen(account: self.context.account, text: self.presentationData.strings.MessageCalendar_EmptySelectionTooltip, style: .default, icon: .none, location: .point(toolbarFrame.insetBy(dx: 0.0, dy: 10.0), .bottom), shouldDismissOnTouch: { point in
+                    self.controller?.present(TooltipScreen(account: self.context.account, sharedContext: self.context.sharedContext, text: .plain(text: self.presentationData.strings.MessageCalendar_EmptySelectionTooltip), style: .default, icon: .none, location: .point(toolbarFrame.insetBy(dx: 0.0, dy: 10.0), .bottom), shouldDismissOnTouch: { _, _ in
                         return .dismiss(consume: false)
                     }), in: .current)
                 }
@@ -1428,7 +1433,7 @@ public final class CalendarMessageScreen: ViewController {
             struct ClearInfo {
                 var canClearForMyself: ClearType?
                 var canClearForEveryone: ClearType?
-                var mainPeer: Peer
+                var mainPeer: EnginePeer
             }
 
             let peerId = self.peerId
@@ -1436,8 +1441,10 @@ public final class CalendarMessageScreen: ViewController {
             } else {
                 return
             }
-            let _ = (self.context.account.postbox.transaction { transaction -> ClearInfo? in
-                guard let chatPeer = transaction.getPeer(peerId) else {
+            
+            let _ = (self.context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+            |> map { chatPeer -> ClearInfo? in
+                guard let chatPeer = chatPeer else {
                     return nil
                 }
 
@@ -1447,10 +1454,10 @@ public final class CalendarMessageScreen: ViewController {
                 if peerId == self.context.account.peerId {
                     canClearForMyself = .savedMessages
                     canClearForEveryone = nil
-                } else if chatPeer is TelegramSecretChat {
+                } else if case .secretChat = chatPeer {
                     canClearForMyself = .secretChat
                     canClearForEveryone = nil
-                } else if let group = chatPeer as? TelegramGroup {
+                } else if case let .legacyGroup(group) = chatPeer {
                     switch group.role {
                     case .creator:
                         canClearForMyself = .group
@@ -1459,7 +1466,7 @@ public final class CalendarMessageScreen: ViewController {
                         canClearForMyself = .group
                         canClearForEveryone = nil
                     }
-                } else if let channel = chatPeer as? TelegramChannel {
+                } else if case let .channel(channel) = chatPeer {
                     if channel.hasPermission(.deleteAllMessages) {
                         if case .group = channel.info {
                             canClearForEveryone = .group
@@ -1473,7 +1480,7 @@ public final class CalendarMessageScreen: ViewController {
                 } else {
                     canClearForMyself = .user
 
-                    if let user = chatPeer as? TelegramUser, user.botInfo != nil {
+                    if case let .user(user) = chatPeer, user.botInfo != nil {
                         canClearForEveryone = nil
                     } else {
                         canClearForEveryone = .user
@@ -1486,7 +1493,7 @@ public final class CalendarMessageScreen: ViewController {
                     mainPeer: chatPeer
                 )
             }
-            |> deliverOnMainQueue).start(next: { [weak self] info in
+            |> deliverOnMainQueue).startStandalone(next: { [weak self] info in
                 guard let strongSelf = self, let info = info else {
                     return
                 }
@@ -1511,7 +1518,7 @@ public final class CalendarMessageScreen: ViewController {
                         let confirmationText: String
                         switch canClearForEveryone {
                         case .user:
-                            text = strongSelf.presentationData.strings.ChatList_DeleteForEveryone(EnginePeer(info.mainPeer).compactDisplayTitle).string
+                            text = strongSelf.presentationData.strings.ChatList_DeleteForEveryone(info.mainPeer.compactDisplayTitle).string
                             confirmationText = strongSelf.presentationData.strings.ChatList_DeleteForEveryoneConfirmationText
                         default:
                             text = strongSelf.presentationData.strings.Conversation_DeleteMessagesForEveryone
@@ -1567,7 +1574,10 @@ public final class CalendarMessageScreen: ViewController {
             guard let (layout, navigationHeight) = self.validLayout else {
                 return false
             }
-            if self.scrollLayout?.width == layout.size.width {
+            // The month frames depend on the side insets too: iPhone Duo's folded landscape-left and landscape-right
+            // are equally wide but put the side strip on opposite sides.
+            let sideInsets = UIEdgeInsets(top: 0.0, left: layout.safeInsets.left, bottom: 0.0, right: layout.safeInsets.right)
+            if let scrollLayout = self.scrollLayout, scrollLayout.width == layout.size.width, scrollLayout.sideInsets == sideInsets {
                 return false
             }
 
@@ -1593,28 +1603,32 @@ public final class CalendarMessageScreen: ViewController {
                     environment: {
                         self.dayEnvironment
                     },
-                    containerSize: CGSize(width: layout.size.width, height: 10000.0
+                    containerSize: CGSize(width: layout.size.width - layout.safeInsets.left - layout.safeInsets.right, height: 10000.0
                 ))
-                let monthFrame = CGRect(origin: CGPoint(x: 0.0, y: contentHeight), size: monthSize)
+                // iPhone Duo: the months are laid out in the band between the side safe insets (one is the side
+                // strip). The scroll view is rotated by pi, so its x runs from the right edge: the band starts at
+                // the RIGHT inset. Equal insets (0 on phones in portrait) give the old frame.
+                let monthFrame = CGRect(origin: CGPoint(x: layout.safeInsets.right, y: contentHeight), size: monthSize)
                 contentHeight += monthSize.height
                 if i != self.months.count {
                     contentHeight += 16.0
                 }
                 frames[i] = monthFrame
             }
+            contentHeight += navigationHeight
 
-            self.scrollLayout = (layout.size.width, contentHeight, frames)
+            self.scrollLayout = (layout.size.width, sideInsets, contentHeight, frames)
 
-            self.contextGestureContainerNode.frame = CGRect(origin: CGPoint(x: 0.0, y: navigationHeight), size: CGSize(width: layout.size.width, height: layout.size.height - navigationHeight))
-            self.scrollView.frame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: layout.size.width, height: layout.size.height - navigationHeight))
+            self.contextGestureContainerNode.frame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: layout.size.width, height: layout.size.height))
+            self.scrollView.frame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: layout.size.width, height: layout.size.height))
             self.scrollView.contentSize = CGSize(width: layout.size.width, height: contentHeight)
-            self.scrollView.scrollIndicatorInsets = UIEdgeInsets(top: max(layout.intrinsicInsets.bottom, self.scrollView.contentInset.top), left: 0.0, bottom: 0.0, right: layout.size.width - 3.0 - 6.0)
+            self.scrollView.verticalScrollIndicatorInsets = UIEdgeInsets(top: max(layout.intrinsicInsets.bottom, self.scrollView.contentInset.top), left: 0.0, bottom: 0.0, right: layout.size.width - 3.0 - 6.0)
 
             return true
         }
 
-        func updateMonthViews(transition: Transition) {
-            guard let (width, _, frames) = self.scrollLayout else {
+        func updateMonthViews(transition: ComponentTransition) {
+            guard let (width, sideInsets, _, frames) = self.scrollLayout else {
                 return
             }
             
@@ -1643,6 +1657,10 @@ public final class CalendarMessageScreen: ViewController {
                     self.monthViews[i] = monthView
                     self.scrollView.addSubview(monthView)
                 }
+                // Beside iPhone Duo's side strip (the side insets differ) the month is drawn at the band width it was
+                // measured at: drawn screen-wide in its band-wide frame it ran under the strip, or past the screen's
+                // edge with the strip on the left. Equal insets keep the old width.
+                let monthWidth: CGFloat = sideInsets.left != sideInsets.right ? monthFrame.width : width
                 let _ = monthView.update(
                     transition: monthTransition,
                     component: AnyComponent(MonthComponent(
@@ -1656,7 +1674,7 @@ public final class CalendarMessageScreen: ViewController {
                                 return
                             }
                             if var selectionState = strongSelf.selectionState {
-                                var transition = Transition(animation: .curve(duration: 0.2, curve: .spring))
+                                var transition = ComponentTransition(animation: .curve(duration: 0.2, curve: .spring))
                                 if let dayRange = selectionState.dayRange {
                                     if dayRange.lowerBound == timestamp || dayRange.upperBound == timestamp {
                                         selectionState.dayRange = nil
@@ -1711,7 +1729,7 @@ public final class CalendarMessageScreen: ViewController {
                             guard var selectionState = strongSelf.selectionState else {
                                 return
                             }
-                            var transition = Transition(animation: .curve(duration: 0.2, curve: .spring))
+                            var transition = ComponentTransition(animation: .curve(duration: 0.2, curve: .spring))
                             if let dayRange = selectionState.dayRange {
                                 if dayRange == range {
                                     selectionState.dayRange = nil
@@ -1733,7 +1751,7 @@ public final class CalendarMessageScreen: ViewController {
                     environment: {
                         self.dayEnvironment
                     },
-                    containerSize: CGSize(width: width, height: 10000.0
+                    containerSize: CGSize(width: monthWidth, height: 10000.0
                 ))
                 monthView.frame = monthFrame
             }
@@ -1750,7 +1768,7 @@ public final class CalendarMessageScreen: ViewController {
             }
         }
 
-        private func updateSelectionState(transition: Transition) {
+        private func updateSelectionState(transition: ComponentTransition) {
             var title = self.presentationData.strings.MessageCalendar_Title
             if let selectionState = self.selectionState, let dayRange = selectionState.dayRange {
                 var selectedCount = 0
@@ -1781,9 +1799,9 @@ public final class CalendarMessageScreen: ViewController {
             guard let calendarState = self.calendarState else {
                 return
             }
-            var messageMap: [Message] = []
+            var messageMap: [EngineMessage] = []
             for (_, entry) in calendarState.messagesByDay {
-                messageMap.append(entry.message)
+                messageMap.append(EngineMessage(entry.message))
             }
 
             var updatedMedia: [Int: [Int: DayMedia]] = [:]
@@ -1803,7 +1821,7 @@ public final class CalendarMessageScreen: ViewController {
                             mediaLoop: for media in message.media {
                                 switch media {
                                 case _ as TelegramMediaImage, _ as TelegramMediaFile:
-                                    updatedMedia[i]![day] = DayMedia(message: EngineMessage(message), media: EngineMedia(media))
+                                    updatedMedia[i]![day] = DayMedia(message: message, media: EngineMedia(media))
                                     break mediaLoop
                                 default:
                                     break
@@ -1828,13 +1846,13 @@ public final class CalendarMessageScreen: ViewController {
     }
 
     private let context: AccountContext
-    private let peerId: PeerId
+    private let peerId: EnginePeer.Id
     private let calendarSource: SparseMessageCalendar
     private let initialTimestamp: Int32
     private let enableMessageRangeDeletion: Bool
     private let canNavigateToEmptyDays: Bool
     private let navigateToDay: (CalendarMessageScreen, Int, Int32) -> Void
-    private let previewDay: (Int32, MessageIndex?, ASDisplayNode, CGRect, ContextGesture) -> Void
+    private let previewDay: (Int32, EngineMessage.Index?, ASDisplayNode, CGRect, ContextGesture) -> Void
 
     private var presentationData: PresentationData
     
@@ -1842,13 +1860,13 @@ public final class CalendarMessageScreen: ViewController {
 
     public init(
         context: AccountContext,
-        peerId: PeerId,
+        peerId: EnginePeer.Id,
         calendarSource: SparseMessageCalendar,
         initialTimestamp: Int32,
         enableMessageRangeDeletion: Bool,
         canNavigateToEmptyDays: Bool,
         navigateToDay: @escaping (CalendarMessageScreen, Int, Int32) -> Void,
-        previewDay: @escaping (Int32, MessageIndex?, ASDisplayNode, CGRect, ContextGesture) -> Void
+        previewDay: @escaping (Int32, EngineMessage.Index?, ASDisplayNode, CGRect, ContextGesture) -> Void
     ) {
         self.context = context
         self.peerId = peerId
@@ -1863,9 +1881,10 @@ public final class CalendarMessageScreen: ViewController {
 
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
 
+        self._hasGlassStyle = true
         self.navigationPresentation = .modal
 
-        self.navigationItem.setLeftBarButton(UIBarButtonItem(title: self.presentationData.strings.Common_Cancel, style: .plain, target: self, action: #selector(dismissPressed)), animated: false)
+        self.navigationItem.setLeftBarButton(UIBarButtonItem(title: "___close", style: .plain, target: self, action: #selector(dismissPressed)), animated: false)
         self.navigationItem.setTitle(self.presentationData.strings.MessageCalendar_Title, animated: false)
 
         if self.enableMessageRangeDeletion {
@@ -1891,7 +1910,7 @@ public final class CalendarMessageScreen: ViewController {
         self.node.toggleSelectionMode()
 
         if self.node.selectionState != nil {
-            self.navigationItem.setRightBarButton(UIBarButtonItem(title: self.presentationData.strings.Common_Done, style: .done, target: self, action: #selector(self.toggleSelectPressed)), animated: true)
+            self.navigationItem.setRightBarButton(UIBarButtonItem(title: "___done", style: .done, target: self, action: #selector(self.toggleSelectPressed)), animated: true)
         } else {
             self.navigationItem.setRightBarButton(UIBarButtonItem(title: self.presentationData.strings.Common_Select, style: .plain, target: self, action: #selector(self.toggleSelectPressed)), animated: true)
         }
@@ -1901,7 +1920,7 @@ public final class CalendarMessageScreen: ViewController {
         self.node.selectDay(timestamp: timestamp)
 
         if self.node.selectionState != nil {
-            self.navigationItem.setRightBarButton(UIBarButtonItem(title: self.presentationData.strings.Common_Done, style: .done, target: self, action: #selector(self.toggleSelectPressed)), animated: true)
+            self.navigationItem.setRightBarButton(UIBarButtonItem(title: "___done", style: .done, target: self, action: #selector(self.toggleSelectPressed)), animated: true)
         }
     }
 

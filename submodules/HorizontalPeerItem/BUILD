@@ -20,6 +20,9 @@ swift_library(
         "//submodules/TelegramStringFormatting:TelegramStringFormatting",
         "//submodules/ContextUI:ContextUI",
         "//submodules/AccountContext:AccountContext",
+        "//submodules/TelegramUIPreferences",
+        "//submodules/TelegramUI/Components/AnimationCache",
+        "//submodules/TelegramUI/Components/MultiAnimationRenderer",
     ],
     visibility = [
         "//visibility:public",

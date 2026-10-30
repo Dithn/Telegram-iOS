@@ -1,10 +1,12 @@
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
 public_headers = glob([
   "Source/PublicHeaders/AsyncDisplayKit/*.h",
 ])
 
 private_headers = glob([
   "Source/*.h",
-])
+], allow_empty=True)
 
 objc_library(
     name = "AsyncDisplayKit",
@@ -13,9 +15,13 @@ objc_library(
     srcs = glob([
         "Source/**/*.m",
         "Source/**/*.mm",
-    ]) + private_headers,
+    ], allow_empty=True) + private_headers,
     copts = [
         "-Werror",
+    ],
+    cxxopts = [
+        "-Werror",
+        "-std=c++17",
     ],
     hdrs = public_headers,
     defines = [

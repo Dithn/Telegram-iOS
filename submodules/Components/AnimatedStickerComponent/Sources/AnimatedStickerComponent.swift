@@ -1,4 +1,5 @@
 import Foundation
+import LottieSettings
 import UIKit
 import ComponentFlow
 import AnimatedStickerNode
@@ -30,7 +31,10 @@ public final class AnimatedStickerComponent: Component {
     public let isAnimating: Bool
     public let size: CGSize
     
-    public init(account: Account, animation: Animation, tintColor: UIColor? = nil, isAnimating: Bool = true, size: CGSize) {
+    public let lottieSettings: LottieRenderingSettings
+
+    public init(account: Account, animation: Animation, tintColor: UIColor? = nil, isAnimating: Bool = true, size: CGSize, lottieSettings: LottieRenderingSettings) {
+        self.lottieSettings = lottieSettings
         self.account = account
         self.animation = animation
         self.tintColor = tintColor
@@ -91,11 +95,11 @@ public final class AnimatedStickerComponent: Component {
             fatalError("init(coder:) has not been implemented")
         }
         
-        func update(component: AnimatedStickerComponent, availableSize: CGSize, transition: Transition) -> CGSize {
+        func update(component: AnimatedStickerComponent, availableSize: CGSize, transition: ComponentTransition) -> CGSize {
             if self.component?.animation != component.animation {
                 self.animationNode?.view.removeFromSuperview()
                 
-                let animationNode = AnimatedStickerNode()
+                let animationNode = DefaultAnimatedStickerNodeImpl(lottieSettings: component.lottieSettings)
                 let source: AnimatedStickerNodeSource
                 switch component.animation.source {
                     case let .bundle(name):
@@ -145,7 +149,7 @@ public final class AnimatedStickerComponent: Component {
         return View(frame: CGRect())
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, transition: transition)
     }
 }

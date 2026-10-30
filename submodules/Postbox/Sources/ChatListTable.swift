@@ -199,6 +199,26 @@ final class ChatListTable: Table {
         }
     }
     
+    func getAllPeerIds() -> [PeerId] {
+        return self.indexTable.getAllPeerIds()
+    }
+    
+    func removeAllEntries(groupId: PeerGroupId, exceptPeerNamespace: PeerId.Namespace, operations: inout [PeerGroupId: [ChatListOperation]]) {
+        loop: for entry in self.allEntries(groupId: groupId) {
+            switch entry {
+            case let .hole(hole):
+                addOperation(.RemoveHoles([ChatListIndex(pinningIndex: nil, messageIndex: hole.index)]), groupId: groupId, to: &operations)
+                self.justRemoveHole(groupId: groupId, index: hole.index)
+            case let .message(index, _):
+                if index.messageIndex.id.peerId.namespace == exceptPeerNamespace {
+                    continue loop
+                }
+                addOperation(.RemoveEntry([index]), groupId: groupId, to: &operations)
+                self.justRemoveMessageIndex(groupId: groupId, index: index)
+            }
+        }
+    }
+    
     func getPinnedItemIds(groupId: PeerGroupId, messageHistoryTable: MessageHistoryTable, peerChatInterfaceStateTable: PeerChatInterfaceStateTable) -> [(id: PinnedItemId, rank: Int)] {
         var itemIds: [(id: PinnedItemId, rank: Int)] = []
         self.valueBox.range(self.table, start: self.upperBound(groupId: groupId), end: self.key(groupId: groupId, index: ChatListIndex(pinningIndex: UInt16.max - 1, messageIndex: MessageIndex.absoluteUpperBound()), type: .message).successor, values: { key, value in
@@ -245,30 +265,28 @@ final class ChatListTable: Table {
         }
     }
     
-    func getUnreadChatListPeerIds(postbox: PostboxImpl, currentTransaction: Transaction, groupId: PeerGroupId, filterPredicate: ChatListFilterPredicate?) -> [PeerId] {
+    func getChatListPeers(postbox: PostboxImpl, currentTransaction: Transaction, groupId: PeerGroupId, filterPredicate: ChatListFilterPredicate?, additionalFilter: ((Peer) -> Bool)?) -> [Peer] {
         let globalNotificationSettings = postbox.getGlobalNotificationSettings(transaction: currentTransaction)
         
-        var result: [PeerId] = []
+        var result: [Peer] = []
         self.valueBox.range(self.table, start: self.upperBound(groupId: groupId), end: self.lowerBound(groupId: groupId), keys: { key in
             let (_, _, messageIndex, _) = extractKey(key)
-            if let state = postbox.readStateTable.getCombinedState(messageIndex.id.peerId), state.isUnread {
-                let passFilter: Bool
+            if let peer = postbox.peerTable.get(messageIndex.id.peerId) {
+                //let state = postbox.readStateTable.getCombinedState(messageIndex.id.peerId), state.isUnread
+                
+                var passFilter: Bool
                 if let filterPredicate = filterPredicate {
-                    if let peer = postbox.peerTable.get(messageIndex.id.peerId) {
-                        let isUnread = postbox.readStateTable.getCombinedState(messageIndex.id.peerId)?.isUnread ?? false
-                        let isContact = postbox.contactsTable.isContact(peerId: messageIndex.id.peerId)
-                        
-                        let isRemovedFromTotalUnreadCount = resolvedIsRemovedFromTotalUnreadCount(globalSettings: globalNotificationSettings, peer: peer, peerSettings: postbox.peerNotificationSettingsTable.getEffective(messageIndex.id.peerId))
-                        
-                        let messageTagSummaryResult = resolveChatListMessageTagSummaryResultCalculation(postbox: postbox, peerId: peer.id, calculation: filterPredicate.messageTagSummary)
-                        
-                        if filterPredicate.pinnedPeerIds.contains(peer.id) {
-                            passFilter = true
-                        } else if filterPredicate.includes(peer: peer, groupId: groupId, isRemovedFromTotalUnreadCount: isRemovedFromTotalUnreadCount, isUnread: isUnread, isContact: isContact, messageTagSummaryResult: messageTagSummaryResult) {
-                            passFilter = true
-                        } else {
-                            passFilter = false
-                        }
+                    let isUnread = postbox.readStateTable.getCombinedState(messageIndex.id.peerId)?.isUnread ?? false
+                    let isContact = postbox.contactsTable.isContact(peerId: messageIndex.id.peerId)
+                    
+                    let isRemovedFromTotalUnreadCount = resolvedIsRemovedFromTotalUnreadCount(globalSettings: globalNotificationSettings, peer: peer, peerSettings: postbox.peerNotificationSettingsTable.getEffective(messageIndex.id.peerId))
+                    
+                    let messageTagSummaryResult = resolveChatListMessageTagSummaryResultCalculation(postbox: postbox, peerId: peer.id, threadId: nil, calculation: filterPredicate.messageTagSummary)
+                    
+                    if filterPredicate.pinnedPeerIds.contains(peer.id) {
+                        passFilter = true
+                    } else if filterPredicate.includes(peer: peer, groupId: groupId, isRemovedFromTotalUnreadCount: isRemovedFromTotalUnreadCount, isUnread: isUnread, isContact: isContact, messageTagSummaryResult: messageTagSummaryResult) {
+                        passFilter = true
                     } else {
                         passFilter = false
                     }
@@ -276,8 +294,69 @@ final class ChatListTable: Table {
                     passFilter = true
                 }
                 
+                if passFilter, let additionalFilter = additionalFilter {
+                    if !additionalFilter(peer) {
+                        passFilter = false
+                    }
+                }
+                
+                if passFilter {
+                    result.append(peer)
+                }
+            }
+            return true
+        }, limit: 0)
+        return result
+    }
+    
+    func getAllPeerIds(groupId: PeerGroupId) -> [PeerId] {
+        var result: [PeerId] = []
+        self.valueBox.range(self.table, start: self.upperBound(groupId: groupId), end: self.lowerBound(groupId: groupId), keys: { key in
+            let (_, _, messageIndex, _) = extractKey(key)
+            result.append(messageIndex.id.peerId)
+            return true
+        }, limit: 0)
+        return result
+    }
+    
+    func getUnreadChatListPeerIds(postbox: PostboxImpl, currentTransaction: Transaction, groupId: PeerGroupId, filterPredicate: ChatListFilterPredicate?, additionalFilter: ((Peer) -> Bool)?, stopOnFirstMatch: Bool) -> [PeerId] {
+        let globalNotificationSettings = postbox.getGlobalNotificationSettings(transaction: currentTransaction)
+        
+        var result: [PeerId] = []
+        self.valueBox.range(self.table, start: self.upperBound(groupId: groupId), end: self.lowerBound(groupId: groupId), keys: { key in
+            let (_, _, messageIndex, _) = extractKey(key)
+            if let state = postbox.readStateTable.getCombinedState(messageIndex.id.peerId), state.isUnread, let peer = postbox.peerTable.get(messageIndex.id.peerId) {
+                var passFilter: Bool
+                if let filterPredicate = filterPredicate {
+                    let isUnread = postbox.readStateTable.getCombinedState(messageIndex.id.peerId)?.isUnread ?? false
+                    let isContact = postbox.contactsTable.isContact(peerId: messageIndex.id.peerId)
+                    
+                    let isRemovedFromTotalUnreadCount = resolvedIsRemovedFromTotalUnreadCount(globalSettings: globalNotificationSettings, peer: peer, peerSettings: postbox.peerNotificationSettingsTable.getEffective(messageIndex.id.peerId))
+                    
+                    let messageTagSummaryResult = resolveChatListMessageTagSummaryResultCalculation(postbox: postbox, peerId: peer.id, threadId: nil, calculation: filterPredicate.messageTagSummary)
+                    
+                    if filterPredicate.pinnedPeerIds.contains(peer.id) {
+                        passFilter = true
+                    } else if filterPredicate.includes(peer: peer, groupId: groupId, isRemovedFromTotalUnreadCount: isRemovedFromTotalUnreadCount, isUnread: isUnread, isContact: isContact, messageTagSummaryResult: messageTagSummaryResult) {
+                        passFilter = true
+                    } else {
+                        passFilter = false
+                    }
+                } else {
+                    passFilter = true
+                }
+                
+                if passFilter, let additionalFilter = additionalFilter {
+                    if !additionalFilter(peer) {
+                        passFilter = false
+                    }
+                }
+                
                 if passFilter {
                     result.append(messageIndex.id.peerId)
+                    if stopOnFirstMatch {
+                        return false
+                    }
                 }
             }
             return true
@@ -294,7 +373,7 @@ final class ChatListTable: Table {
         return result
     }
     
-    func replay(historyOperationsByPeerId: [PeerId: [MessageHistoryOperation]], updatedPeerChatListEmbeddedStates: Set<PeerId>, updatedChatListInclusions: [PeerId: PeerChatListInclusion], messageHistoryTable: MessageHistoryTable, peerChatInterfaceStateTable: PeerChatInterfaceStateTable, operations: inout [PeerGroupId: [ChatListOperation]]) {
+    func replay(postbox: PostboxImpl, historyOperationsByPeerId: [PeerId: [MessageHistoryOperation]], updatedPeerChatListEmbeddedStates: Set<PeerId>, updatedPeerCachedData: [PeerId: (previous: CachedPeerData?, updated: CachedPeerData)], updatedChatListInclusions: [PeerId: PeerChatListInclusion], messageHistoryTable: MessageHistoryTable, peerChatInterfaceStateTable: PeerChatInterfaceStateTable, operations: inout [PeerGroupId: [ChatListOperation]]) {
         var changedPeerIds = Set<PeerId>()
         for peerId in historyOperationsByPeerId.keys {
             changedPeerIds.insert(peerId)
@@ -305,6 +384,14 @@ final class ChatListTable: Table {
         for peerId in updatedChatListInclusions.keys {
             changedPeerIds.insert(peerId)
         }
+        var additionalChangedPeerIds = Set<PeerId>()
+        for peerId in changedPeerIds {
+            //TODO:release move this to seed configuration
+            if let peer = postbox.peerTable.get(peerId), peer.id.namespace._internalGetInt32Value() == 2, let associatedPeerId = peer.associatedPeerId, associatedPeerId.namespace._internalGetInt32Value() == 0 {
+                additionalChangedPeerIds.insert(associatedPeerId)
+            }
+        }
+        changedPeerIds.formUnion(additionalChangedPeerIds)
         
         self.ensureInitialized(groupId: .root)
         
@@ -317,8 +404,8 @@ final class ChatListTable: Table {
             let topMessage = messageHistoryTable.topIndex(peerId: peerId)
             let embeddedChatStateOverrideTimestamp = peerChatInterfaceStateTable.get(peerId)?.overrideChatTimestamp
             
-            let rawTopMessageIndex: MessageIndex?
-            let topMessageIndex: MessageIndex?
+            var rawTopMessageIndex: MessageIndex?
+            var topMessageIndex: MessageIndex?
             if let topMessage = topMessage {
                 var updatedTimestamp = topMessage.timestamp
                 rawTopMessageIndex = MessageIndex(id: topMessage.id, timestamp: topMessage.timestamp)
@@ -364,6 +451,21 @@ final class ChatListTable: Table {
             self.justInsertHole(groupId: groupId, hole: hole)
             addOperation(.InsertHole(hole), groupId: groupId, to: &operations)
         }
+    }
+    
+    func getHoles(groupId: PeerGroupId) -> [ChatListHole] {
+        var result: [ChatListHole] = []
+        self.valueBox.range(self.table, start: self.upperBound(groupId: groupId), end: self.lowerBound(groupId: groupId), values: { key, value in
+            let (keyGroupId, pinningIndex, messageIndex, type) = extractKey(key)
+            assert(groupId == keyGroupId)
+            
+            let index = ChatListIndex(pinningIndex: pinningIndex, messageIndex: messageIndex)
+            if type == ChatListEntryType.hole.rawValue {
+                result.append(ChatListHole(index: index.messageIndex))
+            }
+            return true
+        }, limit: 0)
+        return result
     }
     
     func replaceHole(groupId: PeerGroupId, index: MessageIndex, hole: ChatListHole?, operations: inout [PeerGroupId: [ChatListOperation]]) {
@@ -895,7 +997,7 @@ final class ChatListTable: Table {
                     }
                     var tagSummary: MessageHistoryTagNamespaceSummary?
                     if let summaryTag = summaryTag {
-                        tagSummary = summaryTable.get(MessageHistoryTagsSummaryKey(tag: summaryTag, peerId: peerIndex.messageIndex.id.peerId, namespace: namespace))
+                        tagSummary = summaryTable.get(MessageHistoryTagsSummaryKey(tag: summaryTag, peerId: peerIndex.messageIndex.id.peerId, threadId: nil, namespace: namespace, customTag: nil))
                     }
                     var topMessageAttributes: [MessageAttribute] = []
                     if let topMessage = topMessage {

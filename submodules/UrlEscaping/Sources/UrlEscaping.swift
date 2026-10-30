@@ -4,6 +4,10 @@ public func doesUrlMatchText(url: String, text: String, fullText: String) -> Boo
     if fullText.range(of: "\u{202e}") != nil {
         return false
     }
+    let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%")
+    if !url.unicodeScalars.allSatisfy({ allowed.contains($0) }) {
+        return false
+    }
     if url == text {
         return true
     }
@@ -22,11 +26,11 @@ public extension CharacterSet {
     }()
 }
 
-public func isValidUrl(_ url: String, validSchemes: [String: Bool] = ["http": true, "https": true]) -> Bool {
-    if let escapedUrl = url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed), let url = URL(string: escapedUrl), let scheme = url.scheme, let requiresTopLevelDomain = validSchemes[scheme], let host = url.host, (!requiresTopLevelDomain || host.contains(".")) && url.user == nil {
+public func isValidUrl(_ url: String, validSchemes: [String: Bool] = ["http": true, "https": true, "tonsite": true]) -> Bool {
+    if let escapedUrl = url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed), let url = URL(string: escapedUrl), let scheme = url.scheme?.lowercased(), let requiresTopLevelDomain = validSchemes[scheme], let host = url.host, (!requiresTopLevelDomain || host.contains(".")) && url.user == nil {
         if requiresTopLevelDomain {
             let components = host.components(separatedBy: ".")
-            let domain = (components.first ?? "")
+            let domain = (components.last ?? "")
             if domain.isEmpty {
                 return false
             }
@@ -39,8 +43,12 @@ public func isValidUrl(_ url: String, validSchemes: [String: Bool] = ["http": tr
 
 public func explicitUrl(_ url: String) -> String {
     var url = url
-    if !url.hasPrefix("http") && !url.hasPrefix("https") && url.range(of: "://") == nil {
-        url = "https://\(url)"
+    if !url.lowercased().hasPrefix("http:") && !url.lowercased().hasPrefix("https:") && !url.lowercased().hasPrefix("tonsite:") && url.range(of: "://") == nil {
+        if let parsedUrl = URL(string: "http://\(url)"), parsedUrl.host?.hasSuffix(".ton") == true {
+            url = "tonsite://\(url)"
+        } else {
+            url = "https://\(url)"
+        }
     }
     return url
 }

@@ -1,6 +1,5 @@
 import Foundation
 import TelegramCore
-import Postbox
 import TelegramUIPreferences
 import SwiftSignalKit
 import UniversalMediaPlayer
@@ -13,16 +12,19 @@ public enum SharedMediaPlaybackDataType {
 }
 
 public enum SharedMediaPlaybackDataSource: Equatable {
-    case telegramFile(reference: FileMediaReference, isCopyProtected: Bool)
+    case telegramFile(reference: FileMediaReference, isCopyProtected: Bool, isViewOnce: Bool)
     
     public static func ==(lhs: SharedMediaPlaybackDataSource, rhs: SharedMediaPlaybackDataSource) -> Bool {
         switch lhs {
-        case let .telegramFile(lhsFileReference, lhsIsCopyProtected):
-            if case let .telegramFile(rhsFileReference, rhsIsCopyProtected) = rhs {
+        case let .telegramFile(lhsFileReference, lhsIsCopyProtected, lhsIsViewOnce):
+            if case let .telegramFile(rhsFileReference, rhsIsCopyProtected, rhsIsViewOnce) = rhs {
                 if !lhsFileReference.media.isEqual(to: rhsFileReference.media) {
                     return false
                 }
                 if lhsIsCopyProtected != rhsIsCopyProtected {
+                    return false
+                }
+                if lhsIsViewOnce != rhsIsViewOnce {
                     return false
                 }
                 return true
@@ -58,26 +60,26 @@ public struct SharedMediaPlaybackAlbumArt: Equatable {
 }
 
 public enum SharedMediaPlaybackDisplayData: Equatable {
-    case music(title: String?, performer: String?, albumArt: SharedMediaPlaybackAlbumArt?, long: Bool)
-    case voice(author: Peer?, peer: Peer?)
-    case instantVideo(author: Peer?, peer: Peer?, timestamp: Int32)
+    case music(title: String?, performer: String?, albumArt: SharedMediaPlaybackAlbumArt?, long: Bool, caption: NSAttributedString?)
+    case voice(author: EnginePeer?, peer: EnginePeer?)
+    case instantVideo(author: EnginePeer?, peer: EnginePeer?, timestamp: Int32)
     
     public static func ==(lhs: SharedMediaPlaybackDisplayData, rhs: SharedMediaPlaybackDisplayData) -> Bool {
         switch lhs {
-        case let .music(lhsTitle, lhsPerformer, lhsAlbumArt, lhsDuration):
-            if case let .music(rhsTitle, rhsPerformer, rhsAlbumArt, rhsDuration) = rhs, lhsTitle == rhsTitle, lhsPerformer == rhsPerformer, lhsAlbumArt == rhsAlbumArt, lhsDuration == rhsDuration {
+        case let .music(lhsTitle, lhsPerformer, lhsAlbumArt, lhsDuration, lhsCaption):
+            if case let .music(rhsTitle, rhsPerformer, rhsAlbumArt, rhsDuration, rhsCaption) = rhs, lhsTitle == rhsTitle, lhsPerformer == rhsPerformer, lhsAlbumArt == rhsAlbumArt, lhsDuration == rhsDuration, lhsCaption?.string == rhsCaption?.string {
                 return true
             } else {
                 return false
             }
         case let .voice(lhsAuthor, lhsPeer):
-            if case let .voice(rhsAuthor, rhsPeer) = rhs, arePeersEqual(lhsAuthor, rhsAuthor), arePeersEqual(lhsPeer, rhsPeer) {
+            if case let .voice(rhsAuthor, rhsPeer) = rhs, lhsAuthor == rhsAuthor, lhsPeer == rhsPeer {
                 return true
             } else {
                 return false
             }
         case let .instantVideo(lhsAuthor, lhsPeer, lhsTimestamp):
-            if case let .instantVideo(rhsAuthor, rhsPeer, rhsTimestamp) = rhs, arePeersEqual(lhsAuthor, rhsAuthor), arePeersEqual(lhsPeer, rhsPeer), lhsTimestamp == rhsTimestamp {
+            if case let .instantVideo(rhsAuthor, rhsPeer, rhsTimestamp) = rhs, lhsAuthor == rhsAuthor, lhsPeer == rhsPeer, lhsTimestamp == rhsTimestamp {
                 return true
             } else {
                 return false
@@ -114,6 +116,55 @@ public protocol SharedMediaPlaylistItemId {
     func isEqual(to: SharedMediaPlaylistItemId) -> Bool
 }
 
+/// Lets a host recognise a rich message's InstantPage playlist without importing InstantPageUI.
+public protocol InstantPagePlaylistIdProviding {
+    var instantPageRichMessageId: EngineMessage.Id? { get }
+}
+
+/// A host-constructible stand-in for `InstantPageMediaPlaylistId.richMessage`. The real enum lives
+/// in InstantPageUI, which AccountContext must not import, so this is what a host passes to
+/// `filteredPlaylistState`; the real id's `isEqual(to:)` matches it on the rich message id.
+public struct RichMessagePlaylistId: SharedMediaPlaylistId, InstantPagePlaylistIdProviding {
+    public let instantPageRichMessageId: EngineMessage.Id?
+
+    public init(messageId: EngineMessage.Id) {
+        self.instantPageRichMessageId = messageId
+    }
+
+    public func isEqual(to: SharedMediaPlaylistId) -> Bool {
+        guard let to = to as? InstantPagePlaylistIdProviding else {
+            return false
+        }
+        guard let lhs = self.instantPageRichMessageId, let rhs = to.instantPageRichMessageId else {
+            return false
+        }
+        return lhs == rhs
+    }
+}
+
+/// The item counterpart of `RichMessagePlaylistId`, identifying one track by its media index.
+public struct RichMessagePlaylistItemId: SharedMediaPlaylistItemId, InstantPagePlaylistItemIndexProviding {
+    public let instantPageMediaIndex: Int
+
+    public init(index: Int) {
+        self.instantPageMediaIndex = index
+    }
+
+    public func isEqual(to: SharedMediaPlaylistItemId) -> Bool {
+        guard let to = to as? InstantPagePlaylistItemIndexProviding else {
+            return false
+        }
+        return self.instantPageMediaIndex == to.instantPageMediaIndex
+    }
+}
+
+/// Lets a host read an InstantPage playlist item's media index without importing InstantPageUI.
+/// The conforming id type is internal to InstantPageUI, so this existential is the only way to
+/// recover the index that identifies a track within a rich message's playlist.
+public protocol InstantPagePlaylistItemIndexProviding {
+    var instantPageMediaIndex: Int { get }
+}
+
 public func areSharedMediaPlaylistItemIdsEqual(_ lhs: SharedMediaPlaylistItemId?, _ rhs: SharedMediaPlaylistItemId?) -> Bool {
     if let lhs = lhs, let rhs = rhs {
         return lhs.isEqual(to: rhs)
@@ -125,10 +176,10 @@ public func areSharedMediaPlaylistItemIdsEqual(_ lhs: SharedMediaPlaylistItemId?
 }
 
 public struct PeerMessagesMediaPlaylistItemId: SharedMediaPlaylistItemId {
-    public let messageId: MessageId
-    public let messageIndex: MessageIndex
+    public let messageId: EngineMessage.Id
+    public let messageIndex: EngineMessage.Index
     
-    public init(messageId: MessageId, messageIndex: MessageIndex) {
+    public init(messageId: EngineMessage.Id, messageIndex: EngineMessage.Index) {
         self.messageId = messageId
         self.messageIndex = messageIndex
     }
@@ -146,6 +197,16 @@ public struct PeerMessagesMediaPlaylistItemId: SharedMediaPlaylistItemId {
 
 public protocol SharedMediaPlaylistLocation {
     func isEqual(to: SharedMediaPlaylistLocation) -> Bool
+}
+
+public func areSharedMediaPlaylistsEqual(_ lhs: SharedMediaPlaylist?, _ rhs: SharedMediaPlaylist?) -> Bool {
+    if let lhs = lhs, let rhs = rhs {
+        return lhs.id.isEqual(to: rhs.id) && lhs.location.isEqual(to: rhs.location)
+    } else if (lhs != nil) != (rhs != nil) {
+        return false
+    } else {
+        return true
+    }
 }
 
 public protocol SharedMediaPlaylist: AnyObject {

@@ -1,47 +1,52 @@
 import Foundation
+import LottieSettings
 import UIKit
 import Display
 import AsyncDisplayKit
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import StickerResources
 import AnimatedStickerNode
 import TelegramAnimatedStickerNode
 import ContextUI
+import AccountContext
 
-public final class StickerPreviewPeekContent: PeekControllerContent {
-    let account: Account
-    public let item: ImportStickerPack.Sticker
+final class StickerPreviewPeekContent: PeekControllerContent {
+    let context: AccountContext
+    let item: ImportStickerPack.Sticker
     let menu: [ContextMenuItem]
     
-    public init(account: Account, item: ImportStickerPack.Sticker, menu: [ContextMenuItem]) {
-        self.account = account
+    init(context: AccountContext, item: ImportStickerPack.Sticker, menu: [ContextMenuItem]) {
+        self.context = context
         self.item = item
         self.menu = menu
     }
     
-    public func presentation() -> PeekControllerContentPresentation {
+    func presentation() -> PeekControllerContentPresentation {
         return .freeform
     }
     
-    public func menuActivation() -> PeerControllerMenuActivation {
+    func menuActivation() -> PeerControllerMenuActivation {
         return .press
     }
     
-    public func menuItems() -> [ContextMenuItem] {
+    func menuItems() -> [ContextMenuItem] {
         return self.menu
     }
     
-    public func node() -> PeekControllerContentNode & ASDisplayNode {
-        return StickerPreviewPeekContentNode(account: self.account, item: self.item)
+    func node() -> PeekControllerContentNode & ASDisplayNode {
+        return StickerPreviewPeekContentNode(account: self.context.account, item: self.item, lottieSettings: self.context.lottieRenderingSettings)
     }
     
-    public func topAccessoryNode() -> ASDisplayNode? {
+    func topAccessoryNode() -> ASDisplayNode? {
         return nil
     }
     
-    public func isEqual(to: PeekControllerContent) -> Bool {
+    func fullScreenAccessoryNode(blurView: UIVisualEffectView) -> (PeekControllerAccessoryNode & ASDisplayNode)? {
+        return nil
+    }
+    
+    func isEqual(to: PeekControllerContent) -> Bool {
         if let to = to as? StickerPreviewPeekContent {
             return self.item === to.item
         } else {
@@ -60,7 +65,9 @@ private final class StickerPreviewPeekContentNode: ASDisplayNode, PeekController
     
     private var containerLayout: (ContainerViewLayout, CGFloat)?
     
-    init(account: Account, item: ImportStickerPack.Sticker) {
+    private let _ready = Promise<Bool>()
+    
+    init(account: Account, item: ImportStickerPack.Sticker, lottieSettings: LottieRenderingSettings) {
         self.account = account
         self.item = item
         
@@ -71,7 +78,7 @@ private final class StickerPreviewPeekContentNode: ASDisplayNode, PeekController
             case let .image(data):
                 self.imageNode.image = UIImage(data: data)
             case .animation, .video:
-                let animationNode = AnimatedStickerNode()
+                let animationNode = DefaultAnimatedStickerNodeImpl(lottieSettings: lottieSettings)
                 self.animationNode = animationNode
                 let dimensions = PixelDimensions(width: 512, height: 512)
                 let fittedDimensions = dimensions.cgSize.aspectFitted(CGSize(width: 400.0, height: 400.0))
@@ -80,7 +87,7 @@ private final class StickerPreviewPeekContentNode: ASDisplayNode, PeekController
                     if case .video = item.content {
                         isVideo = true
                     }
-                    self.animationNode?.setup(source: AnimatedStickerResourceSource(account: account, resource: resource, isVideo: isVideo), width: Int(fittedDimensions.width), height: Int(fittedDimensions.height), mode: .direct(cachePathPrefix: nil))
+                    self.animationNode?.setup(source: AnimatedStickerResourceSource(account: account, resource: resource._asResource(), isVideo: isVideo), width: Int(fittedDimensions.width), height: Int(fittedDimensions.height), playbackMode: .loop, mode: .direct(cachePathPrefix: nil))
                 }
                 self.animationNode?.visibility = true
         }
@@ -100,8 +107,23 @@ private final class StickerPreviewPeekContentNode: ASDisplayNode, PeekController
         }
         
         self.addSubnode(self.textNode)
+        
+        if let animationNode = self.animationNode {
+            animationNode.started = { [weak self] in
+                guard let strongSelf = self else {
+                    return
+                }
+                strongSelf._ready.set(.single(true))
+            }
+        } else {
+            self._ready.set(.single(true))
+        }
     }
     
+    func ready() -> Signal<Bool, NoError> {
+        return self._ready.get()
+    }
+
     func updateLayout(size: CGSize, transition: ContainedViewLayoutTransition) -> CGSize {
         let boundingSize = CGSize(width: 180.0, height: 180.0).fitted(size)
         let imageFrame = CGRect(origin: CGPoint(), size: boundingSize)

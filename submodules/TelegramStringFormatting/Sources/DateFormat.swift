@@ -1,48 +1,42 @@
 import Foundation
+import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
+import TextFormat
 
-public func stringForShortTimestamp(hours: Int32, minutes: Int32, dateTimeFormat: PresentationDateTimeFormat) -> String {
-    switch dateTimeFormat.timeFormat {
-    case .regular:
-        let hourString: String
-        if hours == 0 {
-            hourString = "12"
-        } else if hours > 12 {
-            hourString = "\(hours - 12)"
-        } else {
-            hourString = "\(hours)"
-        }
-        
-        let periodString: String
-        if hours >= 12 {
-            periodString = "PM"
-        } else {
-            periodString = "AM"
-        }
-        if minutes >= 10 {
-            return "\(hourString):\(minutes) \(periodString)"
-        } else {
-            return "\(hourString):0\(minutes) \(periodString)"
-        }
-    case .military:
-        return String(format: "%02d:%02d", arguments: [Int(hours), Int(minutes)])
-    }
-}
-
-public func stringForMessageTimestamp(timestamp: Int32, dateTimeFormat: PresentationDateTimeFormat, local: Bool = true) -> String {
-    var t = Int(timestamp)
+public func getDateTimeComponents(timestamp: Int32) -> (day: Int32, month: Int32, year: Int32, hour: Int32, minutes: Int32) {
+    var t: time_t = Int(timestamp)
     var timeinfo = tm()
-    if local {
-        localtime_r(&t, &timeinfo)
-    } else {
-        gmtime_r(&t, &timeinfo)
-    }
+    localtime_r(&t, &timeinfo);
     
-    return stringForShortTimestamp(hours: timeinfo.tm_hour, minutes: timeinfo.tm_min, dateTimeFormat: dateTimeFormat)
+    return (timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year, timeinfo.tm_hour, timeinfo.tm_min)
 }
 
-public func stringForMediumDate(timestamp: Int32, strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat) -> String {
+public func stringForMediumCompactDate(timestamp: Int32, strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat, withTime: Bool = true) -> String {
+    var t: time_t = Int(timestamp)
+    var timeinfo = tm()
+    localtime_r(&t, &timeinfo);
+    
+    let day = timeinfo.tm_mday
+    let month = monthAtIndex(Int(timeinfo.tm_mon), strings: strings)
+    
+    let timeString: String
+    if withTime {
+        timeString = " \(stringForShortTimestamp(hours: Int32(timeinfo.tm_hour), minutes: Int32(timeinfo.tm_min), dateTimeFormat: dateTimeFormat))"
+    } else {
+        timeString = ""
+    }
+    let dateString: String
+    switch dateTimeFormat.dateFormat {
+        case .monthFirst:
+            dateString = String(format: "%@ %02d%@", month, day, timeString)
+        case .dayFirst:
+            dateString = String(format: "%02d %@%@", day, month, timeString)
+    }
+    return dateString
+}
+
+public func stringForMediumDate(timestamp: Int32, strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat, withTime: Bool = true) -> String {
     var t: time_t = Int(timestamp)
     var timeinfo = tm()
     localtime_r(&t, &timeinfo);
@@ -62,9 +56,12 @@ public func stringForMediumDate(timestamp: Int32, strings: PresentationStrings, 
             dateString = String(format: "%02d%@%02d%@%02d%@", day, separator, month, separator, displayYear, suffix)
     }
     
-    let timeString = stringForShortTimestamp(hours: Int32(timeinfo.tm_hour), minutes: Int32(timeinfo.tm_min), dateTimeFormat: dateTimeFormat)
-    
-    return strings.Time_MediumDate(dateString, timeString).string
+    if withTime {
+        let timeString = stringForShortTimestamp(hours: Int32(timeinfo.tm_hour), minutes: Int32(timeinfo.tm_min), dateTimeFormat: dateTimeFormat)
+        return strings.Time_MediumDate(dateString, timeString).string
+    } else {
+        return dateString
+    }
 }
 
 public func stringForFullDate(timestamp: Int32, strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat) -> String {
@@ -109,11 +106,11 @@ public func stringForFullDate(timestamp: Int32, strings: PresentationStrings, da
     return monthFormat(dayString, yearString, timeString).string
 }
 
-public func stringForDate(timestamp: Int32, strings: PresentationStrings) -> String {
+public func stringForDate(timestamp: Int32, timeZone: TimeZone? = TimeZone(secondsFromGMT: 0), strings: PresentationStrings) -> String {
     let formatter = DateFormatter()
     formatter.timeStyle = .none
     formatter.dateStyle = .medium
-    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.timeZone = timeZone
     formatter.locale = localeWithStrings(strings)
     return formatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
 }

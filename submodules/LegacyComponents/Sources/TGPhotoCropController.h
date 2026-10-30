@@ -1,4 +1,4 @@
-#import "TGPhotoEditorTabController.h"
+#import <LegacyComponents/TGPhotoEditorTabController.h>
 
 #import <LegacyComponents/LegacyComponentsContext.h>
 
@@ -21,6 +21,7 @@
 - (void)rotate;
 - (void)mirror;
 - (void)aspectRatioButtonPressed;
+- (void)aspectRatioButtonPressedWithSourceView:(UIView *)sourceView;
 
 - (void)setImage:(UIImage *)image;
 - (void)setSnapshotImage:(UIImage *)snapshotImage;

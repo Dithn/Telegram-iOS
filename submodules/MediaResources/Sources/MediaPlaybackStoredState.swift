@@ -1,7 +1,6 @@
 import Foundation
 import UIKit
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramUIPreferences
 
@@ -18,7 +17,7 @@ public final class MediaPlaybackStoredState: Codable {
         let container = try decoder.container(keyedBy: StringCodingKey.self)
 
         self.timestamp = try container.decode(Double.self, forKey: "timestamp")
-        self.playbackRate = AudioPlaybackRate(rawValue: try container.decode(Int32.self, forKey: "playbackRate")) ?? .x1
+        self.playbackRate = AudioPlaybackRate(rawValue: try container.decode(Int32.self, forKey: "playbackRate"))
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -29,31 +28,29 @@ public final class MediaPlaybackStoredState: Codable {
     }
 }
 
-public func mediaPlaybackStoredState(postbox: Postbox, messageId: MessageId) -> Signal<MediaPlaybackStoredState?, NoError> {
-    return postbox.transaction { transaction -> MediaPlaybackStoredState? in
-        let key = ValueBoxKey(length: 8)
-        key.setInt32(0, value: messageId.namespace)
-        key.setInt32(4, value: messageId.id)
-        if let entry = transaction.retrieveItemCacheEntry(id: ItemCacheEntryId(collectionId: ApplicationSpecificItemCacheCollectionId.mediaPlaybackStoredState, key: key))?.get(MediaPlaybackStoredState.self) {
-            return entry
-        } else {
+public func mediaPlaybackStoredState(engine: TelegramEngine, messageId: EngineMessage.Id) -> Signal<MediaPlaybackStoredState?, NoError> {
+    return engine.data.get(TelegramEngine.EngineData.Item.Messages.Message(id: messageId))
+    |> map { message -> MediaPlaybackStoredState? in
+        guard let message else {
             return nil
         }
+        for attribute in message.attributes {
+            if let attribute = attribute as? DerivedDataMessageAttribute {
+                return attribute.data["mps"]?.get(MediaPlaybackStoredState.self)
+            }
+        }
+        return nil
     }
 }
 
-private let collectionSpec = ItemCacheCollectionSpec(lowWaterItemCount: 25, highWaterItemCount: 50)
-
-public func updateMediaPlaybackStoredStateInteractively(postbox: Postbox, messageId: MessageId, state: MediaPlaybackStoredState?) -> Signal<Void, NoError> {
-    return postbox.transaction { transaction -> Void in
-        let key = ValueBoxKey(length: 8)
-        key.setInt32(0, value: messageId.namespace)
-        key.setInt32(4, value: messageId.id)
-        let id = ItemCacheEntryId(collectionId: ApplicationSpecificItemCacheCollectionId.mediaPlaybackStoredState, key: key)
-        if let state = state, let entry = CodableEntry(state) {
-            transaction.putItemCacheEntry(id: id, entry: entry, collectionSpec: collectionSpec)
+public func updateMediaPlaybackStoredStateInteractively(engine: TelegramEngine, messageId: EngineMessage.Id, state: MediaPlaybackStoredState?) -> Signal<Never, NoError> {
+    return engine.messages.updateLocallyDerivedData(messageId: messageId, update: { data in
+        var data = data
+        if let state, let entry = EngineCodableEntry(state) {
+            data["mps"] = entry
         } else {
-            transaction.removeItemCacheEntry(id: id)
+            data.removeValue(forKey: "mps")
         }
-    }
+        return data
+    })
 }

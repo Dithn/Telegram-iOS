@@ -1,7 +1,6 @@
 import Foundation
 import UIKit
 import AsyncDisplayKit
-import Postbox
 import TelegramCore
 import Display
 import TelegramPresentationData
@@ -10,6 +9,12 @@ import MergeLists
 import AccountContext
 import SwiftSignalKit
 import ChatPresentationInterfaceState
+import ChatControllerInteraction
+import ChatInputContextPanelNode
+import ComponentFlow
+import ComponentDisplayAdapters
+import GlassBackgroundComponent
+import EdgeEffect
 
 private enum VerticalChatContextResultsEntryStableId: Hashable {
     case action
@@ -95,12 +100,12 @@ private enum VerticalListContextResultsChatInputContextPanelEntry: Comparable, I
         }
     }
     
-    func item(account: Account, actionSelected: @escaping () -> Void, resultSelected: @escaping (ChatContextResult, ASDisplayNode, CGRect) -> Bool) -> ListViewItem {
+    func item(engine: TelegramEngine, actionSelected: @escaping () -> Void, resultSelected: @escaping (ChatContextResult, ASDisplayNode, CGRect) -> Bool) -> ListViewItem {
         switch self {
             case let .action(theme, title):
                 return VerticalListContextResultsChatInputPanelButtonItem(theme: theme, title: title, pressed: actionSelected)
             case let .result(_, theme, result):
-                return VerticalListContextResultsChatInputPanelItem(account: account, theme: theme, result: result, resultSelected: resultSelected)
+                return VerticalListContextResultsChatInputPanelItem(engine: engine, theme: theme, result: result, resultSelected: resultSelected)
         }
     }
 }
@@ -111,18 +116,20 @@ private struct VerticalListContextResultsChatInputContextPanelTransition {
     let updates: [ListViewUpdateItem]
 }
 
-private func preparedTransition(from fromEntries: [VerticalListContextResultsChatInputContextPanelEntry], to toEntries: [VerticalListContextResultsChatInputContextPanelEntry], account: Account, actionSelected: @escaping () -> Void, resultSelected: @escaping (ChatContextResult, ASDisplayNode, CGRect) -> Bool) -> VerticalListContextResultsChatInputContextPanelTransition {
+private func preparedTransition(from fromEntries: [VerticalListContextResultsChatInputContextPanelEntry], to toEntries: [VerticalListContextResultsChatInputContextPanelEntry], engine: TelegramEngine, actionSelected: @escaping () -> Void, resultSelected: @escaping (ChatContextResult, ASDisplayNode, CGRect) -> Bool) -> VerticalListContextResultsChatInputContextPanelTransition {
     let (deleteIndices, indicesAndItems, updateIndices) = mergeListsStableWithUpdates(leftList: fromEntries, rightList: toEntries)
-    
+
     let deletions = deleteIndices.map { ListViewDeleteItem(index: $0, directionHint: nil) }
-    let insertions = indicesAndItems.map { ListViewInsertItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(account: account, actionSelected: actionSelected, resultSelected: resultSelected), directionHint: nil) }
-    let updates = updateIndices.map { ListViewUpdateItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(account: account, actionSelected: actionSelected, resultSelected: resultSelected), directionHint: nil) }
+    let insertions = indicesAndItems.map { ListViewInsertItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(engine: engine, actionSelected: actionSelected, resultSelected: resultSelected), directionHint: nil) }
+    let updates = updateIndices.map { ListViewUpdateItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(engine: engine, actionSelected: actionSelected, resultSelected: resultSelected), directionHint: nil) }
     
     return VerticalListContextResultsChatInputContextPanelTransition(deletions: deletions, insertions: insertions, updates: updates)
 }
 
 final class VerticalListContextResultsChatInputContextPanelNode: ChatInputContextPanelNode {
+    private let backgroundView: GlassBackgroundView
     private let listView: ListView
+    private let listMaskView: UIImageView
     private var currentExternalResults: ChatContextResultCollection?
     private var currentProcessedResults: ChatContextResultCollection?
     private var currentEntries: [VerticalListContextResultsChatInputContextPanelEntry]?
@@ -133,11 +140,13 @@ final class VerticalListContextResultsChatInputContextPanelNode: ChatInputContex
     private let loadMoreDisposable = MetaDisposable()
     private var isLoadingMore: Bool = false
     
-    override init(context: AccountContext, theme: PresentationTheme, strings: PresentationStrings, fontSize: PresentationFontSize) {
-        self.listView = ListView()
+    override init(context: AccountContext, theme: PresentationTheme, strings: PresentationStrings, fontSize: PresentationFontSize, chatPresentationContext: ChatPresentationContext) {
+        self.backgroundView = GlassBackgroundView()
+        self.backgroundView.layer.anchorPoint = CGPoint()
+        
+        self.listView = ListViewImpl()
         self.listView.isOpaque = false
         self.listView.stackFromBottom = true
-        self.listView.keepBottomItemOverscrollBackground = theme.list.plainBackgroundColor
         self.listView.limitHitTestToNodes = true
         self.listView.isHidden = true
         self.listView.view.disablesInteractiveTransitionGestureRecognizer = true
@@ -145,18 +154,41 @@ final class VerticalListContextResultsChatInputContextPanelNode: ChatInputContex
             return strings.VoiceOver_ScrollStatus(row, count).string
         }
         
-        super.init(context: context, theme: theme, strings: strings, fontSize: fontSize)
+        self.listMaskView = UIImageView()
+        
+        super.init(context: context, theme: theme, strings: strings, fontSize: fontSize, chatPresentationContext: chatPresentationContext)
         
         self.isOpaque = false
         self.clipsToBounds = true
         
+        self.view.addSubview(self.backgroundView)
         self.addSubnode(self.listView)
+        self.listView.view.mask = self.listMaskView
         
         self.listView.visibleBottomContentOffsetChanged = { [weak self] offset in
             guard let strongSelf = self, !strongSelf.isLoadingMore, case let .known(value) = offset, value < 40.0 else {
                 return
             }
             strongSelf.loadMore()
+        }
+        
+        self.backgroundView.isHidden = true
+        self.listView.visibleContentOffsetChanged = { [weak self] offset, _ in
+            guard let self else {
+                return
+            }
+            var topOffset: CGFloat = 0.0
+            switch offset {
+            case let .known(offset):
+                topOffset = max(0.0, -offset + self.listView.insets.top)
+            case .unknown:
+                break
+            case .none:
+                break
+            }
+            
+            self.backgroundView.isHidden = false
+            self.backgroundView.layer.position = CGPoint(x: 0.0, y: topOffset)
         }
     }
     
@@ -181,8 +213,10 @@ final class VerticalListContextResultsChatInputContextPanelNode: ChatInputContex
         var entries: [VerticalListContextResultsChatInputContextPanelEntry] = []
         var index = 0
         var resultIds = Set<VerticalChatContextResultsEntryStableId>()
-        if let switchPeer = results.switchPeer {
-            let entry: VerticalListContextResultsChatInputContextPanelEntry = .action(self.theme, switchPeer.text)
+        // One row: a response that carries both switch_pm and switch_webview still has a single button,
+        // and there is only one `.action` stable id for it.
+        if let button = ChatContextResultsButton(results: results) {
+            let entry: VerticalListContextResultsChatInputContextPanelEntry = .action(self.theme, button.title)
             entries.append(entry)
             resultIds.insert(entry.stableId)
         }
@@ -202,9 +236,11 @@ final class VerticalListContextResultsChatInputContextPanelNode: ChatInputContex
     
     private func prepareTransition(from: [VerticalListContextResultsChatInputContextPanelEntry]?, to: [VerticalListContextResultsChatInputContextPanelEntry], results: ChatContextResultCollection) {
         let firstTime = self.currentEntries == nil
-        let transition = preparedTransition(from: from ?? [], to: to, account: self.context.account, actionSelected: { [weak self] in
-            if let strongSelf = self, let interfaceInteraction = strongSelf.interfaceInteraction, let switchPeer = results.switchPeer {
-                interfaceInteraction.botSwitchChatWithPayload(results.botId, switchPeer.startParam)
+        let transition = preparedTransition(from: from ?? [], to: to, engine: self.context.engine, actionSelected: { [weak self] in
+            // Resolved at tap time: an `.action` entry compares only its title, so a later answer with the same
+            // button text keeps this closure, and the captured `results` would carry the old payload or bot.
+            if let strongSelf = self, let interfaceInteraction = strongSelf.interfaceInteraction, let results = strongSelf.currentProcessedResults {
+                ChatContextResultsButton(results: results)?.activate(context: strongSelf.context, interfaceInteraction: interfaceInteraction, botId: results.botId)
             }
         }, resultSelected: { [weak self] result, node, rect in
             if let strongSelf = self, let interfaceInteraction = strongSelf.interfaceInteraction {
@@ -240,9 +276,10 @@ final class VerticalListContextResultsChatInputContextPanelNode: ChatInputContex
             }
             
             var insets = UIEdgeInsets()
-            insets.top = topInsetForLayout(size: validLayout.0, hasSwitchPeer: self.currentExternalResults?.switchPeer != nil)
+            insets.top = topInsetForLayout(size: validLayout.0, bottomInset: validLayout.3, hasSwitchPeer: self.currentExternalResults.flatMap(ChatContextResultsButton.init(results:)) != nil)
             insets.left = validLayout.1
             insets.right = validLayout.2
+            insets.bottom = validLayout.3
             
             let updateSizeAndInsets = ListViewUpdateSizeAndInsets(size: self.listView.bounds.size, insets: insets, duration: 0.0, curve: .Default(duration: nil))
             
@@ -255,39 +292,78 @@ final class VerticalListContextResultsChatInputContextPanelNode: ChatInputContex
                         }
                     }
                     
-                    if let topItemOffset = topItemOffset {
-                        let position = strongSelf.listView.layer.position
-                        strongSelf.listView.position = CGPoint(x: position.x, y: position.y + (strongSelf.listView.bounds.size.height - topItemOffset))
-                        ContainedViewLayoutTransition.animated(duration: 0.3, curve: .spring).animateView {
-                            strongSelf.listView.position = position
-                        }
+                    if let topItemOffset {
+                        let offset = strongSelf.listView.bounds.size.height - topItemOffset
+                        let transition = ContainedViewLayoutTransition.animated(duration: 0.3, curve: .spring)
+                        transition.animatePositionAdditive(layer: strongSelf.listView.layer, offset: CGPoint(x: 0.0, y: offset))
+                        transition.animatePositionAdditive(layer: strongSelf.backgroundView.layer, offset: CGPoint(x: 0.0, y: offset))
                     }
-                    
                     strongSelf.listView.isHidden = false
                 }
             })
         }
     }
     
-    private func topInsetForLayout(size: CGSize, hasSwitchPeer: Bool) -> CGFloat {
+    private func topInsetForLayout(size: CGSize, bottomInset: CGFloat, hasSwitchPeer: Bool) -> CGFloat {
         var minimumItemHeights: CGFloat = floor(VerticalListContextResultsChatInputPanelItemNode.itemHeight * 3.5)
         if hasSwitchPeer {
-            minimumItemHeights += VerticalListContextResultsChatInputPanelButtonItemNode.itemHeight
+            minimumItemHeights += VerticalListContextResultsChatInputPanelButtonItemNode.itemHeight(style: .regular)
         }
         
-        return max(size.height - minimumItemHeights, 0.0)
+        return max(size.height - bottomInset - minimumItemHeights, 0.0)
     }
     
     override func updateLayout(size: CGSize, leftInset: CGFloat, rightInset: CGFloat, bottomInset: CGFloat, transition: ContainedViewLayoutTransition, interfaceState: ChatPresentationInterfaceState) {
         let hadValidLayout = self.validLayout != nil
         self.validLayout = (size, leftInset, rightInset, bottomInset)
         
+        self.backgroundView.bounds = CGRect(origin: CGPoint(), size: CGSize(width: size.width, height: size.height + 32.0))
+        self.backgroundView.update(
+            size: self.backgroundView.bounds.size,
+            cornerRadius: 20.0,
+            isDark: interfaceState.theme.overallDarkAppearance,
+            tintColor: .init(kind: .panel),
+            transition: ComponentTransition(transition)
+        )
+        
         var insets = UIEdgeInsets()
-        insets.top = self.topInsetForLayout(size: size, hasSwitchPeer: self.currentExternalResults?.switchPeer != nil)
+        insets.top = self.topInsetForLayout(size: size, bottomInset: bottomInset, hasSwitchPeer: self.currentExternalResults.flatMap(ChatContextResultsButton.init(results:)) != nil)
         insets.left = leftInset
         insets.right = rightInset
+        insets.bottom = bottomInset
         
         transition.updateFrame(node: self.listView, frame: CGRect(x: 0.0, y: 0.0, width: size.width, height: size.height))
+        let listMaskHeight: CGFloat = bottomInset + 1.0
+        if self.listMaskView.image?.size.height != listMaskHeight {
+            let baseGradientAlpha: CGFloat = 0.65
+            let numSteps = 8
+            let firstStep = 1
+            let firstLocation = 0.0
+            let colors: [UIColor] = (0 ..< numSteps).map { i in
+                if i < firstStep {
+                    return UIColor(white: 0.0, alpha: 0.0)
+                } else {
+                    let step: CGFloat = CGFloat(i - firstStep) / CGFloat(numSteps - firstStep - 1)
+                    let value: CGFloat = bezierPoint(0.42, 0.0, 0.58, 1.0, step)
+                    return UIColor(white: 0.0, alpha: 1.0 - baseGradientAlpha * value)
+                }
+            }
+            let locations: [CGFloat] = (0 ..< numSteps).map { i in
+                if i < firstStep {
+                    return 0.0
+                } else {
+                    let step: CGFloat = CGFloat(i - firstStep) / CGFloat(numSteps - firstStep - 1)
+                    return (firstLocation + (1.0 - firstLocation) * step)
+                }
+            }
+            
+            self.listMaskView.image = generateGradientImage(
+                size: CGSize(width: 8.0, height: listMaskHeight),
+                colors: colors,
+                locations: locations
+            )?.stretchableImage(withLeftCapWidth: 0, topCapHeight: 1)
+        }
+        transition.updateFrame(view: self.listMaskView, frame: CGRect(x: 0.0, y: 0.0, width: size.width, height: size.height))
         
         let (duration, curve) = listViewAnimationDurationAndCurve(transition: transition)
         let updateSizeAndInsets = ListViewUpdateSizeAndInsets(size: size, insets: insets, duration: duration, curve: curve)
@@ -302,7 +378,6 @@ final class VerticalListContextResultsChatInputContextPanelNode: ChatInputContex
         
         if self.theme !== interfaceState.theme, let currentProcessedResults = self.currentProcessedResults {
             self.theme = interfaceState.theme
-            self.listView.keepBottomItemOverscrollBackground = self.theme.list.plainBackgroundColor
             
             let new = self.currentEntries?.map({$0.withUpdatedTheme(interfaceState.theme)}) ?? []
             prepareTransition(from: self.currentEntries, to: new, results: currentProcessedResults)
@@ -317,11 +392,14 @@ final class VerticalListContextResultsChatInputContextPanelNode: ChatInputContex
             }
         }
         
-        if let topItemOffset = topItemOffset {
+        if let topItemOffset {
+            let offset = (self.listView.bounds.size.height - topItemOffset)
+            
             let position = self.listView.layer.position
-            self.listView.layer.animatePosition(from: position, to: CGPoint(x: position.x, y: position.y + (self.listView.bounds.size.height - topItemOffset)), duration: 0.3, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { _ in
+            self.listView.layer.animatePosition(from: position, to: CGPoint(x: position.x, y: position.y + offset), duration: 0.3, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { _ in
                 completion()
             })
+            self.backgroundView.layer.animatePosition(from: self.backgroundView.layer.position, to: CGPoint(x: self.backgroundView.layer.position.x, y: self.backgroundView.layer.position.y + offset), duration: 0.3, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false)
         } else {
             completion()
         }
@@ -344,7 +422,7 @@ final class VerticalListContextResultsChatInputContextPanelNode: ChatInputContex
         |> map { results -> ChatContextResultCollection? in
             return results?.results
         }
-        |> deliverOnMainQueue).start(next: { [weak self] nextResults in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] nextResults in
             guard let strongSelf = self, let nextResults = nextResults else {
                 return
             }
@@ -361,7 +439,7 @@ final class VerticalListContextResultsChatInputContextPanelNode: ChatInputContex
                     existingIds.insert(result.id)
                 }
             }
-            let mergedResults = ChatContextResultCollection(botId: currentProcessedResults.botId, peerId: currentProcessedResults.peerId, query: currentProcessedResults.query, geoPoint: currentProcessedResults.geoPoint, queryId: nextResults.queryId, nextOffset: nextResults.nextOffset, presentation: currentProcessedResults.presentation, switchPeer: currentProcessedResults.switchPeer, results: results, cacheTimeout: currentProcessedResults.cacheTimeout)
+            let mergedResults = ChatContextResultCollection(botId: currentProcessedResults.botId, peerId: currentProcessedResults.peerId, query: currentProcessedResults.query, geoPoint: currentProcessedResults.geoPoint, queryId: nextResults.queryId, nextOffset: nextResults.nextOffset, presentation: currentProcessedResults.presentation, switchPeer: currentProcessedResults.switchPeer, webView: currentProcessedResults.webView, results: results, cacheTimeout: currentProcessedResults.cacheTimeout)
             strongSelf.currentProcessedResults = mergedResults
             strongSelf.updateInternalResults(mergedResults)
         }))

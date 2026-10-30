@@ -15,7 +15,7 @@ public class NavigationBackButtonNode: ASControlNode {
     }
     
     let arrow: ASDisplayNode
-    let label: ImmediateTextNode
+    public let label: ImmediateTextNode
     
     private let arrowSpacing: CGFloat = 4.0
     
@@ -31,7 +31,7 @@ public class NavigationBackButtonNode: ASControlNode {
         }
     }
     
-    public var color: UIColor = UIColor(rgb: 0x007aff) {
+    public var color: UIColor = UIColor(rgb: 0x0088ff) {
         didSet {
             self.label.attributedText = NSAttributedString(string: self._text, attributes: self.attributesForCurrentState())
         }

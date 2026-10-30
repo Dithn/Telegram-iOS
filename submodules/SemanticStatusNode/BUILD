@@ -14,9 +14,11 @@ swift_library(
         "//submodules/AsyncDisplayKit:AsyncDisplayKit",
         "//submodules/LegacyComponents:LegacyComponents",
         "//submodules/GZip:GZip",
-        "//submodules/rlottie:RLottieBinding",
+        "//submodules/LottieBinding:LottieBinding",
+        "//submodules/LottieSettings:LottieSettings",
         "//submodules/AppBundle:AppBundle",
-        "//submodules/ManagedAnimationNode:ManagedAnimationNode"
+        "//submodules/ManagedAnimationNode:ManagedAnimationNode",
+        "//submodules/Components/HierarchyTrackingLayer",
     ],
     visibility = [
         "//visibility:public",

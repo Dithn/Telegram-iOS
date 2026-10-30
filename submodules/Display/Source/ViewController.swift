@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import SwiftSignalKit
+import UIKitRuntimeUtils
 
 public protocol StandalonePresentableController: ViewController {
 }
@@ -64,7 +65,9 @@ public enum ViewControllerNavigationPresentation {
     case modal
     case flatModal
     case standaloneModal
+    case standaloneFlatModal
     case modalInLargeLayout
+    case modalInCompactLayout
 }
 
 public enum TabBarItemContextActionType {
@@ -101,7 +104,9 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     public final var supportedOrientations: ViewControllerSupportedOrientations = ViewControllerSupportedOrientations(regularSize: .all, compactSize: .allButUpsideDown) {
         didSet {
             if self.supportedOrientations != oldValue {
-                self.window?.invalidateSupportedOrientations()
+                if self.isNodeLoaded {
+                    self.window?.invalidateSupportedOrientations()
+                }
             }
         }
     }
@@ -155,8 +160,15 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         return self.prefersOnScreenNavigationHidden
     }
     
+    open var previousItem: NavigationPreviousAction?
+    
     open var navigationPresentation: ViewControllerNavigationPresentation = .default
     open var _presentedInModal: Bool = false
+    open var _hasGlassStyle: Bool = false
+    open var flatReceivesModalTransition: Bool = false
+    /// A full-screen viewer (a web page, a document) presented as a modal fills the screen beside a top-right status
+    /// island (iPhone Duo, unfolded portrait) rather than becoming a card below it; its bar then sits beside the island.
+    open var fillsScreenBesideStatusIsland: Bool = false
     
     public var presentedOverCoveringView: Bool = false
     
@@ -166,10 +178,12 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     
     public private(set) var modalStyleOverlayTransitionFactor: CGFloat = 0.0
     public var modalStyleOverlayTransitionFactorUpdated: ((ContainedViewLayoutTransition) -> Void)?
+    public var customModalStyleOverlayTransitionFactorUpdated: ((ContainedViewLayoutTransition) -> Void)?
     public func updateModalStyleOverlayTransitionFactor(_ value: CGFloat, transition: ContainedViewLayoutTransition) {
         if self.modalStyleOverlayTransitionFactor != value {
             self.modalStyleOverlayTransitionFactor = value
             self.modalStyleOverlayTransitionFactorUpdated?(transition)
+            self.customModalStyleOverlayTransitionFactorUpdated?(transition)
         }
     }
     
@@ -198,6 +212,27 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     
     public let statusBar: StatusBar
     public let navigationBar: NavigationBar?
+    open var transitionNavigationBar: NavigationBar? {
+        return self.navigationBar
+    }
+    /// The bar a navigation push or pop morphs into the other screen's (`NavigationBarTransitionSource`); nil keeps
+    /// today's slide. A screen with its own header returns nil.
+    open var navigationBarTransitionSource: NavigationBarTransitionSource? {
+        guard self.displayNavigationBar, let navigationBar = self.navigationBar, !navigationBar.isHidden else {
+            return nil
+        }
+        return navigationBar
+    }
+    /// This screen's side when the screen above it expands out of it (a push or pop between the two); nil: it does not
+    /// take part.
+    open func navigationExpansionSource(above controller: ViewController, operation: NavigationExpansionOperation) -> NavigationExpansionSource? {
+        return nil
+    }
+
+    /// This screen's side when it expands out of the screen below it; nil: it does not (the slide).
+    open func navigationExpansionDestination(below controller: ViewController, operation: NavigationExpansionOperation) -> NavigationExpansionDestination? {
+        return nil
+    }
     public private(set) var toolbar: Toolbar?
     
     public var displayNavigationBar = true
@@ -205,20 +240,78 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         return true
     }
     
+    /// iPhone Duo: whether the navigation bar lays out its side column (back or close, icon buttons, overflow) in the side strip (docs/iphone-duo-layout.md). A screen that lays out its own side column returns false.
+    open var placesNavigationButtonInSideColumn: Bool {
+        return true
+    }
+
+    /// iPhone Duo: where the bar puts its side column for `layout`, or nil while it puts none there.
+    private func navigationBarSideColumnPlacement(layout: ContainerViewLayout) -> NavigationBarSideColumnPlacement? {
+        guard self.placesNavigationButtonInSideColumn && self.displayNavigationBar else {
+            return nil
+        }
+        return NavigationBarSideColumnPlacement(layout: layout, reservedBelow: (self.parent as? TabBarController)?.verticalTabBarFrame(for: layout))
+    }
+
+    /// iPhone Duo: the side column the bar lays out for `layout` (nil without one), for a screen whose content keeps
+    /// clear of it.
+    public final func navigationBarSideColumnExtent(layout: ContainerViewLayout) -> NavigationBarSideColumnExtent? {
+        guard let navigationBar = self.navigationBar, let placement = self.navigationBarSideColumnPlacement(layout: layout) else {
+            return nil
+        }
+        return navigationBar.sideColumnExtent(placement: placement)
+    }
+
+    public struct TabBarSearchState: Equatable {
+        public var isActive: Bool
+
+        public init(isActive: Bool) {
+            self.isActive = isActive
+        }
+    }
+
+    public private(set) var tabBarSearchState: TabBarSearchState?
+    public var tabBarSearchStateUpdated: ((ContainedViewLayoutTransition) -> Void)?
+    public var currentTabBarSearchNode: (() -> ASDisplayNode?)?
+    
     private weak var activeInputViewCandidate: UIResponder?
     private weak var activeInputView: UIResponder?
     
     open var hasActiveInput: Bool = false
     
+    open var overlayWantsToBeBelowKeyboard: Bool {
+        return false
+    }
+    
+    var internalOverlayWantsToBeBelowKeyboardUpdated: ((ContainedViewLayoutTransition) -> Void)?
+    public func overlayWantsToBeBelowKeyboardUpdated(transition: ContainedViewLayoutTransition) {
+        self.internalOverlayWantsToBeBelowKeyboardUpdated?(transition)
+    }
+    
     private var navigationBarOrigin: CGFloat = 0.0
+        
+    open var interactiveNavivationGestureEdgeWidth: InteractiveTransitionGestureRecognizerEdgeWidth? {
+        return nil
+    }
+    
+    open var navigationEdgeEffectExtension: CGFloat {
+        return 0.0
+    }
+    
+    public func updateNavigationEdgeEffectExtension(transition: ContainedViewLayoutTransition) {
+        if let navigationBar = self.navigationBar {
+            navigationBar.updateEdgeEffectExtension(value: max(0.0, self.navigationEdgeEffectExtension - navigationBar.frame.maxY), transition: transition)
+        }
+    }
 
     open func navigationLayout(layout: ContainerViewLayout) -> NavigationLayout {
-        let statusBarHeight: CGFloat = layout.statusBarHeight ?? 0.0
+        // Beside iPhone Duo's status island the bar stays near the top rather than below the island.
+        let statusBarHeight: CGFloat = layout.navigationBarStatusBarHeight ?? 0.0
         var defaultNavigationBarHeight: CGFloat
-        if self._presentedInModal && layout.orientation == .portrait {
-            defaultNavigationBarHeight = 56.0
+        if self._presentedInModal && self._hasGlassStyle {
+            defaultNavigationBarHeight = 68.0
         } else {
-            defaultNavigationBarHeight = 44.0
+            defaultNavigationBarHeight = 60.0
         }
         let navigationBarHeight: CGFloat = statusBarHeight + (self.navigationBar?.contentHeight(defaultHeight: defaultNavigationBarHeight) ?? defaultNavigationBarHeight)
 
@@ -258,14 +351,7 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         return self._ready
     }
     
-    private var scrollToTopView: ScrollToTopView?
-    public var scrollToTop: (() -> Void)? {
-        didSet {
-            if self.isViewLoaded {
-                self.updateScrollToTopView()
-            }
-        }
-    }
+    public var scrollToTop: (() -> Void)?
     public var scrollToTopWithTabBar: (() -> Void)?
     public var longTapWithTabBar: (() -> Void)?
     
@@ -309,28 +395,27 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     open func didAppearInContextPreview() {
     }
     
-    private func updateScrollToTopView() {
-        /*if self.scrollToTop != nil {
-            if let displayNode = self._displayNode , self.scrollToTopView == nil {
-                let scrollToTopView = ScrollToTopView(frame: CGRect(x: 0.0, y: -1.0, width: displayNode.bounds.size.width, height: 1.0))
-                scrollToTopView.action = { [weak self] in
-                    if let scrollToTop = self?.scrollToTop {
-                        scrollToTop()
-                    }
-                }
-                self.scrollToTopView = scrollToTopView
-                self.view.addSubview(scrollToTopView)
+    public var titleSignal: Signal<String?, NoError> {
+        return Signal { [weak self] subscriber in
+            guard let self else {
+                return EmptyDisposable
             }
-        } else*/ if let scrollToTopView = self.scrollToTopView {
-            scrollToTopView.removeFromSuperview()
-            self.scrollToTopView = nil
+            subscriber.putNext(self.navigationItem.title)
+            let listenerIndex = self.navigationItem.addSetTitleListener { title, _ in
+                subscriber.putNext(title)
+            }
+            return ActionDisposable { [weak self] in
+                if let self {
+                    self.navigationItem.removeSetTitleListener(listenerIndex)
+                }
+            }
         }
     }
     
     public init(navigationBarPresentationData: NavigationBarPresentationData?) {
         self.statusBar = StatusBar()
         if let navigationBarPresentationData = navigationBarPresentationData {
-            self.navigationBar = NavigationBar(presentationData: navigationBarPresentationData)
+            self.navigationBar = defaultNavigationBarImpl!(navigationBarPresentationData)
         } else {
             self.navigationBar = nil
         }
@@ -365,8 +450,11 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
                 }
             }
         }
+        self.navigationBar?.sideColumnExtentUpdated = { [weak self] transition in
+            self?.requestLayout(transition: transition)
+        }
         self.navigationBar?.item = self.navigationItem
-        self.automaticallyAdjustsScrollViewInsets = false
+        //self.automaticallyAdjustsScrollViewInsets = false
         
         self.scrollToTopWithTabBar = { [weak self] in
             self?.scrollToTop?()
@@ -386,7 +474,7 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     }
     
     public func applyNavigationBarLayout(_ layout: ContainerViewLayout, navigationLayout: NavigationLayout, additionalBackgroundHeight: CGFloat, transition: ContainedViewLayoutTransition) {
-        let statusBarHeight: CGFloat = layout.statusBarHeight ?? 0.0
+        let statusBarHeight: CGFloat = layout.navigationBarStatusBarHeight ?? 0.0
 
         var navigationBarFrame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: layout.size.width, height: navigationLayout.navigationFrame.maxY))
         
@@ -396,19 +484,33 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         
         self.navigationBarOrigin = navigationBarFrame.origin.y
 
-        let isLandscape = layout.size.width > layout.size.height
-        
         if let navigationBar = self.navigationBar {
             if let contentNode = navigationBar.contentNode, case .expansion = contentNode.mode, !self.displayNavigationBar {
-                navigationBarFrame.origin.y -= navigationLayout.defaultContentHeight
-                navigationBarFrame.size.height += contentNode.height + navigationLayout.defaultContentHeight + statusBarHeight
-                //navigationBarFrame.origin.y += contentNode.height + statusBarHeight
+                navigationBarFrame.origin.y -= navigationLayout.defaultContentHeight + statusBarHeight
+                navigationBarFrame.size.height += contentNode.height + navigationLayout.defaultContentHeight + statusBarHeight * 2.0
+                if self._presentedInModal && self._hasGlassStyle {
+                    navigationBarFrame.size.height += 8.0
+                }
             }
+            //navigationBar.backgroundColor = .blue
             if let _ = navigationBar.contentNode, let _ = navigationBar.secondaryContentNode, !self.displayNavigationBar {
-                navigationBarFrame.size.height += NavigationBar.defaultSecondaryContentHeight
-                //navigationBarFrame.origin.y += NavigationBar.defaultSecondaryContentHeight
+                navigationBarFrame.size.height += navigationBar.secondaryContentHeight
             }
-            navigationBar.updateLayout(size: navigationBarFrame.size, defaultHeight: navigationLayout.defaultContentHeight, additionalTopHeight: statusBarHeight, additionalContentHeight: self.additionalNavigationBarHeight, additionalBackgroundHeight: additionalBackgroundHeight, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, appearsHidden: !self.displayNavigationBar, isLandscape: isLandscape, transition: transition)
+            
+            var additionalTopHeight = statusBarHeight
+            if !self.displayNavigationBar {
+                additionalTopHeight -= statusBarHeight
+                if statusBarHeight != 0.0 {
+                    additionalTopHeight += 6.0
+                }
+            }
+            if self._presentedInModal && self._hasGlassStyle {
+                additionalTopHeight += 8.0
+            }
+            
+            navigationBar.trailingButtonsInset = layout.navigationBarTrailingButtonsInset
+            navigationBar.sideColumnPlacement = self.navigationBarSideColumnPlacement(layout: layout)
+            navigationBar.updateLayout(size: navigationBarFrame.size, defaultHeight: navigationLayout.defaultContentHeight, additionalTopHeight: additionalTopHeight, additionalContentHeight: self.additionalNavigationBarHeight, additionalBackgroundHeight: additionalBackgroundHeight, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, appearsHidden: !self.displayNavigationBar, transition: transition)
             if !transition.isAnimated {
                 navigationBar.layer.removeAnimation(forKey: "bounds")
                 navigationBar.layer.removeAnimation(forKey: "position")
@@ -433,14 +535,6 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         if self.automaticallyControlPresentationContextLayout {
             self.presentationContext.containerLayoutUpdated(layout, transition: transition)
         }
-        
-        if let scrollToTopView = self.scrollToTopView {
-            scrollToTopView.frame = CGRect(x: 0.0, y: 0.0, width: layout.size.width, height: 10.0)
-        }
-    }
-    
-    open func updateModalTransition(_ value: CGFloat, transition: ContainedViewLayoutTransition) {
-        
     }
     
     open func navigationStackConfigurationUpdated(next: [ViewController]) {
@@ -464,7 +558,6 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     }
     
     open func displayNodeDidLoad() {
-        self.updateScrollToTopView()
         if let backgroundColor = self.displayNode.backgroundColor, backgroundColor.alpha.isEqual(to: 1.0) {
             self.blocksBackgroundWhenInOverlay = true
             self.isOpaqueWhenInOverlay = true
@@ -500,14 +593,14 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
             UIView.transition(with: navigationBar.view, duration: 0.3, options: [.transitionCrossDissolve], animations: {
             }, completion: nil)
         }
-        self.navigationBar?.updatePresentationData(presentationData)
+        self.navigationBar?.updatePresentationData(presentationData, transition: .immediate)
         if let parent = self.parent as? TabBarController {
             if parent.currentController === self {
                 if animated, let navigationBar = parent.navigationBar {
                     UIView.transition(with: navigationBar.view, duration: 0.3, options: [.transitionCrossDissolve], animations: {
                     }, completion: nil)
                 }
-                parent.navigationBar?.updatePresentationData(presentationData)
+                parent.navigationBar?.updatePresentationData(presentationData, transition: .immediate)
             }
         }
     }
@@ -552,6 +645,15 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     
     public func push(_ controller: ViewController) {
         (self.navigationController as? NavigationController)?.pushViewController(controller)
+    }
+    
+    open func replace(with controller: ViewController) {
+        if let navigationController = self.navigationController as? NavigationController {
+            var controllers = navigationController.viewControllers
+            controllers.removeAll(where: { $0 === self })
+            controllers.append(controller)
+            navigationController.setViewControllers(controllers, animated: true)
+        }
     }
     
     open func present(_ controller: ViewController, in context: PresentationContextType, with arguments: Any? = nil, blockInteraction: Bool = false, completion: @escaping () -> Void = {}) {
@@ -613,6 +715,7 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         } else {
             self.presentingViewController?.dismiss(animated: true, completion: nil)
         }
+        completion?()
     }
     
     public final func navigationNextSibling() -> UIViewController? {
@@ -626,11 +729,15 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         return nil
     }
     
-    public func traceVisibility() -> Bool {
+    /// - Parameter ignoringScreenDimOverlay: pass `true` only when the question is "is this the
+    ///   controller the user is currently on", not "can the user see it right now". The proximity dim
+    ///   overlay blanks the screen while the phone is at the user's ear; a caller that latches
+    ///   one-shot UI must leave this `false` or it will spend that UI invisibly.
+    public func traceVisibility(ignoringScreenDimOverlay: Bool = false) -> Bool {
         if !self.isViewLoaded {
             return false
         }
-        return traceViewVisibility(view: self.view, rect: self.view.bounds)
+        return traceViewVisibility(view: self.view, rect: self.view.bounds, ignoringScreenDimOverlay: ignoringScreenDimOverlay)
     }
     
     open func setToolbar(_ toolbar: Toolbar?, transition: ContainedViewLayoutTransition) {
@@ -649,13 +756,33 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     
     open var tabBarItemContextActionType: TabBarItemContextActionType = .none
     
-    open func tabBarItemContextAction(sourceNode: ContextExtractedContentContainingNode, gesture: ContextGesture) {
+    open func tabBarItemContextAction(sourceView: ContextExtractedContentContainingView, gesture: ContextGesture) {
+    }
+    
+    open func tabBarItemHasDoubleTapAction() -> Bool {
+        return false
+    }
+    
+    open func tabBarItemPerformDoubleTapAction() {
     }
     
     open func tabBarDisabledAction() {
     }
+
+    open func tabBarActivateSearch() {
+    }
+
+    open func tabBarDeactivateSearch() {
+    }
     
     open func tabBarItemSwipeAction(direction: TabBarItemSwipeDirection) {
+    }
+
+    public func updateTabBarSearchState(_ tabBarSearchState: TabBarSearchState?, transition: ContainedViewLayoutTransition) {
+        if self.tabBarSearchState != tabBarSearchState {
+            self.tabBarSearchState = tabBarSearchState
+            self.tabBarSearchStateUpdated?(transition)
+        }
     }
     
     open func updatePossibleControllerDropContent(content: NavigationControllerDropContent?) {
@@ -666,7 +793,19 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     }
 }
 
-func traceIsOpaque(layer: CALayer, rect: CGRect) -> Bool {
+/// A layer carrying this name is the proximity dim overlay: the black surface shown while the device
+/// is held to the user's ear, standing in for the screen being switched off.
+///
+/// Callers that ask "is this controller the one the user is currently on" want to look through it -
+/// raise-to-listen must keep working with the phone at the ear. Callers that ask "can the user
+/// actually see this right now" must not, or a one-shot tooltip gets burned while the screen is
+/// blanked. So the exemption is opt-in per query, never global.
+let screenDimOverlayLayerName = "ScreenDimOverlay"
+
+func traceIsOpaque(layer: CALayer, rect: CGRect, ignoringScreenDimOverlay: Bool = false) -> Bool {
+    if ignoringScreenDimOverlay && layer.name == screenDimOverlayLayerName {
+        return false
+    }
     if layer.bounds.contains(rect) {
         if layer.isHidden {
             return false
@@ -684,7 +823,7 @@ func traceIsOpaque(layer: CALayer, rect: CGRect) -> Bool {
         if let sublayers = layer.sublayers {
             for sublayer in sublayers {
                 let sublayerRect = layer.convert(rect, to: sublayer)
-                if traceIsOpaque(layer: sublayer, rect: sublayerRect) {
+                if traceIsOpaque(layer: sublayer, rect: sublayerRect, ignoringScreenDimOverlay: ignoringScreenDimOverlay) {
                     return true
                 }
             }
@@ -695,7 +834,7 @@ func traceIsOpaque(layer: CALayer, rect: CGRect) -> Bool {
     }
 }
 
-private func traceViewVisibility(view: UIView, rect: CGRect) -> Bool {
+private func traceViewVisibility(view: UIView, rect: CGRect, ignoringScreenDimOverlay: Bool) -> Bool {
     if view.isHidden {
         return false
     }
@@ -710,12 +849,12 @@ private func traceViewVisibility(view: UIView, rect: CGRect) -> Bool {
             for i in (index + 1) ..< siblings.count {
                 if siblings[i].frame.contains(viewFrame) {
                     let siblingSubframe = view.layer.convert(viewFrame, to: siblings[i])
-                    if traceIsOpaque(layer: siblings[i], rect: siblingSubframe) {
+                    if traceIsOpaque(layer: siblings[i], rect: siblingSubframe, ignoringScreenDimOverlay: ignoringScreenDimOverlay) {
                         return false
                     }
                 }
             }
-            return traceViewVisibility(view: superview, rect: viewFrame)
+            return traceViewVisibility(view: superview, rect: viewFrame, ignoringScreenDimOverlay: ignoringScreenDimOverlay)
         } else {
             return false
         }

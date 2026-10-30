@@ -1,6 +1,5 @@
 import Foundation
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import WidgetItems
 import TelegramPresentationData
@@ -38,7 +37,7 @@ private final class WidgetReloadManager {
     init(inForeground: Signal<Bool, NoError>) {
         self.inForegroundDisposable = (inForeground
         |> distinctUntilChanged
-        |> deliverOnMainQueue).start(next: { [weak self] value in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] value in
             guard let strongSelf = self else {
                 return
             }
@@ -101,11 +100,11 @@ final class WidgetDataContext {
         self.reloadManager = WidgetReloadManager(inForeground: inForeground)
         
         let queue = Queue()
-        let updatedAdditionalPeerIds: Signal<[AccountRecordId: Set<PeerId>], NoError> = Signal { subscriber in
+        let updatedAdditionalPeerIds: Signal<[AccountRecordId: Set<EnginePeer.Id>], NoError> = Signal { subscriber in
             if #available(iOSApplicationExtension 14.0, iOS 14.0, *) {
                 #if arch(arm64) || arch(x86_64)
                 WidgetCenter.shared.getCurrentConfigurations { result in
-                    var peerIds: [AccountRecordId: Set<PeerId>] = [:]
+                    var peerIds: [AccountRecordId: Set<EnginePeer.Id>] = [:]
                     
                     func processFriend(_ item: Friend) {
                         guard let identifier = item.identifier else {
@@ -121,7 +120,7 @@ final class WidgetDataContext {
                             return
                         }
                         let accountId = AccountRecordId(rawValue: accountIdValue)
-                        let peerId = PeerId(peerIdValue)
+                        let peerId = EnginePeer.Id(peerIdValue)
                         if peerIds[accountId] == nil {
                             peerIds[accountId] = Set()
                         }
@@ -162,7 +161,7 @@ final class WidgetDataContext {
         }
         |> runOn(queue)
         |> then(
-            Signal<[AccountRecordId: Set<PeerId>], NoError>.complete()
+            Signal<[AccountRecordId: Set<EnginePeer.Id>], NoError>.complete()
             |> delay(10.0, queue: queue)
         )
         |> restart
@@ -198,15 +197,16 @@ final class WidgetDataContext {
                 if peerIds.isEmpty {
                     continue
                 }
-                let topMessagesKey: PostboxViewKey = .topChatMessage(peerIds: Array(peerIds))
                 
-                accountSignals.append(account.postbox.combinedView(keys: [topMessagesKey])
-                |> map { combinedView -> [WidgetDataPeer] in
-                    guard let topMessages = combinedView.views[topMessagesKey] as? TopChatMessageView else {
-                        return []
-                    }
+                accountSignals.append(TelegramEngine(account: account).data.subscribe(EngineDataMap(
+                    peerIds.map(TelegramEngine.EngineData.Item.Messages.TopMessage.init)
+                ))
+                |> map { topMessages -> [WidgetDataPeer] in
                     var result: [WidgetDataPeer] = []
-                    for (peerId, message) in topMessages.messages {
+                    for (peerId, message) in topMessages {
+                        guard let message = message else {
+                            continue
+                        }
                         guard let peer = message.peers[message.id.peerId] else {
                             continue
                         }
@@ -227,7 +227,12 @@ final class WidgetDataContext {
                             name = peer.debugDisplayTitle
                         }
                         
-                        result.append(WidgetDataPeer(id: peerId.toInt64(), name: name, lastName: lastName, letters: [], avatarPath: nil, badge: nil, message: WidgetDataPeer.Message(accountPeerId: account.peerId, message: EngineMessage(message))))
+                        var isForum = false
+                        if let peer = peer as? TelegramChannel, peer.isForumOrMonoForum {
+                            isForum = true
+                        }
+                        
+                        result.append(WidgetDataPeer(id: peerId.toInt64(), name: name, lastName: lastName, letters: [], avatarPath: nil, badge: nil, message: WidgetDataPeer.Message(accountPeerId: account.peerId, message: message), isForum: isForum))
                     }
                     result.sort(by: { lhs, rhs in
                         return lhs.id < rhs.id
@@ -249,7 +254,7 @@ final class WidgetDataContext {
             }
         }
         |> distinctUntilChanged
-        |> deliverOnMainQueue).start(next: { [weak self] _ in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] _ in
             self?.reloadManager.requestReload()
         })
         
@@ -280,7 +285,7 @@ final class WidgetDataContext {
                 chatSavedMessages: presentationData.strings.DialogList_SavedMessages
             )
         }
-        |> distinctUntilChanged).start(next: { value in
+        |> distinctUntilChanged).startStrict(next: { value in
             let path = widgetPresentationDataPath(rootPath: basePath)
             if let data = try? JSONEncoder().encode(value) {
                 let _ = try? data.write(to: URL(fileURLWithPath: path), options: [.atomic])
@@ -304,10 +309,11 @@ final class WidgetDataContext {
             
             return NotificationsPresentationData(
                 applicationLockedMessageString: presentationData.strings.PUSH_LOCKED_MESSAGE("").string,
+                applicationLockedStoryString: presentationData.strings.PUSH_LOCKED_STORY("").string,
                 incomingCallString: incomingCallString
             )
         }
-        |> distinctUntilChanged).start(next: { value in
+        |> distinctUntilChanged).startStrict(next: { value in
             let path = notificationsPresentationDataPath(rootPath: basePath)
             if let data = try? JSONEncoder().encode(value) {
                 let _ = try? data.write(to: URL(fileURLWithPath: path), options: [.atomic])

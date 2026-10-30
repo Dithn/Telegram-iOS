@@ -2,21 +2,39 @@ import Foundation
 import UIKit
 import ComponentFlow
 import Display
+import Markdown
 
 public final class MultilineTextComponent: Component {
-    public let text: NSAttributedString
+    public final class CrossfadeTransition {
+        public init() {
+        }
+    }
+    
+    public enum TextContent: Equatable {
+        case plain(NSAttributedString)
+        case markdown(text: String, attributes: MarkdownAttributes)
+    }
+    
+    public let text: TextContent
     public let horizontalAlignment: NSTextAlignment
     public let verticalAlignment: TextVerticalAlignment
-    public var truncationType: CTLineTruncationType
-    public var maximumNumberOfLines: Int
-    public var lineSpacing: CGFloat
-    public var cutout: TextNodeCutout?
-    public var insets: UIEdgeInsets
-    public var textShadowColor: UIColor?
-    public var textStroke: (UIColor, CGFloat)?
+    public let truncationType: CTLineTruncationType
+    public let maximumNumberOfLines: Int
+    public let lineSpacing: CGFloat
+    public let cutout: TextNodeCutout?
+    public let insets: UIEdgeInsets
+    public let tintColor: UIColor?
+    public let textShadowColor: UIColor?
+    public let textShadowBlur: CGFloat?
+    public let textStroke: (UIColor, CGFloat)?
+    public let highlightColor: UIColor?
+    public let highlightInset: UIEdgeInsets
+    public let highlightAction: (([NSAttributedString.Key: Any]) -> NSAttributedString.Key?)?
+    public let tapAction: (([NSAttributedString.Key: Any], Int) -> Void)?
+    public let longTapAction: (([NSAttributedString.Key: Any], Int) -> Void)?
     
     public init(
-        text: NSAttributedString,
+        text: TextContent,
         horizontalAlignment: NSTextAlignment = .natural,
         verticalAlignment: TextVerticalAlignment = .top,
         truncationType: CTLineTruncationType = .end,
@@ -24,8 +42,15 @@ public final class MultilineTextComponent: Component {
         lineSpacing: CGFloat = 0.0,
         cutout: TextNodeCutout? = nil,
         insets: UIEdgeInsets = UIEdgeInsets(),
+        tintColor: UIColor? = nil,
         textShadowColor: UIColor? = nil,
-        textStroke: (UIColor, CGFloat)? = nil
+        textShadowBlur: CGFloat? = nil,
+        textStroke: (UIColor, CGFloat)? = nil,
+        highlightColor: UIColor? = nil,
+        highlightInset: UIEdgeInsets = .zero,
+        highlightAction: (([NSAttributedString.Key: Any]) -> NSAttributedString.Key?)? = nil,
+        tapAction: (([NSAttributedString.Key: Any], Int) -> Void)? = nil,
+        longTapAction: (([NSAttributedString.Key: Any], Int) -> Void)? = nil
     ) {
         self.text = text
         self.horizontalAlignment = horizontalAlignment
@@ -35,12 +60,19 @@ public final class MultilineTextComponent: Component {
         self.lineSpacing = lineSpacing
         self.cutout = cutout
         self.insets = insets
+        self.tintColor = tintColor
         self.textShadowColor = textShadowColor
+        self.textShadowBlur = textShadowBlur
         self.textStroke = textStroke
+        self.highlightColor = highlightColor
+        self.highlightInset = highlightInset
+        self.highlightAction = highlightAction
+        self.tapAction = tapAction
+        self.longTapAction = longTapAction
     }
     
     public static func ==(lhs: MultilineTextComponent, rhs: MultilineTextComponent) -> Bool {
-        if !lhs.text.isEqual(to: rhs.text) {
+        if lhs.text != rhs.text {
             return false
         }
         if lhs.horizontalAlignment != rhs.horizontalAlignment {
@@ -64,12 +96,17 @@ public final class MultilineTextComponent: Component {
         if lhs.insets != rhs.insets {
             return false
         }
-        
+        if lhs.tintColor != rhs.tintColor {
+            return false
+        }
         if let lhsTextShadowColor = lhs.textShadowColor, let rhsTextShadowColor = rhs.textShadowColor {
             if !lhsTextShadowColor.isEqual(rhsTextShadowColor) {
                 return false
             }
         } else if (lhs.textShadowColor != nil) != (rhs.textShadowColor != nil) {
+            return false
+        }
+        if lhs.textShadowBlur != rhs.textShadowBlur {
             return false
         }
         
@@ -84,30 +121,71 @@ public final class MultilineTextComponent: Component {
             return false
         }
         
+        if let lhsHighlightColor = lhs.highlightColor, let rhsHighlightColor = rhs.highlightColor {
+            if !lhsHighlightColor.isEqual(rhsHighlightColor) {
+                return false
+            }
+        } else if (lhs.highlightColor != nil) != (rhs.highlightColor != nil) {
+            return false
+        }
+        
+        if lhs.highlightInset != rhs.highlightInset {
+            return false
+        }
+        
         return true
     }
     
-    public final class View: TextView {
-        public func update(component: MultilineTextComponent, availableSize: CGSize) -> CGSize {
-            let makeLayout = TextView.asyncLayout(self)
-            let (layout, apply) = makeLayout(TextNodeLayoutArguments(
-                attributedString: component.text,
-                backgroundColor: nil,
-                maximumNumberOfLines: component.maximumNumberOfLines,
-                truncationType: component.truncationType,
-                constrainedSize: availableSize,
-                alignment: component.horizontalAlignment,
-                verticalAlignment: component.verticalAlignment,
-                lineSpacing: component.lineSpacing,
-                cutout: component.cutout,
-                insets: component.insets,
-                textShadowColor: component.textShadowColor,
-                textStroke: component.textStroke,
-                displaySpoilers: false
-            ))
-            let _ = apply()
+    public final class View: ImmediateTextView {
+        public func update(component: MultilineTextComponent, availableSize: CGSize, transition: ComponentTransition) -> CGSize {
+            let attributedString: NSAttributedString
+            switch component.text {
+            case let .plain(string):
+                attributedString = string
+            case let .markdown(text, attributes):
+                attributedString = parseMarkdownIntoAttributedString(text, attributes: attributes)
+            }
             
-            return layout.size
+            let previousText = self.attributedText?.string
+                                        
+            self.attributedText = attributedString
+            self.maximumNumberOfLines = component.maximumNumberOfLines
+            self.truncationType = component.truncationType
+            self.textAlignment = component.horizontalAlignment
+            self.verticalAlignment = component.verticalAlignment
+            self.lineSpacing = component.lineSpacing
+            self.cutout = component.cutout
+            self.insets = component.insets
+            self.textShadowColor = component.textShadowColor
+            self.textShadowBlur = component.textShadowBlur
+            self.textStroke = component.textStroke
+            self.linkHighlightColor = component.highlightColor
+            self.linkHighlightInset = component.highlightInset
+            self.highlightAttributeAction = component.highlightAction
+            self.tapAttributeAction = component.tapAction
+            self.longTapAttributeAction = component.longTapAction
+                        
+            if case let .curve(duration, _) = transition.animation, let _ = transition.userData(CrossfadeTransition.self), let previousText = previousText, previousText != attributedString.string {
+                if let snapshotView = self.snapshotView(afterScreenUpdates: false) {
+                    snapshotView.center = self.center
+                    self.superview?.addSubview(snapshotView)
+                    
+                    snapshotView.layer.animateAlpha(from: 1.0, to: 0.0, duration: duration, removeOnCompletion: false, completion: { [weak snapshotView] _ in
+                        snapshotView?.removeFromSuperview()
+                    })
+                    self.layer.animateAlpha(from: 0.0, to: 1.0, duration: duration)
+                }
+            }
+            
+            let size = self.updateLayout(availableSize)
+                 
+            if let tintColor = component.tintColor {
+                transition.setTintColor(layer: self.layer, color: tintColor)
+            } else {
+                self.layer.layerTintColor = nil
+            }
+            
+            return size
         }
     }
     
@@ -115,7 +193,7 @@ public final class MultilineTextComponent: Component {
         return View()
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
-        return view.update(component: self, availableSize: availableSize)
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
+        return view.update(component: self, availableSize: availableSize, transition: transition)
     }
 }

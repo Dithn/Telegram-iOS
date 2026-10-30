@@ -1,17 +1,16 @@
 import Foundation
-import Postbox
 import SwiftSignalKit
 import TelegramCore
 
 public struct ChatArchiveSettings: Equatable, Codable {
     public var isHiddenByDefault: Bool
-    public var hiddenPsaPeerId: PeerId?
+    public var hiddenPsaPeerId: EnginePeer.Id?
     
     public static var `default`: ChatArchiveSettings {
         return ChatArchiveSettings(isHiddenByDefault: false, hiddenPsaPeerId: nil)
     }
     
-    public init(isHiddenByDefault: Bool, hiddenPsaPeerId: PeerId?) {
+    public init(isHiddenByDefault: Bool, hiddenPsaPeerId: EnginePeer.Id?) {
         self.isHiddenByDefault = isHiddenByDefault
         self.hiddenPsaPeerId = hiddenPsaPeerId
     }
@@ -20,7 +19,7 @@ public struct ChatArchiveSettings: Equatable, Codable {
         let container = try decoder.container(keyedBy: StringCodingKey.self)
 
         self.isHiddenByDefault = (try container.decode(Int32.self, forKey: "isHiddenByDefault")) != 0
-        self.hiddenPsaPeerId = (try container.decodeIfPresent(Int64.self, forKey: "hiddenPsaPeerId")).flatMap(PeerId.init)
+        self.hiddenPsaPeerId = (try container.decodeIfPresent(Int64.self, forKey: "hiddenPsaPeerId")).flatMap(EnginePeer.Id.init)
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -35,14 +34,14 @@ public struct ChatArchiveSettings: Equatable, Codable {
     }
 }
 
-public func updateChatArchiveSettings(transaction: Transaction, _ f: @escaping (ChatArchiveSettings) -> ChatArchiveSettings) {
-    transaction.updatePreferencesEntry(key: ApplicationSpecificPreferencesKeys.chatArchiveSettings, { entry in
+public func updateChatArchiveSettings(engine: TelegramEngine, _ f: @escaping (ChatArchiveSettings) -> ChatArchiveSettings) -> Signal<Never, NoError> {
+    return engine.preferences.update(id: ApplicationSpecificPreferencesKeys.chatArchiveSettings, { entry in
         let currentSettings: ChatArchiveSettings
         if let entry = entry?.get(ChatArchiveSettings.self) {
             currentSettings = entry
         } else {
             currentSettings = .default
         }
-        return PreferencesEntry(f(currentSettings))
+        return SharedPreferencesEntry(f(currentSettings))
     })
 }

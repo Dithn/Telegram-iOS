@@ -1,6 +1,5 @@
 import Foundation
 import UIKit
-import Postbox
 import TelegramCore
 import LegacyComponents
 import SwiftSignalKit
@@ -49,8 +48,9 @@ public final class LegacyLiveUploadInterface: VideoConversionWatcher, TGLiveUplo
     private var path: String?
     private var size: Int?
     
-    private let data = Promise<MediaResourceData>()
-    private let dataValue = Atomic<MediaResourceData?>(value: nil)
+    private let data = Promise<EngineMediaResource.ResourceData>()
+    private let dataValue = Atomic<EngineMediaResource.ResourceData?>(value: nil)
+    private var preUploadDisposable: Disposable?
     
     public init(context: AccountContext) {
         self.context = context
@@ -65,19 +65,18 @@ public final class LegacyLiveUploadInterface: VideoConversionWatcher, TGLiveUplo
             if let strongSelf = self {
                 if strongSelf.path == nil {
                     strongSelf.path = path
-                    strongSelf.context.engine.resources.preUpload(id: strongSelf.id, encrypt: false, tag: nil, source: strongSelf.data.get())
+                    strongSelf.preUploadDisposable = strongSelf.context.engine.resources.preUpload(id: strongSelf.id, encrypt: false, tag: nil, source: strongSelf.data.get())
                 }
                 strongSelf.size = size
                 
                 let result = strongSelf.dataValue.modify { dataValue in
-                    if let dataValue = dataValue, dataValue.complete {
-                        return MediaResourceData(path: path, offset: 0, size: size, complete: true)
+                    if let dataValue = dataValue, dataValue.isComplete {
+                        return EngineMediaResource.ResourceData(path: path, availableSize: Int64(size), isComplete: true)
                     } else {
-                        return MediaResourceData(path: path, offset: 0, size: size, complete: false)
+                        return EngineMediaResource.ResourceData(path: path, availableSize: Int64(size), isComplete: false)
                     }
                 }
                 if let result = result {
-                    print("**set1 \(result) \(result.complete)")
                     strongSelf.data.set(.single(result))
                 }
             }
@@ -85,21 +84,20 @@ public final class LegacyLiveUploadInterface: VideoConversionWatcher, TGLiveUplo
     }
     
     deinit {
+        self.preUploadDisposable?.dispose()
     }
     
     override public func fileUpdated(_ completed: Bool) -> Any! {
         let _ = super.fileUpdated(completed)
-        print("**fileUpdated \(completed)")
         if completed {
             let result = self.dataValue.modify { dataValue in
                 if let dataValue = dataValue {
-                    return MediaResourceData(path: dataValue.path, offset: dataValue.offset, size: dataValue.size, complete: true)
+                    return EngineMediaResource.ResourceData(path: dataValue.path, availableSize: dataValue.availableSize, isComplete: true)
                 } else {
                     return nil
                 }
             }
             if let result = result {
-                print("**set2 \(result) \(completed)")
                 self.data.set(.single(result))
                 return LegacyLiveUploadInterfaceResult(id: self.id)
             } else {

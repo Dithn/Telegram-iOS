@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 public enum RequestChatContextResultsError {
@@ -32,8 +32,6 @@ public final class CachedChatContextResult: Codable {
         try container.encode(self.timestamp, forKey: "timestamp")
     }
 }
-
-private let collectionSpec = ItemCacheCollectionSpec(lowWaterItemCount: 40, highWaterItemCount: 60)
 
 private struct RequestData: Codable {
     let version: String
@@ -101,6 +99,7 @@ func _internal_requestChatContextResults(account: Account, botId: PeerId, peerId
                                     nextOffset: nil,
                                     presentation: cachedResult.presentation,
                                     switchPeer: cachedResult.switchPeer,
+                                    webView: cachedResult.webView,
                                     results: cachedResult.results,
                                     cacheTimeout: 0
                                 )
@@ -120,7 +119,7 @@ func _internal_requestChatContextResults(account: Account, botId: PeerId, peerId
             if let (latitude, longitude) = location {
                 flags |= (1 << 0)
                 let geoPointFlags: Int32 = 0
-                geoPoint = Api.InputGeoPoint.inputGeoPoint(flags: geoPointFlags, lat: latitude, long: longitude, accuracyRadius: nil)
+                geoPoint = Api.InputGeoPoint.inputGeoPoint(.init(flags: geoPointFlags, lat: latitude, long: longitude, accuracyRadius: nil))
             }
             
             var signal: Signal<RequestChatContextResultsResult?, RequestChatContextResultsError> = account.network.request(Api.functions.messages.getInlineBotResults(flags: flags, bot: inputBot, peer: inputPeer, geoPoint: geoPoint, query: query, offset: offset))
@@ -146,7 +145,7 @@ func _internal_requestChatContextResults(account: Account, botId: PeerId, peerId
                             if let keyData = try? JSONEncoder().encode(requestData) {
                                 let key = ValueBoxKey(MemoryBuffer(data: keyData))
                                 if let entry = CodableEntry(CachedChatContextResult(data: resultData, timestamp: Int32(Date().timeIntervalSince1970))) {
-                                    transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedContextResults, key: key), entry: entry, collectionSpec: collectionSpec)
+                                    transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedContextResults, key: key), entry: entry)
                                 }
                             }
                         }

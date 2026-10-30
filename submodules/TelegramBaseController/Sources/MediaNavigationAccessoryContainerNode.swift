@@ -6,7 +6,7 @@ import TelegramCore
 import TelegramPresentationData
 import AccountContext
 
-public final class MediaNavigationAccessoryContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
+public final class MediaNavigationAccessoryContainerNode: ASDisplayNode, ASGestureRecognizerDelegate {
     private let displayBackground: Bool
 
     public let backgroundNode: ASDisplayNode
@@ -17,14 +17,14 @@ public final class MediaNavigationAccessoryContainerNode: ASDisplayNode, UIGestu
     
     private var presentationData: PresentationData
     
-    init(context: AccountContext, presentationData: PresentationData, displayBackground: Bool) {
+    init(context: AccountContext, presentationData: PresentationData, displayBackground: Bool, customTintColor: UIColor? = nil) {
         self.displayBackground = displayBackground
 
         self.presentationData = presentationData
         
         self.backgroundNode = ASDisplayNode()
         self.separatorNode = ASDisplayNode()
-        self.headerNode = MediaNavigationAccessoryHeaderNode(context: context, presentationData: presentationData)
+        self.headerNode = MediaNavigationAccessoryHeaderNode(context: context, presentationData: presentationData, customTintColor: customTintColor)
         
         super.init()
 

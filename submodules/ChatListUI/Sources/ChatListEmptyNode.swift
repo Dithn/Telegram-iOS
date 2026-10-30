@@ -1,4 +1,5 @@
 import Foundation
+import LottieSettings
 import UIKit
 import AsyncDisplayKit
 import Display
@@ -6,32 +7,66 @@ import TelegramPresentationData
 import AnimatedStickerNode
 import TelegramAnimatedStickerNode
 import AppBundle
-import SolidRoundedButtonNode
 import ActivityIndicator
 import AccountContext
+import TelegramCore
+import ComponentFlow
+import ArchiveInfoScreen
+import ComponentDisplayAdapters
+import SwiftSignalKit
+import ChatListHeaderComponent
+import ButtonComponent
 
 final class ChatListEmptyNode: ASDisplayNode {
+    enum Subject {
+        case chats(hasArchive: Bool)
+        case archive
+        case filter(showEdit: Bool)
+        case forum(hasGeneral: Bool)
+    }
     private let action: () -> Void
+    private let secondaryAction: () -> Void
+    private let openArchiveSettings: () -> Void
     
-    let isFilter: Bool
+    private let context: AccountContext
+    private var theme: PresentationTheme
+    private var strings: PresentationStrings
+    
+    let subject: Subject
     private(set) var isLoading: Bool
     private let textNode: ImmediateTextNode
     private let descriptionNode: ImmediateTextNode
     private let animationNode: AnimatedStickerNode
-    private let buttonTextNode: ImmediateTextNode
-    private let buttonNode: HighlightTrackingButtonNode
+    private let button = ComponentView<Empty>()
+    private var buttonText: String?
+    private var buttonFrame: CGRect = .zero
+    private let buttonIsShimmering: Bool
+    private let secondaryButtonNode: HighlightableButtonNode
     private let activityIndicator: ActivityIndicator
     
+    private var emptyArchive: ComponentView<Empty>?
+    
     private var animationSize: CGSize = CGSize()
+    private var buttonIsHidden: Bool
     
-    private var validLayout: CGSize?
+    private var validLayout: (size: CGSize, insets: UIEdgeInsets)?
+    private var scrollingOffset: (navigationHeight: CGFloat, offset: CGFloat)?
     
-    init(context: AccountContext, isFilter: Bool, isLoading: Bool, theme: PresentationTheme, strings: PresentationStrings, action: @escaping () -> Void) {
+    private var globalPrivacySettings: GlobalPrivacySettings = .default
+    private var archiveSettingsDisposable: Disposable?
+    
+    init(context: AccountContext, subject: Subject, isLoading: Bool, theme: PresentationTheme, strings: PresentationStrings, action: @escaping () -> Void, secondaryAction: @escaping () -> Void, openArchiveSettings: @escaping () -> Void) {
+        self.context = context
+        self.theme = theme
+        self.strings = strings
+        
         self.action = action
-        self.isFilter = isFilter
+        self.secondaryAction = secondaryAction
+        self.openArchiveSettings = openArchiveSettings
+        self.subject = subject
         self.isLoading = isLoading
         
-        self.animationNode = AnimatedStickerNode()
+        self.animationNode = DefaultAnimatedStickerNodeImpl(lottieSettings: self.context.lottieRenderingSettings)
         
         self.textNode = ImmediateTextNode()
         self.textNode.displaysAsynchronously = false
@@ -47,92 +82,138 @@ final class ChatListEmptyNode: ASDisplayNode {
         self.descriptionNode.textAlignment = .center
         self.descriptionNode.lineSpacing = 0.1
         
-        self.buttonNode = HighlightTrackingButtonNode()
+        var gloss = true
+        if case .filter = subject {
+            gloss = false
+        } else if case .chats(true) = subject {
+            gloss = false
+        }
         
-        self.buttonTextNode = ImmediateTextNode()
-        self.buttonTextNode.displaysAsynchronously = false
+        self.buttonIsShimmering = gloss
+        
+        self.secondaryButtonNode = HighlightableButtonNode()
         
         self.activityIndicator = ActivityIndicator(type: .custom(theme.list.itemAccentColor, 22.0, 1.0, false))
         
-        super.init()
-        
-        self.addSubnode(self.animationNode)
-        self.addSubnode(self.textNode)
-        self.addSubnode(self.descriptionNode)
-        self.addSubnode(self.buttonTextNode)
-        self.addSubnode(self.buttonNode)
-        self.addSubnode(self.activityIndicator)
-        
+        var buttonIsHidden = false
         let animationName: String
-        if isFilter {
+        if case let .filter(showEdit) = subject {
             animationName = "ChatListFilterEmpty"
+            buttonIsHidden = !showEdit
         } else {
             animationName = "ChatListEmpty"
         }
+        self.buttonIsHidden = buttonIsHidden
         
-        self.animationNode.setup(source: AnimatedStickerNodeLocalFileSource(name: animationName), width: 248, height: 248, playbackMode: .once, mode: .direct(cachePathPrefix: nil))
+        super.init()
+        
         self.animationSize = CGSize(width: 124.0, height: 124.0)
-        self.animationNode.visibility = true
+        
+        if case .archive = subject {
+        } else {
+            self.addSubnode(self.animationNode)
+            self.addSubnode(self.textNode)
+            self.addSubnode(self.descriptionNode)
+            self.addSubnode(self.secondaryButtonNode)
+            self.addSubnode(self.activityIndicator)
+            
+            self.animationNode.setup(source: AnimatedStickerNodeLocalFileSource(name: animationName), width: 248, height: 248, playbackMode: .once, mode: .direct(cachePathPrefix: nil))
+            self.animationNode.visibility = true
+        }
         
         self.animationNode.isHidden = self.isLoading
         self.textNode.isHidden = self.isLoading
         self.descriptionNode.isHidden = self.isLoading
-        self.buttonNode.isHidden = self.isLoading
-        self.buttonTextNode.isHidden = self.isLoading
         self.activityIndicator.isHidden = !self.isLoading
         
-        self.buttonNode.hitTestSlop = UIEdgeInsets(top: -10.0, left: -10.0, bottom: -10.0, right: -10.0)
-        self.buttonNode.addTarget(self, action: #selector(self.buttonPressed), forControlEvents: .touchUpInside)
-        self.buttonNode.highligthedChanged = { [weak self] highlighted in
-            if let strongSelf = self {
-                if highlighted {
-                    strongSelf.buttonTextNode.layer.removeAnimation(forKey: "opacity")
-                    strongSelf.buttonTextNode.alpha = 0.4
-                } else {
-                    strongSelf.buttonTextNode.alpha = 1.0
-                    strongSelf.buttonTextNode.layer.animateAlpha(from: 0.4, to: 1.0, duration: 0.2)
-                }
-            }
-        }
+        self.secondaryButtonNode.addTarget(self, action: #selector(self.secondaryButtonPressed), forControlEvents: .touchUpInside)
         
         self.updateThemeAndStrings(theme: theme, strings: strings)
         
         self.animationNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.animationTapGesture(_:))))
+        
+        if case .archive = subject {
+            let _ = self.context.engine.privacy.updateGlobalPrivacySettings().startStandalone()
+            
+            self.archiveSettingsDisposable = (context.engine.data.subscribe(
+                TelegramEngine.EngineData.Item.Configuration.GlobalPrivacy()
+            )
+            |> deliverOnMainQueue).startStrict(next: { [weak self] settings in
+                guard let self else {
+                    return
+                }
+                self.globalPrivacySettings = settings
+                if let (size, insets) = self.validLayout {
+                    self.updateLayout(size: size, insets: insets, transition: .immediate)
+                }
+            })
+        }
+    }
+    
+    deinit {
+        self.archiveSettingsDisposable?.dispose()
     }
     
     @objc private func buttonPressed() {
         self.action()
     }
     
+    @objc private func secondaryButtonPressed() {
+        self.secondaryAction()
+    }
+    
     @objc private func animationTapGesture(_ recognizer: UITapGestureRecognizer) {
         if case .ended = recognizer.state {
             if !self.animationNode.isPlaying {
-                self.animationNode.play()
+                self.animationNode.play(firstFrame: false, fromIndex: nil)
             }
         }
     }
     
     func restartAnimation() {
-        self.animationNode.play()
+        self.animationNode.play(firstFrame: false, fromIndex: nil)
     }
     
     func updateThemeAndStrings(theme: PresentationTheme, strings: PresentationStrings) {
-        let string = NSMutableAttributedString(string: self.isFilter ? strings.ChatList_EmptyChatListFilterTitle : strings.ChatList_EmptyChatList, font: Font.medium(17.0), textColor: theme.list.itemPrimaryTextColor)
-        let descriptionString: NSAttributedString
-        if self.isFilter {
-            descriptionString = NSAttributedString(string: strings.ChatList_EmptyChatListFilterText, font: Font.regular(14.0), textColor: theme.list.itemSecondaryTextColor)
-        } else {
-            descriptionString = NSAttributedString()
+        self.theme = theme
+        self.strings = strings
+        
+        let text: String
+        var descriptionText = ""
+        let buttonText: String?
+        switch self.subject {
+            case let .chats(hasArchive):
+                text = hasArchive ? strings.ChatList_EmptyChatListWithArchive : strings.ChatList_EmptyChatList
+                buttonText = strings.ChatList_EmptyChatListNewMessage
+            case .archive:
+                text = strings.ChatList_EmptyChatList
+                buttonText = nil
+            case .filter:
+                text = strings.ChatList_EmptyChatListFilterTitle
+                descriptionText = strings.ChatList_EmptyChatListFilterText
+                buttonText = strings.ChatList_EmptyChatListEditFilter
+            case .forum:
+                text = strings.ChatList_EmptyTopicsTitle
+                buttonText = strings.ChatList_EmptyTopicsCreate
+                descriptionText = strings.ChatList_EmptyTopicsDescription
         }
+        let string = NSMutableAttributedString(string: text, font: Font.semibold(17.0), textColor: theme.list.itemPrimaryTextColor)
+        let descriptionString = NSAttributedString(string: descriptionText, font: Font.regular(14.0), textColor: theme.list.itemSecondaryTextColor)
+       
         self.textNode.attributedText = string
         self.descriptionNode.attributedText = descriptionString
         
-        self.buttonTextNode.attributedText = NSAttributedString(string: isFilter ? strings.ChatList_EmptyChatListEditFilter : strings.ChatList_EmptyChatListNewMessage, font: Font.regular(17.0), textColor: theme.list.itemAccentColor)
-        
+        self.buttonText = buttonText
+        self.button.view?.isHidden = buttonText == nil || self.buttonIsHidden || self.isLoading
+    
         self.activityIndicator.type = .custom(theme.list.itemAccentColor, 22.0, 1.0, false)
         
-        if let size = self.validLayout {
-            self.updateLayout(size: size, transition: .immediate)
+        if let (size, insets) = self.validLayout {
+            self.updateLayout(size: size, insets: insets, transition: .immediate)
+            
+            if let scrollingOffset = self.scrollingOffset {
+                self.updateScrollingOffset(navigationHeight: scrollingOffset.navigationHeight, offset: scrollingOffset.offset, transition: .immediate)
+            }
         }
     }
     
@@ -144,31 +225,69 @@ final class ChatListEmptyNode: ASDisplayNode {
         self.animationNode.isHidden = self.isLoading
         self.textNode.isHidden = self.isLoading
         self.descriptionNode.isHidden = self.isLoading
-        self.buttonNode.isHidden = self.isLoading
-        self.buttonTextNode.isHidden = self.isLoading
+        self.button.view?.isHidden = self.buttonText == nil || self.buttonIsHidden || self.isLoading
         self.activityIndicator.isHidden = !self.isLoading
     }
     
-    func updateLayout(size: CGSize, transition: ContainedViewLayoutTransition) {
-        self.validLayout = size
+    func updateLayout(size: CGSize, insets: UIEdgeInsets, transition: ContainedViewLayoutTransition) {
+        self.validLayout = (size, insets)
+        // Centred in the band between the side insets when they differ (iPhone Duo's side strip); equal insets keep the
+        // full width.
+        let bandMinX: CGFloat = insets.left != insets.right ? insets.left : 0.0
+        let bandWidth: CGFloat = insets.left != insets.right ? size.width - insets.left - insets.right : size.width
         
         let indicatorSize = self.activityIndicator.measure(CGSize(width: 100.0, height: 100.0))
-        transition.updateFrame(node: self.activityIndicator, frame: CGRect(origin: CGPoint(x: floor((size.width - indicatorSize.width) / 2.0), y: floor((size.height - indicatorSize.height - 50.0) / 2.0)), size: indicatorSize))
+        transition.updateFrame(node: self.activityIndicator, frame: CGRect(origin: CGPoint(x: bandMinX + floor((bandWidth - indicatorSize.width) / 2.0), y: insets.top + floor((size.height - insets.top - insets.bottom - indicatorSize.height - 50.0) / 2.0)), size: indicatorSize))
         
         let animationSpacing: CGFloat = 24.0
         let descriptionSpacing: CGFloat = 8.0
-        let buttonSpacing: CGFloat = 24.0
-        let buttonSideInset: CGFloat = 16.0
         
-        let textSize = self.textNode.updateLayout(CGSize(width: size.width - 40.0, height: size.height))
-        let descriptionSize = self.descriptionNode.updateLayout(CGSize(width: size.width - 40.0, height: size.height))
+        let textSize = self.textNode.updateLayout(CGSize(width: bandWidth - 40.0, height: size.height - insets.top - insets.bottom))
+        let descriptionSize = self.descriptionNode.updateLayout(CGSize(width: bandWidth - 40.0, height: size.height - insets.top - insets.bottom))
+                
+        let buttonSideInset: CGFloat = 32.0
+        let buttonWidth = min(270.0, bandWidth - buttonSideInset * 2.0)
+        let buttonHeight: CGFloat = 52.0
+        let buttonSize = CGSize(width: buttonWidth, height: buttonHeight)
+        if let buttonText = self.buttonText {
+            let _ = self.button.update(
+                transition: ComponentTransition(transition),
+                component: AnyComponent(ButtonComponent(
+                    background: ButtonComponent.Background(
+                        style: .glass,
+                        color: self.theme.list.itemCheckColors.fillColor,
+                        foreground: self.theme.list.itemCheckColors.foregroundColor,
+                        pressedColor: self.theme.list.itemCheckColors.fillColor.withMultipliedAlpha(0.9),
+                        cornerRadius: buttonHeight * 0.5,
+                        isShimmering: self.buttonIsShimmering
+                    ),
+                    content: AnyComponentWithIdentity(
+                        id: AnyHashable(buttonText),
+                        component: AnyComponent(Text(
+                            text: buttonText,
+                            font: Font.semibold(17.0),
+                            color: self.theme.list.itemCheckColors.foregroundColor
+                        ))
+                    ),
+                    action: { [weak self] in
+                        self?.buttonPressed()
+                    }
+                )),
+                environment: {},
+                containerSize: buttonSize
+            )
+        }
         
-        let buttonWidth = min(size.width - buttonSideInset * 2.0, 280.0)
-        let buttonSize = CGSize(width: buttonWidth, height: 50.0)
+        let secondaryButtonSize = self.secondaryButtonNode.measure(CGSize(width: buttonWidth, height: .greatestFiniteMagnitude))
         
-        let contentHeight = self.animationSize.height + animationSpacing + textSize.height + buttonSpacing + buttonSize.height
+        var threshold: CGFloat = 0.0
+        if case .forum = self.subject {
+            threshold = 80.0
+        }
+        
+        let contentHeight = self.animationSize.height + animationSpacing + textSize.height + buttonSize.height
         var contentOffset: CGFloat = 0.0
-        if size.height < contentHeight {
+        if size.height - insets.top - insets.bottom < contentHeight + threshold {
             contentOffset = -self.animationSize.height - animationSpacing + 44.0
             transition.updateAlpha(node: self.animationNode, alpha: 0.0)
         } else {
@@ -176,10 +295,9 @@ final class ChatListEmptyNode: ASDisplayNode {
             transition.updateAlpha(node: self.animationNode, alpha: 1.0)
         }
         
-        let animationFrame = CGRect(origin: CGPoint(x: floor((size.width - self.animationSize.width) / 2.0), y: floor((size.height - contentHeight) / 2.0) + contentOffset), size: self.animationSize)
-        let textFrame = CGRect(origin: CGPoint(x: floor((size.width - textSize.width) / 2.0), y: animationFrame.maxY + animationSpacing), size: textSize)
-        let descpriptionFrame = CGRect(origin: CGPoint(x: floor((size.width - descriptionSize.width) / 2.0), y: textFrame.maxY + descriptionSpacing), size: descriptionSize)
-        let bottomTextEdge: CGFloat = descpriptionFrame.width.isZero ? textFrame.maxY : descpriptionFrame.maxY
+        let animationFrame = CGRect(origin: CGPoint(x: bandMinX + floor((bandWidth - self.animationSize.width) / 2.0), y: insets.top + floor((size.height - insets.top - insets.bottom - contentHeight) / 2.0) + contentOffset), size: self.animationSize)
+        let textFrame = CGRect(origin: CGPoint(x: bandMinX + floor((bandWidth - textSize.width) / 2.0), y: animationFrame.maxY + animationSpacing), size: textSize)
+        let descriptionFrame = CGRect(origin: CGPoint(x: bandMinX + floor((bandWidth - descriptionSize.width) / 2.0), y: textFrame.maxY + descriptionSpacing), size: descriptionSize)
         
         if !self.animationSize.width.isZero {
             self.animationNode.updateLayout(size: self.animationSize)
@@ -187,21 +305,101 @@ final class ChatListEmptyNode: ASDisplayNode {
         }
         
         transition.updateFrame(node: self.textNode, frame: textFrame)
-        transition.updateFrame(node: self.descriptionNode, frame: descpriptionFrame)
+        transition.updateFrame(node: self.descriptionNode, frame: descriptionFrame)
         
-        let buttonTextSize = self.buttonTextNode.updateLayout(CGSize(width: size.width, height: .greatestFiniteMagnitude))
-        let buttonFrame = CGRect(origin: CGPoint(x: floor((size.width - buttonTextSize.width) / 2.0), y: bottomTextEdge + buttonSpacing), size: buttonTextSize)
+        var bottomInset: CGFloat = 20.0
         
-        transition.updateFrame(node: self.buttonNode, frame: buttonFrame)
-        transition.updateFrame(node: self.buttonTextNode, frame: buttonFrame)
+        let secondaryButtonFrame = CGRect(origin: CGPoint(x: bandMinX + floor((bandWidth - secondaryButtonSize.width) / 2.0), y: size.height - insets.bottom - secondaryButtonSize.height - bottomInset), size: secondaryButtonSize)
+        transition.updateFrame(node: self.secondaryButtonNode, frame: secondaryButtonFrame)
+        
+        if secondaryButtonSize.height > 0.0 {
+            bottomInset += secondaryButtonSize.height + 23.0
+        }
+        
+        let buttonFrame: CGRect
+        if case .forum = self.subject {
+            buttonFrame = CGRect(origin: CGPoint(x: bandMinX + floor((bandWidth - buttonSize.width) / 2.0), y: descriptionFrame.maxY + 20.0), size: buttonSize)
+        } else {
+            buttonFrame = CGRect(origin: CGPoint(x: bandMinX + floor((bandWidth - buttonSize.width) / 2.0), y: size.height - insets.bottom - buttonHeight - bottomInset), size: buttonSize)
+        }
+        self.buttonFrame = buttonFrame
+        if let buttonView = self.button.view {
+            if buttonView.superview == nil {
+                self.view.addSubview(buttonView)
+            }
+            buttonView.isHidden = self.buttonText == nil || self.buttonIsHidden || self.isLoading
+            transition.updateFrame(view: buttonView, frame: buttonFrame)
+        }
+    }
+    
+    func updateScrollingOffset(navigationHeight: CGFloat, offset: CGFloat, transition: ContainedViewLayoutTransition) {
+        self.scrollingOffset = (navigationHeight, offset)
+        
+        guard let (size, _) = self.validLayout else {
+            return
+        }
+        
+        if case .archive = self.subject {
+            let emptyArchive: ComponentView<Empty>
+            if let current = self.emptyArchive {
+                emptyArchive = current
+            } else {
+                emptyArchive = ComponentView()
+                self.emptyArchive = emptyArchive
+            }
+            let emptyArchiveSize = emptyArchive.update(
+                transition: ComponentTransition(transition),
+                component: AnyComponent(ArchiveInfoContentComponent(
+                    theme: self.theme,
+                    strings: self.strings,
+                    settings: self.globalPrivacySettings,
+                    openSettings: { [weak self] in
+                        guard let self else {
+                            return
+                        }
+                        self.openArchiveSettings()
+                    }
+                )),
+                environment: {
+                },
+                containerSize: CGSize(width: size.width, height: 10000.0)
+            )
+            if let emptyArchiveView = emptyArchive.view {
+                if emptyArchiveView.superview == nil {
+                    self.view.addSubview(emptyArchiveView)
+                }
+                
+                let cancelledOutHeight: CGFloat = max(0.0, ChatListNavigationBar.searchScrollHeight - offset)
+                let visibleNavigationHeight: CGFloat = navigationHeight - ChatListNavigationBar.searchScrollHeight + cancelledOutHeight
+                
+                let additionalOffset = min(0.0, -offset + ChatListNavigationBar.searchScrollHeight)
+                
+                var archiveFrame = CGRect(origin: CGPoint(x: 0.0, y: visibleNavigationHeight + floorToScreenPixels((size.height - visibleNavigationHeight - emptyArchiveSize.height - 50.0) * 0.5)), size: emptyArchiveSize)
+                archiveFrame.origin.y = max(archiveFrame.origin.y, visibleNavigationHeight + 20.0)
+                
+                if size.height - visibleNavigationHeight - emptyArchiveSize.height - 20.0 < 0.0 {
+                    archiveFrame.origin.y += additionalOffset
+                }
+                
+                transition.updateFrame(view: emptyArchiveView, frame: archiveFrame)
+            }
+        } else if let emptyArchive = self.emptyArchive {
+            self.emptyArchive = nil
+            emptyArchive.view?.removeFromSuperview()
+        }
     }
     
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        if self.buttonNode.frame.contains(point) {
-            return self.buttonNode.view.hitTest(self.view.convert(point, to: self.buttonNode.view), with: event)
+        if let buttonView = self.button.view, !buttonView.isHidden, self.buttonFrame.insetBy(dx: -10.0, dy: -10.0).contains(point) {
+            return buttonView.hitTest(self.view.convert(point, to: buttonView), with: event)
         }
-        if self.animationNode.frame.contains(point) {
-            return self.animationNode.view.hitTest(self.view.convert(point, to: self.animationNode.view), with: event)
+        if self.secondaryButtonNode.frame.contains(point), !self.secondaryButtonNode.isHidden {
+            return self.secondaryButtonNode.view.hitTest(self.view.convert(point, to: self.secondaryButtonNode.view), with: event)
+        }
+        if let emptyArchiveView = self.emptyArchive?.view {
+            if let result = emptyArchiveView.hitTest(self.view.convert(point, to: emptyArchiveView), with: event) {
+                return result
+            }
         }
         return nil
     }

@@ -1,11 +1,11 @@
 import Foundation
 import UIKit
-import Postbox
+import TelegramCore
 import SwiftSignalKit
 import TelegramUIPreferences
 
 private struct SettingsSearchRecentQueryItemId {
-    public let rawValue: MemoryBuffer
+    public let rawValue: EngineMemoryBuffer
     
     var value: Int64 {
         return self.rawValue.makeData().withUnsafeBytes { buffer -> Int64 in
@@ -16,13 +16,13 @@ private struct SettingsSearchRecentQueryItemId {
         }
     }
     
-    init(_ rawValue: MemoryBuffer) {
+    init(_ rawValue: EngineMemoryBuffer) {
         self.rawValue = rawValue
     }
     
     init(_ value: Int64) {
         var value = value
-        self.rawValue = MemoryBuffer(data: Data(bytes: &value, count: MemoryLayout.size(ofValue: value)))
+        self.rawValue = EngineMemoryBuffer(data: Data(bytes: &value, count: MemoryLayout.size(ofValue: value)))
     }
 }
 
@@ -37,42 +37,36 @@ public final class RecentSettingsSearchQueryItem: Codable {
     }
 }
 
-func addRecentSettingsSearchItem(postbox: Postbox, item: SettingsSearchableItemId) {
-    let _ = (postbox.transaction { transaction in
-        let itemId = SettingsSearchRecentQueryItemId(item.index)
-        if let entry = CodableEntry(RecentSettingsSearchQueryItem()) {
-            transaction.addOrMoveToFirstPositionOrderedItemListItem(collectionId: ApplicationSpecificOrderedItemListCollectionId.settingsSearchRecentItems, item: OrderedItemListEntry(id: itemId.rawValue, contents: entry), removeTailIfCountExceeds: 100)
-        }
-    }).start()
+func addRecentSettingsSearchItem(engine: TelegramEngine, item: AnyHashable) {
+    guard let id = item.base as? String, let data = id.data(using: .ascii) else {
+        return
+    }
+    let itemId = EngineMemoryBuffer(data: data)
+    let _ = engine.orderedLists.addOrMoveToFirstPosition(collectionId: ApplicationSpecificOrderedItemListCollectionId.settingsSearchRecentItems, id: itemId, item: RecentSettingsSearchQueryItem(), removeTailIfCountExceeds: 100).start()
 }
 
-func removeRecentSettingsSearchItem(postbox: Postbox, item: SettingsSearchableItemId) {
-    let _ = (postbox.transaction { transaction -> Void in
-        let itemId = SettingsSearchRecentQueryItemId(item.index)
-        transaction.removeOrderedItemListItem(collectionId: ApplicationSpecificOrderedItemListCollectionId.settingsSearchRecentItems, itemId: itemId.rawValue)
-    }).start()
+func removeRecentSettingsSearchItem(engine: TelegramEngine, item: AnyHashable) {
+    guard let id = item.base as? String, let data = id.data(using: .ascii) else {
+        return
+    }
+    let itemId = EngineMemoryBuffer(data: data)
+    let _ = engine.orderedLists.removeItem(collectionId: ApplicationSpecificOrderedItemListCollectionId.settingsSearchRecentItems, id: itemId).start()
 }
 
-func clearRecentSettingsSearchItems(postbox: Postbox) {
-    let _ = (postbox.transaction { transaction -> Void in
-        transaction.replaceOrderedItemListItems(collectionId: ApplicationSpecificOrderedItemListCollectionId.settingsSearchRecentItems, items: [])
-    }).start()
+func clearRecentSettingsSearchItems(engine: TelegramEngine) {
+    let _ = engine.orderedLists.clear(collectionId: ApplicationSpecificOrderedItemListCollectionId.settingsSearchRecentItems).start()
 }
 
-func settingsSearchRecentItems(postbox: Postbox) -> Signal<[SettingsSearchableItemId], NoError> {
-    return postbox.combinedView(keys: [.orderedItemList(id: ApplicationSpecificOrderedItemListCollectionId.settingsSearchRecentItems)])
-    |> mapToSignal { view -> Signal<[SettingsSearchableItemId], NoError> in
-        return postbox.transaction { transaction -> [SettingsSearchableItemId] in
-            var result: [SettingsSearchableItemId] = []
-            if let view = view.views[.orderedItemList(id: ApplicationSpecificOrderedItemListCollectionId.settingsSearchRecentItems)] as? OrderedItemListView {
-                for item in view.items {
-                    let index = SettingsSearchRecentQueryItemId(item.id).value
-                    if let itemId = SettingsSearchableItemId(index: index) {
-                        result.append(itemId)
-                    }
-                }
+func settingsSearchRecentItems(engine: TelegramEngine) -> Signal<[AnyHashable], NoError> {
+    return engine.data.subscribe(TelegramEngine.EngineData.Item.OrderedLists.ListItems(collectionId: ApplicationSpecificOrderedItemListCollectionId.settingsSearchRecentItems))
+    |> map { items -> [AnyHashable] in
+        var result: [AnyHashable] = []
+        for item in items {
+            let data = item.id.makeData()
+            if let id = String(data: data, encoding: .utf8) {
+                result.append(id)
             }
-            return result
         }
+        return result
     }
 }

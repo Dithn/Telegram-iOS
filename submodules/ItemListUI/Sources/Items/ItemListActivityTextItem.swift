@@ -5,26 +5,39 @@ import AsyncDisplayKit
 import SwiftSignalKit
 import TelegramPresentationData
 import ActivityIndicator
+import TextFormat
+import Markdown
 
 public class ItemListActivityTextItem: ListViewItem, ItemListItem {
+    public enum TextColor {
+        case generic
+        case constructive
+        case destructive
+        case warning
+    }
+    
     let displayActivity: Bool
     let presentationData: ItemListPresentationData
-    let text: NSAttributedString
+    let text: String
+    let color: TextColor
+    let linkAction: ((ItemListTextItemLinkAction) -> Void)?
     public let sectionId: ItemListSectionId
     
     public let isAlwaysPlain: Bool = true
     
-    public init(displayActivity: Bool, presentationData: ItemListPresentationData, text: NSAttributedString, sectionId: ItemListSectionId) {
+    public init(displayActivity: Bool, presentationData: ItemListPresentationData, text: String, color: TextColor, linkAction: ((ItemListTextItemLinkAction) -> Void)? = nil, sectionId: ItemListSectionId) {
         self.displayActivity = displayActivity
         self.presentationData = presentationData
         self.text = text
+        self.color = color
+        self.linkAction = linkAction
         self.sectionId = sectionId
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = ItemListActivityTextItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -37,7 +50,7 @@ public class ItemListActivityTextItem: ListViewItem, ItemListItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             guard let nodeValue = node() as? ItemListActivityTextItemNode else {
                 assertionFailure()
@@ -47,7 +60,7 @@ public class ItemListActivityTextItem: ListViewItem, ItemListItem {
             let makeLayout = nodeValue.asyncLayout()
             
             async {
-                let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+                let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
                 Queue.mainQueue().async {
                     completion(layout, { _ in
                         apply()
@@ -72,17 +85,27 @@ public class ItemListActivityTextItemNode: ListViewItemNode {
         
         self.activityIndicator = ActivityIndicator(type: ActivityIndicatorType.custom(.black, 16.0, 2.0, false))
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
         
         self.addSubnode(self.titleNode)
         self.addSubnode(self.activityIndicator)
     }
     
+    override public func didLoad() {
+        super.didLoad()
+        
+        let recognizer = TapLongTapOrDoubleTapGestureRecognizer(target: self, action: #selector(self.tapLongTapOrDoubleTapGesture(_:)))
+        recognizer.tapActionAtPoint = { _ in
+            return .waitForSingleTap
+        }
+        self.view.addGestureRecognizer(recognizer)
+    }
+    
     public func asyncLayout() -> (_ item: ItemListActivityTextItem, _ params: ListViewItemLayoutParams, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, () -> Void) {
         let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
         
-        return { item, params, neighbors in
-            let leftInset: CGFloat = 12.0 + params.leftInset
+        return { [weak self] item, params, neighbors in
+            let leftInset: CGFloat = 15.0 + params.leftInset
             let verticalInset: CGFloat = 7.0
             
             let titleFont = Font.regular(item.presentationData.fontSize.itemListBaseHeaderFontSize)
@@ -92,14 +115,23 @@ public class ItemListActivityTextItemNode: ListViewItemNode {
                 activityWidth = 25.0
             }
             
-            let titleString = NSMutableAttributedString(attributedString: item.text)
-            let hasFont = titleString.attribute(.font, at: 0, effectiveRange: nil) != nil
-            if !hasFont {
-                titleString.removeAttribute(NSAttributedString.Key.font, range: NSMakeRange(0, titleString.length))
-                titleString.addAttributes([NSAttributedString.Key.font: titleFont], range: NSMakeRange(0, titleString.length))
+            let textColor: UIColor
+            switch item.color {
+            case .generic:
+                textColor = item.presentationData.theme.list.freeTextColor
+            case .constructive:
+                textColor = item.presentationData.theme.list.freeTextSuccessColor
+            case .destructive:
+                textColor = item.presentationData.theme.list.freeTextErrorColor
+            case .warning:
+                textColor = UIColor(rgb: 0xef8c00)
             }
             
-            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: titleString, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - params.rightInset - 20.0 - 22.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: TextNodeCutout(topLeft: CGSize(width: activityWidth, height: 22.0)), insets: UIEdgeInsets()))
+            let attributedString = parseMarkdownIntoAttributedString(item.text, attributes: MarkdownAttributes(body: MarkdownAttributeSet(font: titleFont, textColor: textColor), bold: MarkdownAttributeSet(font: titleFont, textColor: item.presentationData.theme.list.freeTextErrorColor), link: MarkdownAttributeSet(font: titleFont, textColor: item.presentationData.theme.list.itemAccentColor), linkAttribute: { contents in
+                return (TelegramTextAttributes.URL, contents)
+            }))
+            
+            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: attributedString, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - params.rightInset - 20.0 - 22.0 - max(0.0, params.leftInset - params.rightInset), height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: TextNodeCutout(topLeft: CGSize(width: activityWidth, height: 22.0)), insets: UIEdgeInsets()))
             
             let contentSize: CGSize
             let insets: UIEdgeInsets
@@ -130,11 +162,34 @@ public class ItemListActivityTextItemNode: ListViewItemNode {
         }
     }
     
-    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
     override public func animateRemoved(_ currentTimestamp: Double, duration: Double) {
         self.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false)
+    }
+    
+    @objc private func tapLongTapOrDoubleTapGesture(_ recognizer: TapLongTapOrDoubleTapGestureRecognizer) {
+        switch recognizer.state {
+            case .ended:
+                if let (gesture, location) = recognizer.lastRecognizedGestureAndLocation {
+                    switch gesture {
+                        case .tap:
+                            let titleFrame = self.titleNode.frame
+                            if let item = self.item, titleFrame.contains(location) {
+                                if let (_, attributes) = self.titleNode.attributesAtPoint(CGPoint(x: location.x - titleFrame.minX, y: location.y - titleFrame.minY)) {
+                                    if let url = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.URL)] as? String {
+                                        item.linkAction?(.tap(url))
+                                    }
+                                }
+                            }
+                        default:
+                            break
+                    }
+                }
+            default:
+                break
+        }
     }
 }

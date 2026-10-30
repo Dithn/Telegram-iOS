@@ -30,7 +30,7 @@ final class BotCheckoutInfoController: ViewController {
     
     private let context: AccountContext
     private let invoice: BotPaymentInvoice
-    private let messageId: EngineMessage.Id
+    private let source: BotPaymentInvoiceSource
     private let initialFormInfo: BotPaymentRequestedInfo
     private let focus: BotCheckoutInfoControllerFocus
     
@@ -46,14 +46,14 @@ final class BotCheckoutInfoController: ViewController {
     public init(
         context: AccountContext,
         invoice: BotPaymentInvoice,
-        messageId: EngineMessage.Id,
+        source: BotPaymentInvoiceSource,
         initialFormInfo: BotPaymentRequestedInfo,
         focus: BotCheckoutInfoControllerFocus,
         formInfoUpdated: @escaping (BotPaymentRequestedInfo, BotPaymentValidatedFormInfo) -> Void
     ) {
         self.context = context
         self.invoice = invoice
-        self.messageId = messageId
+        self.source = source
         self.initialFormInfo = initialFormInfo
         self.focus = focus
         self.formInfoUpdated = formInfoUpdated
@@ -61,13 +61,15 @@ final class BotCheckoutInfoController: ViewController {
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
         
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
+        
+        self._hasGlassStyle = true
         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
         
-        self.doneItem = UIBarButtonItem(title: self.presentationData.strings.Common_Done, style: .done, target: self, action: #selector(self.donePressed))
+        self.doneItem = UIBarButtonItem(title: "___done", style: .done, target: self, action: #selector(self.donePressed))
         
         self.title = self.presentationData.strings.CheckoutInfo_Title
         
-        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Common_Cancel, style: .plain, target: self, action: #selector(self.cancelPressed))
+        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "___close", style: .plain, target: self, action: #selector(self.cancelPressed))
         self.navigationItem.rightBarButtonItem = self.doneItem
         self.doneItem?.isEnabled = false
     }
@@ -80,17 +82,17 @@ final class BotCheckoutInfoController: ViewController {
     }
     
     override public func loadDisplayNode() {
-        self.displayNode = BotCheckoutInfoControllerNode(context: self.context, navigationBar: self.navigationBar, invoice: self.invoice, messageId: self.messageId, formInfo: self.initialFormInfo, focus: self.focus, theme: self.presentationData.theme, strings: self.presentationData.strings, dismiss: { [weak self] in
+        self.displayNode = BotCheckoutInfoControllerNode(context: self.context, navigationBar: self.navigationBar, invoice: self.invoice, source: self.source, formInfo: self.initialFormInfo, focus: self.focus, theme: self.presentationData.theme, strings: self.presentationData.strings, dismiss: { [weak self] in
             self?.presentingViewController?.dismiss(animated: false, completion: nil)
         }, openCountrySelection: { [weak self] in
             if let strongSelf = self {
-                let controller = AuthorizationSequenceCountrySelectionController(strings: strongSelf.presentationData.strings, theme: strongSelf.presentationData.theme, displayCodes: false)
+                let controller = AuthorizationSequenceCountrySelectionController(strings: strongSelf.presentationData.strings, theme: strongSelf.presentationData.theme, displayCodes: false, glass: true)
                 controller.completeWithCountryCode = { _, id in
                     if let strongSelf = self {
                         strongSelf.controllerNode.updateCountry(id)
                     }
                 }
-                strongSelf.present(controller, in: .window(.root), with: ViewControllerPresentationArguments(presentationAnimation: .modalSheet))
+                strongSelf.push(controller)
             }
         }, updateStatus: { [weak self] status in
             if let strongSelf = self {

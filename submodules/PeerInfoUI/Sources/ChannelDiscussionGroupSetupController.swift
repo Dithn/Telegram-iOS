@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
@@ -15,14 +14,20 @@ import PresentationDataUtils
 import ItemListPeerItem
 import ItemListPeerActionItem
 import ChatListFilterSettingsHeaderItem
+import UndoUI
+import OldChannelsController
+import ComponentFlow
+import AlertComponent
+import AlertTransferHeaderComponent
+import AvatarComponent
 
 private final class ChannelDiscussionGroupSetupControllerArguments {
     let context: AccountContext
     let createGroup: () -> Void
-    let selectGroup: (PeerId) -> Void
+    let selectGroup: (EnginePeer.Id) -> Void
     let unlinkGroup: () -> Void
     
-    init(context: AccountContext, createGroup: @escaping () -> Void, selectGroup: @escaping (PeerId) -> Void, unlinkGroup: @escaping () -> Void) {
+    init(context: AccountContext, createGroup: @escaping () -> Void, selectGroup: @escaping (EnginePeer.Id) -> Void, unlinkGroup: @escaping () -> Void) {
         self.context = context
         self.createGroup = createGroup
         self.selectGroup = selectGroup
@@ -38,13 +43,13 @@ private enum ChannelDiscussionGroupSetupControllerSection: Int32 {
 
 private enum ChannelDiscussionGroupSetupControllerEntryStableId: Hashable {
     case id(Int)
-    case peer(PeerId)
+    case peer(EnginePeer.Id)
 }
 
 private enum ChannelDiscussionGroupSetupControllerEntry: ItemListNodeEntry {
     case header(PresentationTheme, PresentationStrings, String?, Bool, String)
     case create(PresentationTheme, String)
-    case group(Int, PresentationTheme, PresentationStrings, Peer, PresentationPersonNameOrder)
+    case group(Int, PresentationTheme, PresentationStrings, EnginePeer, PresentationPersonNameOrder)
     case groupsInfo(PresentationTheme, String)
     case unlink(PresentationTheme, String)
     
@@ -89,7 +94,7 @@ private enum ChannelDiscussionGroupSetupControllerEntry: ItemListNodeEntry {
                     return false
                 }
             case let .group(lhsIndex, lhsTheme, lhsStrings, lhsPeer, lhsNameOrder):
-                if case let .group(rhsIndex, rhsTheme, rhsStrings, rhsPeer, rhsNameOrder) = rhs, lhsIndex == rhsIndex, lhsTheme === rhsTheme, lhsStrings == rhsStrings, lhsPeer.isEqual(rhsPeer), lhsNameOrder == rhsNameOrder {
+                if case let .group(rhsIndex, rhsTheme, rhsStrings, rhsPeer, rhsNameOrder) = rhs, lhsIndex == rhsIndex, lhsTheme === rhsTheme, lhsStrings == rhsStrings, lhsPeer == rhsPeer, lhsNameOrder == rhsNameOrder {
                     return true
                 } else {
                     return false
@@ -144,33 +149,33 @@ private enum ChannelDiscussionGroupSetupControllerEntry: ItemListNodeEntry {
                 }
                 return ChatListFilterSettingsHeaderItem(context: arguments.context, theme: presentationData.theme, text: text, animation: .discussionGroupSetup, sectionId: self.section)
             case let .create(theme, text):
-                return ItemListPeerActionItem(presentationData: presentationData, icon: PresentationResourcesItemList.plusIconImage(theme), title: text, sectionId: self.section, editing: false, action: {
+                return ItemListPeerActionItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesItemList.plusIconImage(theme), title: text, sectionId: self.section, editing: false, action: {
                     arguments.createGroup()
                 })
             case let .group(_, _, strings, peer, nameOrder):
                 let text: String
-                if let peer = peer as? TelegramChannel, let addressName = peer.addressName, !addressName.isEmpty {
+            if case let .channel(peer) = peer, let addressName = peer.addressName, !addressName.isEmpty {
                     text = "@\(addressName)"
-                } else if let peer = peer as? TelegramChannel, case .broadcast = peer.info {
+            } else if case let .channel(peer) = peer, case .broadcast = peer.info {
                     text = strings.Channel_DiscussionGroup_PrivateChannel
                 } else {
                     text = strings.Channel_DiscussionGroup_PrivateGroup
                 }
-                return ItemListPeerItem(presentationData: presentationData, dateTimeFormat: PresentationDateTimeFormat(), nameDisplayOrder: nameOrder, context: arguments.context, peer: EnginePeer(peer), aliasHandling: .standard, nameStyle: .plain, presence: nil, text: .text(text, .secondary), label: .none, editing: ItemListPeerItemEditing(editable: false, editing: false, revealed: false), revealOptions: nil, switchValue: nil, enabled: true, selectable: true, sectionId: self.section, action: {
+                return ItemListPeerItem(presentationData: presentationData, systemStyle: .glass, dateTimeFormat: PresentationDateTimeFormat(), nameDisplayOrder: nameOrder, context: arguments.context, peer: peer, aliasHandling: .standard, nameStyle: .plain, presence: nil, text: .text(text, .secondary), label: .none, editing: ItemListPeerItemEditing(editable: false, editing: false, revealed: false), revealOptions: nil, switchValue: nil, enabled: true, selectable: true, sectionId: self.section, action: {
                     arguments.selectGroup(peer.id)
                 }, setPeerIdWithRevealedOptions: { _, _ in }, removePeer: { _ in })
             case let .groupsInfo(_, title):
                 return ItemListTextItem(presentationData: presentationData, text: .plain(title), sectionId: self.section)
             case let .unlink(_, title):
-                return ItemListActionItem(presentationData: presentationData, title: title, kind: .destructive, alignment: .center, sectionId: self.section, style: .blocks, action: {
+                return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .destructive, alignment: .center, sectionId: self.section, style: .blocks, action: {
                     arguments.unlinkGroup()
                 })
         }
     }
 }
 
-private func channelDiscussionGroupSetupControllerEntries(presentationData: PresentationData, view: PeerView, groups: [Peer]?) -> [ChannelDiscussionGroupSetupControllerEntry] {
-    guard let peer = view.peers[view.peerId] as? TelegramChannel, let cachedData = view.cachedData as? CachedChannelData else {
+private func channelDiscussionGroupSetupControllerEntries(presentationData: PresentationData, peer: EnginePeer?, linkedDiscussionPeer: EnginePeer?, groups: [EnginePeer]?) -> [ChannelDiscussionGroupSetupControllerEntry] {
+    guard case let .channel(peer) = peer else {
         return []
     }
     
@@ -178,25 +183,23 @@ private func channelDiscussionGroupSetupControllerEntries(presentationData: Pres
     
     var entries: [ChannelDiscussionGroupSetupControllerEntry] = []
     
-    if case let .known(maybeLinkedDiscussionPeerId) = cachedData.linkedDiscussionPeerId, let linkedDiscussionPeerId = maybeLinkedDiscussionPeerId {
-        if let group = view.peers[linkedDiscussionPeerId] {
+    if let group = linkedDiscussionPeer {
+        if case .group = peer.info {
+            entries.append(.header(presentationData.theme, presentationData.strings, group.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder), true, presentationData.strings.Channel_DiscussionGroup_HeaderLabel))
+        } else {
+            entries.append(.header(presentationData.theme, presentationData.strings, group.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder), false, presentationData.strings.Channel_DiscussionGroup_HeaderLabel))
+        }
+        
+        entries.append(.group(0, presentationData.theme, presentationData.strings, group, presentationData.nameDisplayOrder))
+        entries.append(.groupsInfo(presentationData.theme, presentationData.strings.Channel_DiscussionGroup_Info))
+        if canEditChannel {
+            let unlinkText: String
             if case .group = peer.info {
-                entries.append(.header(presentationData.theme, presentationData.strings, EnginePeer(group).displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder), true, presentationData.strings.Channel_DiscussionGroup_HeaderLabel))
+                unlinkText = presentationData.strings.Channel_DiscussionGroup_UnlinkChannel
             } else {
-                entries.append(.header(presentationData.theme, presentationData.strings, EnginePeer(group).displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder), false, presentationData.strings.Channel_DiscussionGroup_HeaderLabel))
+                unlinkText = presentationData.strings.Channel_DiscussionGroup_UnlinkGroup
             }
-            
-            entries.append(.group(0, presentationData.theme, presentationData.strings, group, presentationData.nameDisplayOrder))
-            entries.append(.groupsInfo(presentationData.theme, presentationData.strings.Channel_DiscussionGroup_Info))
-            if canEditChannel {
-                let unlinkText: String
-                if case .group = peer.info {
-                    unlinkText = presentationData.strings.Channel_DiscussionGroup_UnlinkChannel
-                } else {
-                    unlinkText = presentationData.strings.Channel_DiscussionGroup_UnlinkGroup
-                }
-                entries.append(.unlink(presentationData.theme, unlinkText))
-            }
+            entries.append(.unlink(presentationData.theme, unlinkText))
         }
     } else if case .broadcast = peer.info, canEditChannel {
         if let groups = groups {
@@ -219,30 +222,63 @@ private struct ChannelDiscussionGroupSetupControllerState: Equatable {
     var searching: Bool = false
 }
 
-public func channelDiscussionGroupSetupController(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, peerId: PeerId) -> ViewController {
+public func channelDiscussionGroupSetupController(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, peerId: EnginePeer.Id) -> ViewController {
     let statePromise = ValuePromise(ChannelDiscussionGroupSetupControllerState(), ignoreRepeated: true)
     let stateValue = Atomic(value: ChannelDiscussionGroupSetupControllerState())
     let updateState: ((ChannelDiscussionGroupSetupControllerState) -> ChannelDiscussionGroupSetupControllerState) -> Void = { f in
         statePromise.set(stateValue.modify { f($0) })
     }
     
-    let groupPeers = Promise<[Peer]?>()
+    let groupPeers = Promise<[EnginePeer]?>()
     groupPeers.set(.single(nil)
     |> then(
         context.engine.peers.availableGroupsForChannelDiscussion()
         |> map(Optional.init)
-        |> `catch` { _ -> Signal<[Peer]?, NoError> in
+        |> `catch` { _ -> Signal<[EnginePeer]?, NoError> in
             return .single(nil)
         }
     ))
     
-    let peerView = context.account.viewTracker.peerView(peerId)
+    struct PeerData {
+        var peer: EnginePeer?
+        var linkedDiscussionPeer: EnginePeer?
+        var hasLinkedDiscussionPeerValue: Bool
+    }
+    let peerView: Signal<PeerData, NoError> = context.engine.data.subscribe(
+        TelegramEngine.EngineData.Item.Peer.Peer(id: peerId),
+        TelegramEngine.EngineData.Item.Peer.LinkedDiscussionPeerId(id: peerId)
+    )
+    |> mapToSignal { peer, linkedDiscussionPeerId -> Signal<PeerData, NoError> in
+        var linkedDiscussionPeer: Signal<EnginePeer?, NoError>
+        var hasLinkedDiscussionPeerValue: Bool = false
+        if case let .known(linkedDiscussionPeerId) = linkedDiscussionPeerId {
+            hasLinkedDiscussionPeerValue = true
+            if let linkedDiscussionPeerIdValue = linkedDiscussionPeerId {
+                linkedDiscussionPeer = context.engine.data.subscribe(
+                    TelegramEngine.EngineData.Item.Peer.Peer(id: linkedDiscussionPeerIdValue)
+                )
+            } else {
+                linkedDiscussionPeer = .single(nil)
+            }
+        } else {
+            linkedDiscussionPeer = .single(nil)
+        }
+        
+        return linkedDiscussionPeer
+        |> map { linkedDiscussionPeer -> PeerData in
+            return PeerData(
+                peer: peer,
+                linkedDiscussionPeer: linkedDiscussionPeer,
+                hasLinkedDiscussionPeerValue: hasLinkedDiscussionPeerValue
+            )
+        }
+    }
     
     var dismissImpl: (() -> Void)?
     var dismissInputImpl: (() -> Void)?
     var pushControllerImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController, Any?) -> Void)?
-    var navigateToGroupImpl: ((PeerId) -> Void)?
+    var navigateToGroupImpl: ((EnginePeer.Id) -> Void)?
     
     let actionsDisposable = DisposableSet()
     
@@ -250,15 +286,13 @@ public func channelDiscussionGroupSetupController(context: AccountContext, updat
     actionsDisposable.add(applyGroupDisposable)
     
     let arguments = ChannelDiscussionGroupSetupControllerArguments(context: context, createGroup: {
-        let _ = (context.account.postbox.transaction { transaction -> Peer? in
-            transaction.getPeer(peerId)
-        }
+        let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
         |> deliverOnMainQueue).start(next: { peer in
             guard let peer = peer else {
                 return
             }
             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-            pushControllerImpl?(context.sharedContext.makeCreateGroupController(context: context, peerIds: [], initialTitle: EnginePeer(peer).displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder) + " Chat", mode: .supergroup, completion: { groupId, dismiss in
+            pushControllerImpl?(context.sharedContext.makeCreateGroupController(context: context, peerIds: [], initialTitle: peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder) + " Chat", mode: .supergroup, completion: { groupId, dismiss in
                 var applySignal = context.engine.peers.updateGroupDiscussionForChannel(channelId: peerId, groupId: groupId)
                 var cancelImpl: (() -> Void)?
                 let progressSignal = Signal<Never, NoError> { subscriber in
@@ -294,38 +328,83 @@ public func channelDiscussionGroupSetupController(context: AccountContext, updat
                     dismiss()
                 }, completed: {
                     dismiss()
-                    /*let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                     let controller = OverlayStatusController(theme: presentationData.theme, type: .success)
-                     presentControllerImpl?(controller, nil)*/
                 }))
             }))
         })
     }, selectGroup: { groupId in
         dismissInputImpl?()
         
-        let _ = (context.account.postbox.transaction { transaction -> (CachedChannelData?, Peer?, Peer?) in
-            return (transaction.getPeerCachedData(peerId: peerId) as? CachedChannelData, transaction.getPeer(peerId), transaction.getPeer(groupId))
-        }
-        |> deliverOnMainQueue).start(next: { cachedData, channelPeer, groupPeer in
-            guard let cachedData = cachedData, let channelPeer = channelPeer, let groupPeer = groupPeer else {
+        let _ = (context.engine.data.get(
+            TelegramEngine.EngineData.Item.Peer.LinkedDiscussionPeerId(id: peerId),
+            TelegramEngine.EngineData.Item.Peer.Peer(id: peerId),
+            TelegramEngine.EngineData.Item.Peer.Peer(id: groupId)
+        )
+        |> deliverOnMainQueue).start(next: { linkedDiscussionPeerId, channelPeer, groupPeer in
+            guard let channelPeer = channelPeer, let groupPeer = groupPeer else {
                 return
             }
             
-            if case let .known(maybeLinkedDiscussionPeerId) = cachedData.linkedDiscussionPeerId, maybeLinkedDiscussionPeerId == groupId {
+            if case let .known(maybeLinkedDiscussionPeerId) = linkedDiscussionPeerId, maybeLinkedDiscussionPeerId == groupId {
                 navigateToGroupImpl?(groupId)
                 return
             }
             
-            let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-            let actionSheet = ActionSheetController(presentationData: presentationData)
-            actionSheet.setItemGroups([ActionSheetItemGroup(items: [
-                ChannelDiscussionGroupActionSheetItem(context: context, channelPeer: channelPeer, groupPeer: groupPeer, strings: presentationData.strings, nameDisplayOrder: presentationData.nameDisplayOrder),
-                ActionSheetButtonItem(title: presentationData.strings.Channel_DiscussionGroup_LinkGroup, color: .accent, action: { [weak actionSheet] in
-                    actionSheet?.dismissAnimated()
-                    
+            let presentationData = updatedPresentationData?.initial ?? context.sharedContext.currentPresentationData.with { $0 }
+            
+            if case let .channel(channel) = groupPeer, channel.isForum {
+                let text = presentationData.strings.PeerInfo_TopicsLimitedDiscussionGroups
+                presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .universal(animation: "anim_topics", scale: 0.066, colors: [:], title: nil, text: text, customUndoText: nil, timeout: nil), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
+                return
+            }
+            
+            let groupTitle = groupPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+            let channelTitle = channelPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+            let text: PresentationStrings.FormattedString
+            if case let .channel(channel) = channelPeer, let addressName = channel.addressName, !addressName.isEmpty {
+                text = presentationData.strings.Channel_DiscussionGroup_PublicChannelLink(groupTitle, channelTitle)
+            } else {
+                text = presentationData.strings.Channel_DiscussionGroup_PrivateChannelLink(groupTitle, channelTitle)
+            }
+            let attributedText = NSMutableAttributedString(attributedString: NSAttributedString(string: text.string, font: Font.regular(15.0), textColor: presentationData.theme.actionSheet.primaryTextColor))
+            for range in text.ranges {
+                attributedText.addAttribute(.font, value: Font.semibold(15.0), range: range.range)
+            }
+
+            let content: [AnyComponentWithIdentity<AlertComponentEnvironment>] = [
+                AnyComponentWithIdentity(
+                    id: "header",
+                    component: AnyComponent(
+                        AlertTransferHeaderComponent(
+                            fromComponent: AnyComponentWithIdentity(id: "channel", component: AnyComponent(
+                                AvatarComponent(
+                                    context: context,
+                                    theme: presentationData.theme,
+                                    peer: channelPeer
+                                )
+                            )),
+                            toComponent: AnyComponentWithIdentity(id: "group", component: AnyComponent(
+                                AvatarComponent(
+                                    context: context,
+                                    theme: presentationData.theme,
+                                    peer: groupPeer
+                                )
+                            )),
+                            type: .overlap
+                        )
+                    )
+                ),
+                AnyComponentWithIdentity(
+                    id: "text",
+                    component: AnyComponent(
+                        AlertTextComponent(content: .attributed(attributedText), alignment: .center)
+                    )
+                )
+            ]
+            let alertController = AlertScreen(configuration: AlertScreen.Configuration(actionAlignment: .vertical), content: content, actions: [
+                .init(title: presentationData.strings.Channel_DiscussionGroup_LinkGroup, type: .default, action: {
                     var applySignal: Signal<Bool, ChannelDiscussionGroupError>
-                    var updatedPeerId: PeerId? = nil
-                    if let legacyGroup = groupPeer as? TelegramGroup {
+                    var updatedPeerId: EnginePeer.Id? = nil
+                    if case let .legacyGroup(legacyGroup) = groupPeer {
                         applySignal = context.engine.peers.convertGroupToSupergroup(peerId: legacyGroup.id)
                         |> mapError { error -> ChannelDiscussionGroupError in
                             switch error {
@@ -339,8 +418,10 @@ public func channelDiscussionGroupSetupController(context: AccountContext, updat
                         |> mapToSignal { resultPeerId -> Signal<Bool, ChannelDiscussionGroupError> in
                             updatedPeerId = resultPeerId
                             
-                            return context.account.postbox.transaction { transaction -> Signal<Bool, ChannelDiscussionGroupError> in
-                                if let groupPeer = transaction.getPeer(resultPeerId) {
+                            return context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: resultPeerId))
+                            |> castError(ChannelDiscussionGroupError.self)
+                            |> mapToSignal { groupPeer -> Signal<Bool, ChannelDiscussionGroupError> in
+                                if let groupPeer = groupPeer {
                                     let _ = (groupPeers.get()
                                     |> take(1)
                                     |> deliverOnMainQueue).start(next: { groups in
@@ -359,8 +440,6 @@ public func channelDiscussionGroupSetupController(context: AccountContext, updat
                                 
                                 return context.engine.peers.updateGroupDiscussionForChannel(channelId: peerId, groupId: resultPeerId)
                             }
-                            |> castError(ChannelDiscussionGroupError.self)
-                            |> switchToLatest
                         }
                     } else {
                         applySignal = context.engine.peers.updateGroupDiscussionForChannel(channelId: peerId, groupId: groupId)
@@ -472,27 +551,25 @@ public func channelDiscussionGroupSetupController(context: AccountContext, updat
                             return state
                         }
                     }))
-                })
-            ]), ActionSheetItemGroup(items: [
-                ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, color: .accent, font: .bold, action: { [weak actionSheet] in
-                    actionSheet?.dismissAnimated()
-                })
-            ])])
-            presentControllerImpl?(actionSheet, nil)
+                }),
+                .init(title: presentationData.strings.Common_Cancel)
+            ], updatedPresentationData: updatedPresentationData ?? (initial: presentationData, signal: context.sharedContext.presentationData))
+            presentControllerImpl?(alertController, nil)
         })
     }, unlinkGroup: {
-        let _ = (context.account.postbox.transaction { transaction -> (CachedChannelData?, Peer?) in
-            return (transaction.getPeerCachedData(peerId: peerId) as? CachedChannelData, transaction.getPeer(peerId))
-        }
-        |> deliverOnMainQueue).start(next: { cachedData, peer in
-            guard let cachedData = cachedData, let peer = peer as? TelegramChannel else {
+        let _ = (context.engine.data.get(
+            TelegramEngine.EngineData.Item.Peer.LinkedDiscussionPeerId(id: peerId),
+            TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
+        )
+        |> deliverOnMainQueue).start(next: { linkedDiscussionPeerId, peer in
+            guard case let .channel(peer) = peer else {
                 return
             }
             
-            let applyPeerId: PeerId
+            let applyPeerId: EnginePeer.Id
             if case .broadcast = peer.info {
                 applyPeerId = peerId
-            } else if case let .known(maybeLinkedDiscussionPeerId) = cachedData.linkedDiscussionPeerId, let linkedDiscussionPeerId = maybeLinkedDiscussionPeerId {
+            } else if case let .known(maybeLinkedDiscussionPeerId) = linkedDiscussionPeerId, let linkedDiscussionPeerId = maybeLinkedDiscussionPeerId {
                 applyPeerId = linkedDiscussionPeerId
             } else {
                 return
@@ -549,7 +626,7 @@ public func channelDiscussionGroupSetupController(context: AccountContext, updat
     |> deliverOnMainQueue
     |> map { presentationData, state, view, groups -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let title: String
-        if let peer = view.peers[view.peerId] as? TelegramChannel, case .broadcast = peer.info {
+        if case let .channel(peer) = view.peer, case .broadcast = peer.info {
             title = presentationData.strings.Channel_DiscussionGroup
         } else {
             title = presentationData.strings.Group_LinkedChannel
@@ -558,15 +635,11 @@ public func channelDiscussionGroupSetupController(context: AccountContext, updat
         var crossfade = false
         var isEmptyState = false
         var displayGroupList = false
-        if let cachedData = view.cachedData as? CachedChannelData {
-            var isEmpty = true
-            switch cachedData.linkedDiscussionPeerId {
-            case .unknown:
-                isEmpty = true
-            case let .known(value):
-                isEmpty = value == nil
-            }
-            if let peer = view.peers[view.peerId] as? TelegramChannel, case .broadcast = peer.info {
+        if view.hasLinkedDiscussionPeerValue {
+            let isEmpty: Bool
+            isEmpty = view.linkedDiscussionPeer == nil
+            
+            if case let .channel(peer) = view.peer, case .broadcast = peer.info {
                 if isEmpty {
                     if groups == nil {
                         isEmptyState = true
@@ -615,7 +688,7 @@ public func channelDiscussionGroupSetupController(context: AccountContext, updat
         }
         
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(title), leftNavigationButton: nil, rightNavigationButton: rightNavigationButton, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back), animateChanges: false)
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: channelDiscussionGroupSetupControllerEntries(presentationData: presentationData, view: view, groups: groups), style: .blocks, emptyStateItem: emptyStateItem, searchItem: searchItem, crossfadeState: crossfade, animateChanges: false)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: channelDiscussionGroupSetupControllerEntries(presentationData: presentationData, peer: view.peer, linkedDiscussionPeer: view.linkedDiscussionPeer, groups: groups), style: .blocks, emptyStateItem: emptyStateItem, searchItem: searchItem, crossfadeState: crossfade, animateChanges: false)
         
         return (controllerState, (listState, arguments))
     }
@@ -639,10 +712,17 @@ public func channelDiscussionGroupSetupController(context: AccountContext, updat
         controller?.present(c, in: .window(.root), with: a)
     }
     navigateToGroupImpl = { [weak controller] groupId in
-        guard let navigationController = controller?.navigationController as? NavigationController else {
-            return
-        }
-        context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(id: groupId), keepStack: .always))
+        let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: groupId))
+        |> deliverOnMainQueue).start(next: { peer in
+            guard let peer = peer else {
+                return
+            }
+            
+            guard let navigationController = controller?.navigationController as? NavigationController else {
+                return
+            }
+            context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer), keepStack: .always))
+        })
     }
     return controller
 }

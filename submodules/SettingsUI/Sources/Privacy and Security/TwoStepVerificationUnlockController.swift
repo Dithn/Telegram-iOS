@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
@@ -16,6 +15,7 @@ import PasswordSetupUI
 import Markdown
 
 private final class TwoStepVerificationUnlockSettingsControllerArguments {
+    let context: AccountContext
     let updatePasswordText: (String) -> Void
     let checkPassword: () -> Void
     let openForgotPassword: () -> Void
@@ -28,7 +28,8 @@ private final class TwoStepVerificationUnlockSettingsControllerArguments {
     let declinePasswordReset: () -> Void
     let resetPassword: () -> Void
     
-    init(updatePasswordText: @escaping (String) -> Void, checkPassword: @escaping () -> Void, openForgotPassword: @escaping () -> Void, openSetupPassword: @escaping () -> Void, openDisablePassword: @escaping () -> Void, openSetupEmail: @escaping () -> Void, openResetPendingEmail: @escaping () -> Void, updateEmailCode: @escaping (String) -> Void, openConfirmEmail: @escaping () -> Void, declinePasswordReset: @escaping () -> Void, resetPassword: @escaping () -> Void) {
+    init(context: AccountContext, updatePasswordText: @escaping (String) -> Void, checkPassword: @escaping () -> Void, openForgotPassword: @escaping () -> Void, openSetupPassword: @escaping () -> Void, openDisablePassword: @escaping () -> Void, openSetupEmail: @escaping () -> Void, openResetPendingEmail: @escaping () -> Void, updateEmailCode: @escaping (String) -> Void, openConfirmEmail: @escaping () -> Void, declinePasswordReset: @escaping () -> Void, resetPassword: @escaping () -> Void) {
+        self.context = context
         self.updatePasswordText = updatePasswordText
         self.checkPassword = checkPassword
         self.openForgotPassword = openForgotPassword
@@ -48,19 +49,15 @@ private enum TwoStepVerificationUnlockSettingsSection: Int32 {
     case email
 }
 
-private enum TwoStepVerificationUnlockSettingsEntryTag: ItemListItemTag {
+public enum TwoStepVerificationUnlockSettingsEntryTag: ItemListItemTag {
     case password
+    case change
+    case disable
+    case changeEmail
     
-    func isEqual(to other: ItemListItemTag) -> Bool {
-        if let other = other as? TwoStepVerificationUnlockSettingsEntryTag {
-            switch self {
-                case .password:
-                    if case .password = other {
-                        return true
-                    } else {
-                        return false
-                    }
-            }
+    public func isEqual(to other: ItemListItemTag) -> Bool {
+        if let other = other as? TwoStepVerificationUnlockSettingsEntryTag, self == other {
+            return true
         } else {
             return false
         }
@@ -130,7 +127,7 @@ private enum TwoStepVerificationUnlockSettingsEntry: ItemListNodeEntry {
         let arguments = arguments as! TwoStepVerificationUnlockSettingsControllerArguments
         switch self {
             case let .passwordEntry(theme, _, text, value):
-                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(string: text, textColor: theme.list.itemPrimaryTextColor), text: value, placeholder: "", type: .password, spacing: 10.0, tag: TwoStepVerificationUnlockSettingsEntryTag.password, sectionId: self.section, textUpdated: { updatedText in
+                return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(string: text, textColor: theme.list.itemPrimaryTextColor), text: value, placeholder: "", type: .password, spacing: 10.0, tag: TwoStepVerificationUnlockSettingsEntryTag.password, sectionId: self.section, textUpdated: { updatedText in
                     arguments.updatePasswordText(updatedText)
                 }, action: {
                     arguments.checkPassword()
@@ -149,29 +146,29 @@ private enum TwoStepVerificationUnlockSettingsEntry: ItemListNodeEntry {
                     }
                 })
             case let .passwordSetup(_, text):
-                return ItemListActionItem(presentationData: presentationData, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                     arguments.openSetupPassword()
                 })
             case let .passwordSetupInfo(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .markdown(text), sectionId: self.section)
             case let .changePassword(_, text):
-                return ItemListActionItem(presentationData: presentationData, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                     arguments.openSetupPassword()
-                })
+                }, tag: TwoStepVerificationUnlockSettingsEntryTag.change)
             case let .turnPasswordOff(_, text):
-                return ItemListActionItem(presentationData: presentationData, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                     arguments.openDisablePassword()
-                })
+                }, tag: TwoStepVerificationUnlockSettingsEntryTag.disable)
             case let .setupRecoveryEmail(_, text):
-                return ItemListActionItem(presentationData: presentationData, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                     arguments.openSetupEmail()
-                })
+                }, tag: TwoStepVerificationUnlockSettingsEntryTag.changeEmail)
             case let .passwordInfo(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
             case let .pendingEmailConfirmInfo(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
             case let .pendingEmailConfirmCode(_, _, title, text):
-                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(string: ""), text: text, placeholder: title, type: .number, sectionId: self.section, textUpdated: { value in
+                return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(string: ""), text: text, placeholder: title, type: .number, sectionId: self.section, textUpdated: { value in
                     arguments.updateEmailCode(value)
                 }, action: {})
             case let .pendingEmailInfo(_, text):
@@ -182,7 +179,7 @@ private enum TwoStepVerificationUnlockSettingsEntry: ItemListNodeEntry {
                     }
                 })
             case let .pendingEmailOpenConfirm(_, text):
-                return ItemListActionItem(presentationData: presentationData, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                     arguments.openConfirmEmail()
                 })
         }
@@ -206,7 +203,7 @@ private func twoStepVerificationUnlockSettingsControllerEntries(presentationData
                         if let pendingEmail = pendingEmail {
                             entries.append(.pendingEmailConfirmInfo(presentationData.theme, presentationData.strings.TwoStepAuth_SetupPendingEmail(pendingEmail.email.pattern).string))
                             entries.append(.pendingEmailConfirmCode(presentationData.theme, presentationData.strings, presentationData.strings.TwoStepAuth_RecoveryCode, state.emailCode))
-                             entries.append(.pendingEmailInfo(presentationData.theme, "[" + presentationData.strings.TwoStepAuth_ConfirmationAbort + "]()"))
+                            entries.append(.pendingEmailInfo(presentationData.theme, "[" + presentationData.strings.TwoStepAuth_ConfirmationAbort + "]()"))
                             
                             /*entries.append(.pendingEmailInfo(presentationData.theme, presentationData.strings.TwoStepAuth_ConfirmationText + "\n\n\(pendingEmailAndValue.pendingEmail.pattern)\n\n[" + presentationData.strings.TwoStepAuth_ConfirmationAbort + "]()"))*/
                         } else {
@@ -226,7 +223,7 @@ private func twoStepVerificationUnlockSettingsControllerEntries(presentationData
                             if remainingSeconds <= 0 {
                                 text += "[" + presentationData.strings.TwoStepAuth_ResetAction + "](reset)"
                             } else {
-                                text.append(presentationData.strings.TwoStepAuth_ResetPendingText(timeIntervalString(strings: presentationData.strings, value: remainingSeconds)).string)
+                                text.append(presentationData.strings.TwoStepAuth_ResetPendingText(timeIntervalString(strings: presentationData.strings, value: remainingSeconds, usage: .afterTime)).string)
                                 text.append("\n[\(presentationData.strings.TwoStepAuth_CancelResetTitle)](declineReset)")
                             }
                         } else {
@@ -281,7 +278,7 @@ public enum TwoStepVerificationUnlockSettingsControllerData: Equatable {
     case manage(password: String, emailSet: Bool, pendingEmail: TwoStepVerificationPendingEmail?, hasSecureValues: Bool)
 }
 
-public func twoStepVerificationUnlockSettingsController(context: AccountContext, mode: TwoStepVerificationUnlockSettingsControllerMode, openSetupPasswordImmediately: Bool = false) -> ViewController {
+public func twoStepVerificationUnlockSettingsController(context: AccountContext, mode: TwoStepVerificationUnlockSettingsControllerMode, openSetupPasswordImmediately: Bool = false, focusOnItemTag: TwoStepVerificationUnlockSettingsEntryTag? = nil) -> ViewController {
     let initialState = TwoStepVerificationUnlockSettingsControllerState()
     
     let statePromise = ValuePromise(initialState, ignoreRepeated: true)
@@ -423,7 +420,7 @@ public func twoStepVerificationUnlockSettingsController(context: AccountContext,
         })
     }
     
-    let arguments = TwoStepVerificationUnlockSettingsControllerArguments(updatePasswordText: { updatedText in
+    let arguments = TwoStepVerificationUnlockSettingsControllerArguments(context: context, updatePasswordText: { updatedText in
         updateState { state in
             var state = state
             state.passwordText = updatedText
@@ -461,7 +458,7 @@ public func twoStepVerificationUnlockSettingsController(context: AccountContext,
                     return state
                 }
                 
-                replaceControllerImpl?(twoStepVerificationUnlockSettingsController(context: context, mode: .manage(password: password, email: settings.email, pendingEmail: pendingEmail, hasSecureValues: settings.secureSecret != nil)), true)
+                replaceControllerImpl?(twoStepVerificationUnlockSettingsController(context: context, mode: .manage(password: password, email: settings.email, pendingEmail: pendingEmail, hasSecureValues: settings.secureSecret != nil), focusOnItemTag: focusOnItemTag), true)
             }, error: { error in
                 updateState { state in
                     var state = state
@@ -481,7 +478,7 @@ public func twoStepVerificationUnlockSettingsController(context: AccountContext,
                         text = presentationData.strings.Login_UnknownError
                 }
                 
-                presentControllerImpl?(textAlertController(context: context, title: nil, text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), ViewControllerPresentationArguments(presentationAnimation: .modalSheet))
+                presentControllerImpl?(textAlertController(context: context, title: nil, text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
             }))
         }
     }, openForgotPassword: {
@@ -535,7 +532,7 @@ public func twoStepVerificationUnlockSettingsController(context: AccountContext,
                                             state.checking = false
                                             return state
                                         }
-                                        presentControllerImpl?(textAlertController(context: context, title: nil, text: presentationData.strings.Login_UnknownError, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), ViewControllerPresentationArguments(presentationAnimation: .modalSheet))
+                                        presentControllerImpl?(textAlertController(context: context, title: nil, text: presentationData.strings.Login_UnknownError, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
                                     }))
                                 } else {
                                     if let pendingResetTimestamp = pendingResetTimestamp {
@@ -594,7 +591,7 @@ public func twoStepVerificationUnlockSettingsController(context: AccountContext,
                                                     presentControllerImpl?(textAlertController(sharedContext: context.sharedContext, title: nil, text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
                                                 }
                                             })
-                                        })]), ViewControllerPresentationArguments(presentationAnimation: .modalSheet))
+                                        })]), nil)
                                     }
                                 }
                             case .notSet:
@@ -727,7 +724,7 @@ public func twoStepVerificationUnlockSettingsController(context: AccountContext,
                                 dismissImpl?()
                             }))
                         }
-                    })]), ViewControllerPresentationArguments(presentationAnimation: .modalSheet))
+                    })]), nil)
                 default:
                     break
             }
@@ -967,7 +964,7 @@ public func twoStepVerificationUnlockSettingsController(context: AccountContext,
         }
         
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(title), leftNavigationButton: nil, rightNavigationButton: rightNavigationButton, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back), animateChanges: false)
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: twoStepVerificationUnlockSettingsControllerEntries(presentationData: presentationData, state: state, data: data), style: .blocks, focusItemTag: didAppear ? TwoStepVerificationUnlockSettingsEntryTag.password : nil, emptyStateItem: emptyStateItem, animateChanges: false)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: twoStepVerificationUnlockSettingsControllerEntries(presentationData: presentationData, state: state, data: data), style: .blocks, focusItemTag: focusOnItemTag ?? (didAppear ? TwoStepVerificationUnlockSettingsEntryTag.password : nil), emptyStateItem: emptyStateItem, animateChanges: false)
         
         return (controllerState, (listState, arguments))
     }
@@ -1037,6 +1034,20 @@ public func twoStepVerificationUnlockSettingsController(context: AccountContext,
                 }
             }
         }))
+    }
+    
+    if let focusOnItemTag {
+        var didFocusOnItem = false
+        controller.afterTransactionCompleted = { [weak controller] in
+            if !didFocusOnItem, let controller {
+                controller.forEachItemNode { itemNode in
+                    if let itemNode = itemNode as? ItemListItemNode, let tag = itemNode.tag, tag.isEqual(to: focusOnItemTag) {
+                        didFocusOnItem = true
+                        itemNode.displayHighlight()
+                    }
+                }
+            }
+        }
     }
     
     return controller

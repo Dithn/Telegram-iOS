@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 
-private final class ChildWindowHostView: UIView, WindowHost {
+final class ChildWindowHostView: UIView, WindowHost {
     var updateSize: ((CGSize) -> Void)?
     var layoutSubviewsEvent: (() -> Void)?
     var hitTestImpl: ((CGPoint, UIEvent?) -> UIView?)?
@@ -10,6 +10,7 @@ private final class ChildWindowHostView: UIView, WindowHost {
     var invalidatePrefersOnScreenNavigationHiddenImpl: (() -> Void)?
     var invalidateSupportedOrientationsImpl: (() -> Void)?
     var cancelInteractiveKeyboardGesturesImpl: (() -> Void)?
+    var dismissedKeyboardByCurrentGestureImpl: (() -> Bool)?
     var forEachControllerImpl: (((ContainableController) -> Void) -> Void)?
     var getAccessibilityElementsImpl: (() -> [Any]?)?
     
@@ -46,6 +47,10 @@ private final class ChildWindowHostView: UIView, WindowHost {
     func cancelInteractiveKeyboardGestures() {
         self.cancelInteractiveKeyboardGesturesImpl?()
     }
+
+    var dismissedKeyboardByCurrentGesture: Bool {
+        return self.dismissedKeyboardByCurrentGestureImpl?() ?? false
+    }
     
     func forEachController(_ f: (ContainableController) -> Void) {
         self.forEachControllerImpl?(f)
@@ -56,6 +61,7 @@ private final class ChildWindowHostView: UIView, WindowHost {
     }
     
     func presentInGlobalOverlay(_ controller: ContainableController) {
+        self.presentController?(controller, .root, true, {})
     }
     
     func addGlobalPortalHostView(sourceView: PortalSourceView) {
@@ -68,13 +74,16 @@ public func childWindowHostView(parent: UIView) -> WindowHostView {
     
     let hostView = WindowHostView(containerView: view, eventView: view, isRotating: {
         return false
-    }, systemUserInterfaceStyle: .single(.light), updateSupportedInterfaceOrientations: { orientations in
+    }, systemUserInterfaceStyle: .single(.light), currentInterfaceOrientation: {
+        return .portrait
+    }, updateSupportedInterfaceOrientations: { orientations in
     }, updateDeferScreenEdgeGestures: { edges in
     }, updatePrefersOnScreenNavigationHidden: { value in
+    }, updateStatusBar: { _, _, _ in
     })
     
     view.updateSize = { [weak hostView] size in
-        hostView?.updateSize?(size, 0.0)
+        hostView?.updateSize?(size, 0.0, .portrait)
     }
     
     view.layoutSubviewsEvent = { [weak hostView] in
@@ -115,6 +124,10 @@ public func childWindowHostView(parent: UIView) -> WindowHostView {
     
     view.cancelInteractiveKeyboardGesturesImpl = { [weak hostView] in
         hostView?.cancelInteractiveKeyboardGestures?()
+    }
+
+    view.dismissedKeyboardByCurrentGestureImpl = { [weak hostView] in
+        return hostView?.dismissedKeyboardByCurrentGesture?() ?? false
     }
     
     view.forEachControllerImpl = { [weak hostView] f in

@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 
 
 func _internal_sendScheduledMessageNowInteractively(postbox: Postbox, messageId: MessageId) -> Signal<Never, NoError> {
@@ -108,7 +108,7 @@ func managedApplyPendingScheduledMessagesActions(postbox: Postbox, network: Netw
                             addMessageMediaResourceIdsToRemove(media: media, resourceIds: &resourceIds)
                         })
                         if !resourceIds.isEmpty {
-                            let _ = postbox.mediaBox.removeCachedResources(Set(resourceIds)).start()
+                            let _ = postbox.mediaBox.removeCachedResources(Array(Set(resourceIds))).start()
                         }
                     }
                     |> ignoreValues

@@ -1,11 +1,11 @@
-#import "TGAttachmentCameraView.h"
-#import "TGImageUtils.h"
+#import <LegacyComponents/TGAttachmentCameraView.h>
+#import <LegacyComponents/TGImageUtils.h>
 
 #import "LegacyComponentsInternal.h"
 
 #import <LegacyComponents/TGMenuSheetView.h>
 #import "TGAttachmentMenuCell.h"
-#import "TGCameraController.h"
+#import <LegacyComponents/TGCameraController.h>
 
 #import <LegacyComponents/PGCamera.h>
 #import <LegacyComponents/TGCameraPreviewView.h>
@@ -33,7 +33,7 @@
 
 @implementation TGAttachmentCameraView
 
-- (instancetype)initForSelfPortrait:(bool)selfPortrait
+- (instancetype)initForSelfPortrait:(bool)selfPortrait videoModeByDefault:(bool)videoModeByDefault
 {
     self = [super initWithFrame:CGRectZero];
     if (self != nil)
@@ -46,7 +46,7 @@
         PGCamera *camera = nil;
         if ([PGCamera cameraAvailable])
         {
-            camera = [[PGCamera alloc] initWithMode:PGCameraModePhoto position:selfPortrait ? PGCameraPositionFront : PGCameraPositionUndefined];
+            camera = [[PGCamera alloc] initWithMode:videoModeByDefault ? PGCameraModeVideo : PGCameraModePhoto position:selfPortrait ? PGCameraPositionFront : PGCameraPositionUndefined];
         }
         _camera = camera;
         
@@ -63,7 +63,10 @@
         
         [self setInterfaceOrientation:[[LegacyComponentsGlobals provider] applicationStatusBarOrientation] animated:false];
         
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleOrientationChange:) name:UIApplicationDidChangeStatusBarOrientationNotification object:nil];
+#pragma clang diagnostic pop
         
         _fadeView = [[UIView alloc] initWithFrame:self.bounds];
         _fadeView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -122,7 +125,10 @@
     if (previewView.superview == _wrapperView && _camera != nil)
         [self stopPreview];
     
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidChangeStatusBarOrientationNotification object:nil];
+#pragma clang diagnostic pop
 }
 
 - (void)removeCorners {
@@ -235,17 +241,7 @@
 {
     void(^block)(void) = ^
     {
-        CGAffineTransform transform = CGAffineTransformMakeRotation(-1 * TGRotationForInterfaceOrientation(orientation));
-        CGFloat scale = 1.0;
-        if (self.frame.size.width != 0.0) {
-            scale = self.frame.size.height / self.frame.size.width;
-        }
-        if (_innerInterfaceOrientation == UIInterfaceOrientationLandscapeLeft) {
-            transform = CGAffineTransformScale(transform, scale, scale);
-        } else if (_innerInterfaceOrientation == UIInterfaceOrientationLandscapeRight) {
-            transform = CGAffineTransformScale(transform, scale, scale);
-        }
-        _wrapperView.transform = transform;
+        [self updateWrapperTransform];
         [self layoutSubviews];
     };
     
@@ -257,12 +253,28 @@
         block();
 }
 
+- (void)updateWrapperTransform {
+    CGAffineTransform transform = CGAffineTransformMakeRotation(-1 * TGRotationForInterfaceOrientation(_innerInterfaceOrientation));
+    CGFloat scale = 1.0;
+    if (self.frame.size.width != 0.0) {
+        scale = self.frame.size.height / self.frame.size.width;
+    }
+    if (_innerInterfaceOrientation == UIInterfaceOrientationLandscapeLeft) {
+        transform = CGAffineTransformScale(transform, scale, scale);
+    } else if (_innerInterfaceOrientation == UIInterfaceOrientationLandscapeRight) {
+        transform = CGAffineTransformScale(transform, scale, scale);
+    }
+    _wrapperView.transform = transform;
+}
+
 - (void)layoutSubviews
 {
     [super layoutSubviews];
     
     _wrapperView.bounds = CGRectMake(0, 0, self.bounds.size.width, self.bounds.size.height);
     _wrapperView.center = CGPointMake(self.bounds.size.width / 2.0, self.bounds.size.height / 2.0);
+    
+    [self updateWrapperTransform];
     
     TGCameraPreviewView *previewView = _previewView;
     if (previewView.superview == _wrapperView)

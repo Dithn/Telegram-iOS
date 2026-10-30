@@ -1,21 +1,21 @@
-#import "TGCameraMainTabletView.h"
+#import <LegacyComponents/TGCameraMainTabletView.h>
 
 #import <SSignalKit/SSignalKit.h>
 #import "LegacyComponentsInternal.h"
-#import "TGFont.h"
+#import <LegacyComponents/TGFont.h>
 
-#import "UIControl+HitTestEdgeInsets.h"
+#import <LegacyComponents/UIControl+HitTestEdgeInsets.h>
 
-#import "TGCameraInterfaceAssets.h"
+#import <LegacyComponents/TGCameraInterfaceAssets.h>
 
 #import <LegacyComponents/TGModernButton.h>
-#import "TGCameraShutterButton.h"
-#import "TGCameraModeControl.h"
-#import "TGCameraFlipButton.h"
-#import "TGCameraTimeCodeView.h"
-#import "TGCameraZoomView.h"
+#import <LegacyComponents/TGCameraShutterButton.h>
+#import <LegacyComponents/TGCameraModeControl.h>
+#import <LegacyComponents/TGCameraFlipButton.h>
+#import <LegacyComponents/TGCameraTimeCodeView.h>
+#import <LegacyComponents/TGCameraZoomView.h>
 
-#import "TGPhotoEditorUtils.h"
+#import <LegacyComponents/TGPhotoEditorUtils.h>
 
 #import "TGMediaPickerPhotoCounterButton.h"
 #import "TGMediaPickerPhotoStripView.h"
@@ -42,7 +42,7 @@ const CGFloat TGCameraTabletPanelViewWidth = 102.0f;
 @synthesize shutterReleased;
 @synthesize cancelPressed;
 
-- (instancetype)initWithFrame:(CGRect)frame avatar:(bool)avatar hasUltrawideCamera:(bool)hasUltrawideCamera hasTelephotoCamera:(bool)hasTelephotoCamera
+- (instancetype)initWithFrame:(CGRect)frame avatar:(bool)avatar videoModeByDefault:(bool)videoModeByDefault camera:(PGCamera *)camera
 {
     self = [super initWithFrame:frame];
     if (self != nil)
@@ -83,7 +83,7 @@ const CGFloat TGCameraTabletPanelViewWidth = 102.0f;
         [_shutterButton addTarget:self action:@selector(shutterButtonReleased) forControlEvents:UIControlEventTouchUpInside];
         [_panelView addSubview:_shutterButton];
         
-        _modeControl = [[TGCameraModeControl alloc] initWithFrame:CGRectMake(0, 0, _panelView.frame.size.width, 260) avatar:avatar];
+        _modeControl = [[TGCameraModeControl alloc] initWithFrame:CGRectMake(0, 0, _panelView.frame.size.width, 260) avatar:avatar videoModeByDefault:videoModeByDefault];
         [_panelView addSubview:_modeControl];
         
         __weak TGCameraMainTabletView *weakSelf = self;
@@ -281,11 +281,10 @@ const CGFloat TGCameraTabletPanelViewWidth = 102.0f;
                                    _shutterButton.frame.origin.y + _shutterButton.frame.size.height + 20.0,
                                    _flipButton.frame.size.width, _flipButton.frame.size.height);
     
-    CGFloat flipButtonPosition = 0.0f;
+    
     CGFloat cancelButtonPosition = _panelView.frame.size.height - _cancelButton.frame.size.height - 7;
     if (!_doneButton.hidden)
     {
-        flipButtonPosition =  _panelView.frame.size.height / 8.0f - _flipButton.frame.size.height / 2.0f;
         cancelButtonPosition = 7.0f;
     }
 

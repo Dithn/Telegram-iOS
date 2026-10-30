@@ -34,7 +34,7 @@ struct JoinLinkPreviewData {
     let isJoined: Bool
 }
 
-final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollViewDelegate {
+final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, ASScrollViewDelegate {
     private let context: AccountContext
     private var presentationData: PresentationData
     
@@ -81,6 +81,7 @@ final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollVi
         self.wrappingScrollNode.view.alwaysBounceVertical = true
         self.wrappingScrollNode.view.delaysContentTouches = false
         self.wrappingScrollNode.view.canCancelContentTouches = true
+        self.wrappingScrollNode.view.scrollsToTop = false
         
         self.dimNode = ASDisplayNode()
         self.dimNode.backgroundColor = UIColor(white: 0.0, alpha: 0.5)
@@ -110,7 +111,7 @@ final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollVi
         self.dimNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.dimTapGesture(_:))))
         self.addSubnode(self.dimNode)
         
-        self.wrappingScrollNode.view.delegate = self
+        self.wrappingScrollNode.view.delegate = self.wrappedScrollViewDelegate
         self.addSubnode(self.wrappingScrollNode)
                 
         self.cancelButton.addTarget(self, action: #selector(self.cancelButtonPressed), forControlEvents: .touchUpInside)
@@ -178,7 +179,7 @@ final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollVi
                     let animation = contentNode.layer.makeAnimation(from: 0.0 as NSNumber, to: 1.0 as NSNumber, keyPath: "opacity", timingFunction: CAMediaTimingFunctionName.easeInEaseOut.rawValue, duration: 0.25)
                     animation.fillMode = .both
                     if !fastOut {
-                        animation.beginTime = CACurrentMediaTime() + 0.1
+                        animation.beginTime = contentNode.layer.convertTime(CACurrentMediaTime(), from: nil) + 0.1
                     }
                     contentNode.layer.add(animation, forKey: "opacity")
                     
@@ -218,8 +219,12 @@ final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollVi
         
         let maximumContentHeight = layout.size.height - insets.top - max(bottomInset, insets.bottom)
         
-        let width = horizontalContainerFillingSizeForLayout(layout: layout, sideInset: 0.0)
-        let sideInset = floor((layout.size.width - width) / 2.0)
+        // Centered, or in the band beside a side strip (iPhone Duo). The sheet is anchored at the bottom: placed as
+        // `horizontalContainerFillingPlacementForLayout(anchoredAtBottom:)` describes (it spans iPhone Duo's side strip
+        // in compact width, clear only of a corner block at the bottom).
+        let placement = horizontalContainerFillingPlacementForLayout(layout: layout, margin: 0.0, includesSafeInsets: false, anchoredAtBottom: true)
+        let width = placement.width
+        let sideInset = placement.left
         
         let contentContainerFrame = CGRect(origin: CGPoint(x: sideInset, y: insets.top), size: CGSize(width: width, height: maximumContentHeight))
         let contentFrame = contentContainerFrame
@@ -236,7 +241,7 @@ final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollVi
         
         if let contentNode = self.contentNode {
             transition.updateFrame(node: contentNode, frame: CGRect(origin: CGPoint(x: floor((contentContainerFrame.size.width - contentFrame.size.width) / 2.0), y: 0.0), size: gridSize))
-            contentNode.updateLayout(size: gridSize, isLandscape: layout.size.width > layout.size.height, bottomInset: 0.0, transition: transition)
+            contentNode.updateLayout(size: gridSize, isLandscape: layout.size.width > layout.size.height && layout.metrics.widthClass == .compact, bottomInset: 0.0, transition: transition)
         }
     }
     
@@ -251,8 +256,10 @@ final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollVi
                 bottomInset -= 12.0
             }
             
-            let width = horizontalContainerFillingSizeForLayout(layout: layout, sideInset: 0.0)
-            let sideInset = floor((layout.size.width - width) / 2.0)
+            // Must match `containerLayoutUpdated`: the sheet is anchored at the bottom.
+            let placement = horizontalContainerFillingPlacementForLayout(layout: layout, margin: 0.0, includesSafeInsets: false, anchoredAtBottom: true)
+            let width = placement.width
+            let sideInset = placement.left
             
             let maximumContentHeight = layout.size.height - insets.top - max(bottomInset, insets.bottom)
             let contentFrame = CGRect(origin: CGPoint(x: sideInset, y: insets.top), size: CGSize(width: width, height: maximumContentHeight))
@@ -271,7 +278,11 @@ final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollVi
             transition.updateFrame(node: self.contentBackgroundNode, frame: CGRect(origin: CGPoint(), size: backgroundFrame.size))
             
             let cancelSize = CGSize(width: 44.0, height: 44.0)
-            let cancelFrame = CGRect(origin: CGPoint(x: backgroundFrame.maxX - cancelSize.width - 3.0, y: backgroundFrame.minY + 6.0), size: cancelSize)
+            var cancelFrame = CGRect(origin: CGPoint(x: backgroundFrame.maxX - cancelSize.width - 3.0, y: backgroundFrame.minY + 6.0), size: cancelSize)
+            // The card spans iPhone Duo's side strip, so a card risen to the camera's corner block slides its close
+            // button in clear of the block.
+            let cancelStripOverlap = max(0.0, layout.safeInsets.right - (layout.size.width - backgroundFrame.maxX))
+            cancelFrame.origin.x -= statusIslandTrailingShift(rowMinY: cancelFrame.minY, rowHeight: cancelFrame.height, islandHeight: layout.reservedCorners.topRight?.height ?? 0.0, inset: cancelStripOverlap)
             transition.updateFrame(node: self.cancelButton, frame: cancelFrame)
             
             if let animateContentNodeOffsetFromBackgroundOffset = self.animateContentNodeOffsetFromBackgroundOffset {
@@ -392,16 +403,16 @@ final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollVi
         self.setNeedsLayout()
     }
     
-    func setInvitePeer(image: TelegramMediaImageRepresentation?, title: String, memberCount: Int32, members: [EnginePeer], data: JoinLinkPreviewData) {
-        let contentNode = JoinLinkPreviewPeerContentNode(context: self.context, theme: self.presentationData.theme, strings: self.presentationData.strings, content: .invite(isGroup: data.isGroup, image: image, title: title, memberCount: memberCount, members: members))
+    func setInvitePeer(image: TelegramMediaImageRepresentation?, title: String, about: String?, memberCount: Int32, members: [EnginePeer], data: JoinLinkPreviewData) {
+        let contentNode = JoinLinkPreviewPeerContentNode(context: self.context, theme: self.presentationData.theme, strings: self.presentationData.strings, content: .invite(isGroup: data.isGroup, image: image, title: title, about: about, memberCount: memberCount, members: members))
         contentNode.join = { [weak self] in
             self?.join?()
         }
         self.transitionToContentNode(contentNode)
     }
     
-    func setRequestPeer(image: TelegramMediaImageRepresentation?, title: String, about: String?, memberCount: Int32, isGroup: Bool) {
-        let contentNode = JoinLinkPreviewPeerContentNode(context: self.context, theme: self.presentationData.theme, strings: self.presentationData.strings, content: .request(isGroup: isGroup, image: image, title: title, about: about, memberCount: memberCount))
+    func setRequestPeer(image: TelegramMediaImageRepresentation?, title: String, about: String?, memberCount: Int32, isGroup: Bool, isVerified: Bool, isFake: Bool, isScam: Bool) {
+        let contentNode = JoinLinkPreviewPeerContentNode(context: self.context, theme: self.presentationData.theme, strings: self.presentationData.strings, content: .request(isGroup: isGroup, image: image, title: title, about: about, memberCount: memberCount, isVerified: isVerified, isFake: isFake, isScam: isScam))
         contentNode.join = { [weak self] in
             self?.join?()
         }

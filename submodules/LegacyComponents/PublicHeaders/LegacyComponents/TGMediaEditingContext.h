@@ -18,6 +18,14 @@
 @end
 
 
+typedef NS_ENUM(NSUInteger, TGMediaLivePhotoMode)
+{
+    TGMediaLivePhotoModeOff = 0,
+    TGMediaLivePhotoModeLive,
+    TGMediaLivePhotoModeLoop,
+    TGMediaLivePhotoModeBounce
+};
+
 @class TGPaintingData;
 
 @protocol TGMediaEditAdjustments <NSObject>
@@ -47,6 +55,8 @@
 
 @property (nonatomic, readonly) bool inhibitEditing;
 
+@property (nonatomic, assign) int64_t sendPaidMessageStars;
+
 + (instancetype)contextForCaptionsOnly;
 
 - (SSignal *)imageSignalForItem:(NSObject<TGMediaEditableItem> *)item;
@@ -61,6 +71,11 @@
 
 - (void)setImage:(UIImage *)image thumbnailImage:(UIImage *)thumbnailImage forItem:(id<TGMediaEditableItem>)item synchronous:(bool)synchronous;
 - (void)setFullSizeImage:(UIImage *)image forItem:(id<TGMediaEditableItem>)item;
+
+- (SSignal *)coverImageSignalForItem:(NSObject<TGMediaEditableItem> *)item;
+- (void)setCoverImage:(UIImage *)image position:(NSNumber *)position forItem:(id<TGMediaEditableItem>)item;
+- (UIImage *)coverImageForItem:(NSObject<TGMediaEditableItem> *)item;
+- (NSNumber *)coverPositionForItem:(NSObject<TGMediaEditableItem> *)item;
 
 - (void)setTemporaryRep:(id)rep forItem:(id<TGMediaEditableItem>)item;
 
@@ -86,10 +101,40 @@
 - (void)setTimer:(NSNumber *)timer forItem:(NSObject<TGMediaEditableItem> *)item;
 - (SSignal *)timersUpdatedSignal;
 
+- (bool)spoilerForItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)spoilerSignalForItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)spoilerSignalForIdentifier:(NSString *)identifier;
+- (void)setSpoiler:(bool)spoiler forItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)spoilersUpdatedSignal;
+
+- (NSNumber *)priceForItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)priceSignalForItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)priceSignalForIdentifier:(NSString *)identifier;
+- (void)setPrice:(NSNumber *)price forItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)pricesUpdatedSignal;
+
+- (NSNumber *)livePhotoModeForItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)livePhotoModeSignalForItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)livePhotoModeForIdentifier:(NSString *)identifier;
+- (void)setLivePhotoMode:(TGMediaLivePhotoMode)mode forItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)livePhotoModesUpdatedSignal;
+
 - (UIImage *)paintingImageForItem:(NSObject<TGMediaEditableItem> *)item;
 - (UIImage *)stillPaintingImageForItem:(NSObject<TGMediaEditableItem> *)item;
-- (bool)setPaintingData:(NSData *)data image:(UIImage *)image stillImage:(UIImage *)image forItem:(NSObject<TGMediaEditableItem> *)item dataUrl:(NSURL **)dataOutUrl imageUrl:(NSURL **)imageOutUrl forVideo:(bool)video;
+- (bool)setPaintingData:(NSData *)data entitiesData:(NSData *)entitiesData image:(UIImage *)image stillImage:(UIImage *)stillImage forItem:(NSObject<TGMediaEditableItem> *)item dataUrl:(NSURL **)dataOutUrl entitiesDataUrl:(NSURL **)entitiesDataOutUrl imageUrl:(NSURL **)imageOutUrl forVideo:(bool)video;
 - (void)clearPaintingData;
+
+- (bool)isCaptionAbove;
+- (SSignal *)captionAbove;
+- (void)setCaptionAbove:(bool)captionAbove;
+
+- (bool)isHighQualityPhoto;
+- (SSignal *)highQualityPhoto;
+- (void)setHighQualityPhoto:(bool)highQualityPhoto;
+
+- (bool)isForceLivePhotoEnabled;
+- (SSignal *)forceLivePhotoEnabled;
+- (void)setForceLivePhotoEnabled:(bool)forceLivePhotoEnabled;
 
 - (SSignal *)facesForItem:(NSObject<TGMediaEditableItem> *)item;
 - (void)setFaces:(NSArray *)faces forItem:(NSObject<TGMediaEditableItem> *)item;

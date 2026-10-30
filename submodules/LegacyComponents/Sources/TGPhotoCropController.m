@@ -1,3 +1,4 @@
+#import <LegacyComponents/LegacyComponents.h>
 #import "TGPhotoCropController.h"
 
 #import "LegacyComponentsInternal.h"
@@ -9,7 +10,7 @@
 
 #import <LegacyComponents/TGPhotoEditorAnimation.h>
 #import <LegacyComponents/TGPhotoEditorUtils.h>
-#import "TGPhotoEditorInterfaceAssets.h"
+#import <LegacyComponents/TGPhotoEditorInterfaceAssets.h>
 
 #import "PGPhotoEditor.h"
 
@@ -19,9 +20,7 @@
 
 #import "TGPhotoEditorPreviewView.h"
 #import "TGPhotoCropView.h"
-#import "TGModernButton.h"
-
-#import "TGMenuSheetController.h"
+#import <LegacyComponents/TGModernButton.h>
 
 const CGFloat TGPhotoCropButtonsWrapperSize = 61.0f;
 const CGSize TGPhotoCropAreaInsetSize = { 9, 9 };
@@ -389,7 +388,7 @@ NSString * const TGPhotoCropOriginalAspectRatio = @"original";
     UIView *parentView = nil;
     
     if (self.beginTransitionOut != nil)
-        referenceView = self.beginTransitionOut(&referenceFrame, &parentView);
+        referenceView = self.beginTransitionOut(&referenceFrame, &parentView, saving);
     
     UIView *toTransitionView = nil;
     CGRect targetFrame = CGRectZero;
@@ -412,9 +411,13 @@ NSString * const TGPhotoCropOriginalAspectRatio = @"original";
     
     if (saving)
     {
+        CGFloat containerHeight = self.view.frame.size.height;
+//        if (_forVideo && self.view.frame.size.width < self.view.frame.size.height) {
+//            containerHeight -= 44.0;
+//        }
         CGSize fittedSize = TGScaleToSize(snapshotView.frame.size, self.view.frame.size);
         targetFrame = CGRectMake((self.view.frame.size.width - fittedSize.width) / 2,
-                                 (self.view.frame.size.height - fittedSize.height) / 2,
+                                 (containerHeight - fittedSize.height) / 2,
                                  fittedSize.width,
                                  fittedSize.height);
         
@@ -531,6 +534,11 @@ NSString * const TGPhotoCropOriginalAspectRatio = @"original";
 
 - (void)aspectRatioButtonPressed
 {
+    [self aspectRatioButtonPressedWithSourceView:nil];
+}
+
+- (void)aspectRatioButtonPressedWithSourceView:(UIView *)sourceView
+{
     if (_cropView.isAnimating)
         return;
     
@@ -542,16 +550,11 @@ NSString * const TGPhotoCropOriginalAspectRatio = @"original";
     {
         [_cropView performConfirmAnimated:true];
         
-        TGMenuSheetController *controller = [[TGMenuSheetController alloc] initWithContext:_context dark:false];
-        controller.dismissesByOutsideTap = true;
-        controller.hasSwipeGesture = true;
-        __weak TGMenuSheetController *weakController = controller;
         __weak TGPhotoCropController *weakSelf = self;
         
         void (^action)(NSString *) = ^(NSString *ratioString)
         {
             __strong TGPhotoCropController *strongSelf = weakSelf;
-            __strong TGMenuSheetController *strongController = weakController;
             if (strongSelf == nil)
                 return;
             
@@ -564,7 +567,7 @@ NSString * const TGPhotoCropOriginalAspectRatio = @"original";
             else
             {
                 aspectRatio = [ratioString floatValue];
-                if (_cropView.cropOrientation == UIImageOrientationLeft || _cropView.cropOrientation == UIImageOrientationRight)
+                if (strongSelf->_cropView.cropOrientation == UIImageOrientationLeft || strongSelf->_cropView.cropOrientation == UIImageOrientationRight)
                     aspectRatio = 1.0f / aspectRatio;
             }
             
@@ -576,17 +579,18 @@ NSString * const TGPhotoCropOriginalAspectRatio = @"original";
                 [strongSelf _updateTabs];
             };
             
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
             if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad)
                 setAspectRatioBlock();
             else
                 TGDispatchAfter(0.1f, dispatch_get_main_queue(), setAspectRatioBlock);
-            
-            [strongController dismissAnimated:true];
+#pragma clang diagnostic pop
         };
         
-        NSMutableArray *items = [[NSMutableArray alloc] init];
-        [items addObject:[[TGMenuSheetButtonItemView alloc] initWithTitle:TGLocalized(@"PhotoEditor.CropAspectRatioOriginal") type:TGMenuSheetButtonTypeDefault fontSize:20.0 action:^{ action(TGPhotoCropOriginalAspectRatio); }]];
-        [items addObject:[[TGMenuSheetButtonItemView alloc] initWithTitle:TGLocalized(@"PhotoEditor.CropAspectRatioSquare") type:TGMenuSheetButtonTypeDefault fontSize:20.0 action:^{ action(@"1.0"); }]];
+        NSMutableArray *actions = [[NSMutableArray alloc] init];
+        [actions addObject:[[LegacyComponentsActionSheetAction alloc] initWithTitle:TGLocalized(@"PhotoEditor.CropAspectRatioOriginal") action:TGPhotoCropOriginalAspectRatio]];
+        [actions addObject:[[LegacyComponentsActionSheetAction alloc] initWithTitle:TGLocalized(@"PhotoEditor.CropAspectRatioSquare") action:@"1.0"]];
         
         CGSize croppedImageSize = _cropView.cropRect.size;
         if (_cropView.cropOrientation == UIImageOrientationLeft || _cropView.cropOrientation == UIImageOrientationRight)
@@ -626,26 +630,14 @@ NSString * const TGPhotoCropOriginalAspectRatio = @"original";
             
             ratio = heightComponent / widthComponent;
             
-            [items addObject:[[TGMenuSheetButtonItemView alloc] initWithTitle:[NSString stringWithFormat:@"%d:%d", (int)widthComponent, (int)heightComponent] type:TGMenuSheetButtonTypeDefault fontSize:20.0 action:^{ action([NSString stringWithFormat:@"%f", ratio]); }]];
+            [actions addObject:[[LegacyComponentsActionSheetAction alloc] initWithTitle:[NSString stringWithFormat:@"%d:%d", (int)widthComponent, (int)heightComponent] action:[NSString stringWithFormat:@"%f", ratio]]];
         }
         
-        [items addObject:[[TGMenuSheetButtonItemView alloc] initWithTitle:TGLocalized(@"Common.Cancel") type:TGMenuSheetButtonTypeCancel fontSize:20.0 action:^
+        [_context presentActionSheet:actions view:(sourceView ?: self.view) completion:^(LegacyComponentsActionSheetAction *selectedAction)
         {
-            __strong TGMenuSheetController *strongController = weakController;
-            if (strongController != nil)
-                [strongController dismissAnimated:true];
-        }]];
-        
-        [controller setItemViews:items];
-//        controller.sourceRect = ^CGRect
-//        {
-//            __strong TGPhotoCropController *strongSelf = weakSelf;
-//            if (strongSelf != nil)
-//                return [strongSelf.view convertRect:strongSelf->_aspectRatioButton.frame fromView:strongSelf->_aspectRatioButton.superview];
-//
-//            return CGRectZero;
-//        };
-        [controller presentInViewController:self.parentViewController sourceView:self.view animated:true];
+            if (selectedAction != nil)
+                action(selectedAction.action);
+        }];
     }
     
     [self _updateTabs];
@@ -720,7 +712,8 @@ NSString * const TGPhotoCropOriginalAspectRatio = @"original";
             return CGRectMake(safeAreaInset.left, 0, parentViewFrame.size.width - panelToolbarLandscapeSize - safeAreaInset.left - safeAreaInset.right, parentViewFrame.size.height - safeAreaInset.bottom);
             
         default:
-            return CGRectMake(0, safeAreaInset.top, parentViewFrame.size.width, parentViewFrame.size.height - panelToolbarPortraitSize - safeAreaInset.top - safeAreaInset.bottom);
+            // Side insets are 0 in portrait except beside iPhone Duo's side strip.
+            return CGRectMake(safeAreaInset.left, safeAreaInset.top, parentViewFrame.size.width - safeAreaInset.left - safeAreaInset.right, parentViewFrame.size.height - panelToolbarPortraitSize - safeAreaInset.top - safeAreaInset.bottom);
     }
 }
 

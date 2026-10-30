@@ -3,7 +3,8 @@ import UIKit
 import Display
 import AsyncDisplayKit
 import TelegramCore
-import RLottieBinding
+import LottieBinding
+import LottieSettings
 import AppBundle
 import GZip
 import SwiftSignalKit
@@ -29,7 +30,7 @@ public final class ManagedAnimationState {
     
     public var executedCallbacks = Set<Int>()
     
-    public init?(displaySize: CGSize, item: ManagedAnimationItem, current: ManagedAnimationState?) {
+    public init?(displaySize: CGSize, item: ManagedAnimationItem, current: ManagedAnimationState?, lottieSettings: LottieRenderingSettings) {
         let resolvedInstance: LottieInstance
         
         if let current = current {
@@ -46,7 +47,7 @@ public final class ManagedAnimationState {
             } else if let unpackedData = TGGUnzipData(data, 5 * 1024 * 1024) {
                 data = unpackedData
             }
-            guard let instance = LottieInstance(data: data, fitzModifier: .none, colorReplacements: item.replaceColors, cacheKey: item.source.cacheKey) else {
+            guard let instance = makeLottieInstance(data: data, fitzModifier: .none, colorReplacements: item.replaceColors, cacheKey: "", settings: lottieSettings) else {
                 return nil
             }
             resolvedInstance = instance
@@ -61,7 +62,9 @@ public final class ManagedAnimationState {
     }
     
     func draw() -> UIImage? {
-        let renderContext = DrawingContext(size: self.displaySize, scale: UIScreenScale, clear: true)
+        guard let renderContext = DrawingContext(size: self.displaySize, scale: UIScreenScale, clear: true) else {
+            return nil
+        }
 
         self.instance.renderFrame(with: Int32(self.frameIndex ?? 0), into: renderContext.bytes.assumingMemoryBound(to: UInt8.self), width: Int32(renderContext.size.width * renderContext.scale), height: Int32(renderContext.size.height * renderContext.scale), bytesPerRow: Int32(renderContext.bytesPerRow))
         return renderContext.generateImage()
@@ -99,7 +102,7 @@ public enum ManagedAnimationSource: Equatable {
                 }
                 return getAppBundle().path(forResource: name, ofType: "json")
             case let .resource(account, resource):
-                return account.postbox.mediaBox.completedResourcePath(resource._asResource())
+                return TelegramEngine(account: account).resources.completedResourcePath(id: resource.id)
         }
     }
     
@@ -142,8 +145,8 @@ public struct ManagedAnimationItem {
 open class ManagedAnimationNode: ASDisplayNode {
     public let intrinsicSize: CGSize
     
-    private let imageNode: ASImageNode
-    private let displayLink: CADisplayLink
+    public let imageNode: ASImageNode
+    private let displayLink: SharedDisplayLinkDriver.Link
     
     public var imageUpdated: ((UIImage) -> Void)?
     public var image: UIImage? {
@@ -153,6 +156,9 @@ open class ManagedAnimationNode: ASDisplayNode {
     public var state: ManagedAnimationState?
     public var trackStack: [ManagedAnimationItem] = []
     public var didTryAdvancingState = false
+    
+    private var previousTimestamp: Double?
+    private var delta: Double?
     
     public var customColor: UIColor? {
         didSet {
@@ -168,7 +174,10 @@ open class ManagedAnimationNode: ASDisplayNode {
         }
     }
     
-    public init(size: CGSize) {
+    public let lottieSettings: LottieRenderingSettings
+
+    public init(size: CGSize, lottieSettings: LottieRenderingSettings) {
+        self.lottieSettings = lottieSettings
         self.intrinsicSize = size
         
         self.imageNode = ASImageNode()
@@ -176,50 +185,48 @@ open class ManagedAnimationNode: ASDisplayNode {
         self.imageNode.displaysAsynchronously = false
         self.imageNode.frame = CGRect(origin: CGPoint(), size: self.intrinsicSize)
         
-        final class DisplayLinkTarget: NSObject {
-            private let f: () -> Void
-            
-            init(_ f: @escaping () -> Void) {
-                self.f = f
-            }
-            
-            @objc func event() {
-                self.f()
-            }
-        }
         var displayLinkUpdate: (() -> Void)?
-        self.displayLink = CADisplayLink(target: DisplayLinkTarget {
+        self.displayLink = SharedDisplayLinkDriver.shared.add { _ in
             displayLinkUpdate?()
-        }, selector: #selector(DisplayLinkTarget.event))
-        if #available(iOS 10.0, *) {
-            self.displayLink.preferredFramesPerSecond = 60
         }
         
         super.init()
         
         self.addSubnode(self.imageNode)
         
-        self.displayLink.add(to: RunLoop.main, forMode: .common)
-        
         displayLinkUpdate = { [weak self] in
-            self?.updateAnimation()
+            if let strongSelf = self {
+                let currentTimestamp = CACurrentMediaTime()
+                let delta: Double
+                if let previousTimestamp = strongSelf.previousTimestamp {
+                    delta = currentTimestamp - previousTimestamp
+                } else {
+                    delta = 1.0 / 60.0
+                }
+                strongSelf.delta = delta
+                strongSelf.updateAnimation()
+                strongSelf.previousTimestamp = currentTimestamp
+            }
         }
     }
     
     open func advanceState() {
         guard !self.trackStack.isEmpty else {
+            self.displayLink.isPaused = true
             return
         }
         
         let item = self.trackStack.removeFirst()
         
         if let state = self.state, state.item.source == item.source {
-            self.state = ManagedAnimationState(displaySize: self.intrinsicSize, item: item, current: state)
+            self.state = ManagedAnimationState(displaySize: self.intrinsicSize, item: item, current: state, lottieSettings: self.lottieSettings)
         } else {
-            self.state = ManagedAnimationState(displaySize: self.intrinsicSize, item: item, current: nil)
+            self.state = ManagedAnimationState(displaySize: self.intrinsicSize, item: item, current: nil, lottieSettings: self.lottieSettings)
         }
         
         self.didTryAdvancingState = false
+        self.previousTimestamp = CACurrentMediaTime()
+        self.displayLink.isPaused = false
     }
     
     public func updateAnimation() {
@@ -228,6 +235,7 @@ open class ManagedAnimationNode: ASDisplayNode {
         }
         
         guard let state = self.state else {
+            self.displayLink.isPaused = true
             return
         }
         
@@ -289,9 +297,8 @@ open class ManagedAnimationNode: ASDisplayNode {
             }
         }
         
-        var animationAdvancement: Double = 1.0 / 60.0
+        var animationAdvancement: Double = self.delta ?? 1.0 / 60.0
         animationAdvancement *= Double(min(2, self.trackStack.count + 1))
-        
         state.relativeTime += animationAdvancement
         
         if state.relativeTime >= duration && !self.didTryAdvancingState {
@@ -305,7 +312,21 @@ open class ManagedAnimationNode: ASDisplayNode {
         }
     }
     
-    public func trackTo(item: ManagedAnimationItem) {
+    public func trackTo(item: ManagedAnimationItem, immediately: Bool = false) {
+        if immediately {
+            self.trackStack.removeAll()
+            if let state = self.state, state.item.source == item.source {
+                self.state = ManagedAnimationState(displaySize: self.intrinsicSize, item: item, current: state, lottieSettings: self.lottieSettings)
+            } else {
+                self.state = ManagedAnimationState(displaySize: self.intrinsicSize, item: item, current: nil, lottieSettings: self.lottieSettings)
+            }
+            self.didTryAdvancingState = false
+            self.previousTimestamp = CACurrentMediaTime()
+            self.delta = 0.0
+            self.displayLink.isPaused = false
+            self.updateAnimation()
+            return
+        }
         self.trackStack.append(item)
         self.didTryAdvancingState = false
         self.updateAnimation()
@@ -321,32 +342,51 @@ open class ManagedAnimationNode: ASDisplayNode {
 
 public final class SimpleAnimationNode: ManagedAnimationNode {
     private let stillItem: ManagedAnimationItem
-    private let animationItem: ManagedAnimationItem
+    private let stillEndItem: ManagedAnimationItem
+    private var animationItem: ManagedAnimationItem
     
     public let size: CGSize
     private let playOnce: Bool
     public private(set) var didPlay = false
     
-    public init(animationName: String, replaceColors: [UInt32: UInt32]? = nil, size: CGSize, playOnce: Bool = false) {
+    public init(animationName: String, replaceColors: [UInt32: UInt32]? = nil, size: CGSize, playOnce: Bool = false, startFrame: Int = 0, lottieSettings: LottieRenderingSettings) {
+        let startFrame = max(0, startFrame)
+        let source = ManagedAnimationSource.local(animationName)
         self.size = size
         self.playOnce = playOnce
-        self.stillItem = ManagedAnimationItem(source: .local(animationName), replaceColors: replaceColors, frames: .range(startFrame: 0, endFrame: 0), duration: 0.01)
-        self.animationItem = ManagedAnimationItem(source: .local(animationName), replaceColors: replaceColors)
+        self.stillItem = ManagedAnimationItem(source: source, replaceColors: replaceColors, frames: .range(startFrame: startFrame, endFrame: startFrame), duration: 0.01)
+        self.stillEndItem = ManagedAnimationItem(source: source, replaceColors: replaceColors, frames: .still(.end), duration: 0.01)
+        self.animationItem = ManagedAnimationItem(source: source, replaceColors: replaceColors)
 
-        super.init(size: size)
+        super.init(size: size, lottieSettings: lottieSettings)
         
         self.trackTo(item: self.stillItem)
-    }
-    
-    public func play() {
-        if !self.playOnce || !self.didPlay {
-            self.didPlay = true
-            self.trackTo(item: self.animationItem)
+        if startFrame > 0, let state = self.state {
+            let clampedStartFrame = min(startFrame, max(0, state.frameCount - 1))
+            let fps = state.fps > 0.0 ? state.fps : 60.0
+            self.animationItem = ManagedAnimationItem(
+                source: source,
+                replaceColors: replaceColors,
+                frames: .range(startFrame: clampedStartFrame, endFrame: state.frameCount),
+                duration: Double(max(1, state.frameCount - clampedStartFrame)) / fps
+            )
         }
     }
     
-    public func reset() {
+    public func play(immediately: Bool = false) {
+        if !self.playOnce || !self.didPlay {
+            self.didPlay = true
+            self.trackTo(item: self.animationItem, immediately: immediately)
+        }
+    }
+    
+    public func reset(immediately: Bool = false) {
         self.didPlay = false
-        self.trackTo(item: self.stillItem)
+        self.trackTo(item: self.stillItem, immediately: immediately)
+    }
+    
+    public func seekToEnd(immediately: Bool = false) {
+        self.didPlay = false
+        self.trackTo(item: self.stillEndItem, immediately: immediately)
     }
 }

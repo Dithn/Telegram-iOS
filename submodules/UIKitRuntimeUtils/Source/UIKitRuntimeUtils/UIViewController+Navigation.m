@@ -4,6 +4,8 @@
 #import <objc/runtime.h>
 
 #import "NSWeakReference.h"
+#import <UIKitRuntimeUtils/UIKitUtils.h>
+#import <dlfcn.h>
 
 @interface UIViewControllerPresentingProxy : UIViewController
 
@@ -43,6 +45,7 @@ static const void *inputAccessoryHeightProviderKey = &inputAccessoryHeightProvid
 static const void *interactiveTransitionGestureRecognizerTestKey = &interactiveTransitionGestureRecognizerTestKey;
 static const void *UIViewControllerHintWillBePresentedInPreviewingContextKey = &UIViewControllerHintWillBePresentedInPreviewingContextKey;
 static const void *disablesInteractiveModalDismissKey = &disablesInteractiveModalDismissKey;
+static const void *forceFullRefreshRateKey = &forceFullRefreshRateKey;
 
 static bool notyfyingShiftState = false;
 
@@ -90,6 +93,565 @@ static bool notyfyingShiftState = false;
 
 @end
 
+@interface CADisplayLink (FrameRateRangeOverride)
+
+- (void)_65087dc8_setPreferredFrameRateRange:(CAFrameRateRange)range API_AVAILABLE(ios(15.0));
+
+@end
+
+@implementation CADisplayLink (FrameRateRangeOverride)
+
+- (void)_65087dc8_setPreferredFrameRateRange:(CAFrameRateRange)range API_AVAILABLE(ios(15.0)) {
+    if ([self associatedObjectForKey:forceFullRefreshRateKey] != nil) {
+        float maxFps = [UIScreen mainScreen].maximumFramesPerSecond;
+        if (maxFps > 61.0f) {
+            range = CAFrameRateRangeMake(maxFps, maxFps, maxFps);
+        }
+    }
+    
+    [self _65087dc8_setPreferredFrameRateRange:range];
+}
+
+@end
+
+@implementation CALayerSpringParametersOverrideParameters
+
+- (instancetype _Nonnull)init {
+    self = [super init];
+    if (self != nil) {
+    }
+    return self;
+}
+
+@end
+
+@implementation CALayerSpringParametersOverrideParametersSpring
+
+- (instancetype _Nonnull)initWithStiffness:(CGFloat)stiffness damping:(CGFloat)damping duration:(double)duration {
+    self = [super init];
+    if (self != nil) {
+        _stiffness = stiffness;
+        _damping = damping;
+        _duration = duration;
+    }
+    return self;
+}
+
+@end
+
+@implementation CALayerSpringParametersOverrideParametersCustomCurve
+
+- (instancetype _Nonnull)initWithCp1:(CGPoint)cp1 cp2:(CGPoint)cp2 {
+    self = [super init];
+    if (self != nil) {
+        _cp1 = cp1;
+        _cp2 = cp2;
+    }
+    return self;
+}
+
+@end
+
+
+@implementation CALayerSpringParametersOverride
+
+- (instancetype _Nonnull)initWithParameters:(CALayerSpringParametersOverrideParameters * _Nullable)parameters {
+    self = [super init];
+    if (self != nil) {
+        _parameters = parameters;
+    }
+    return self;
+}
+
+@end
+
+static NSMutableArray<CALayerSpringParametersOverride *> *currentSpringParametersOverrideStack() {
+    static NSMutableArray *array = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        array = [[NSMutableArray alloc] init];
+    });
+    return array;
+}
+
+@implementation CALayer (TelegramAddAnimation)
+
++ (void)pushSpringParametersOverride:(CALayerSpringParametersOverride * _Nonnull)springParametersOverride {
+    if (springParametersOverride) {
+        [currentSpringParametersOverrideStack() addObject:springParametersOverride];
+    }
+}
+
++ (void)popSpringParametersOverride {
+    if (currentSpringParametersOverrideStack().count != 0) {
+        [currentSpringParametersOverrideStack() removeLastObject];
+    }
+}
+
+- (void)_65087dc8_addAnimation:(CAAnimation *)anim forKey:(NSString *)key {
+    CAAnimation *updatedAnimation = anim;
+    if (currentSpringParametersOverrideStack().count != 0 && [anim isKindOfClass:[CASpringAnimation class]]) {
+        CALayerSpringParametersOverride *overrideData = [currentSpringParametersOverrideStack() lastObject];
+        if (overrideData) {
+            if ([overrideData.parameters isKindOfClass:[CALayerSpringParametersOverrideParametersSpring class]]) {
+                CALayerSpringParametersOverrideParametersSpring *parameters = (CALayerSpringParametersOverrideParametersSpring *)overrideData.parameters;
+                CABasicAnimation *sourceAnimation = (CABasicAnimation *)anim;
+                
+                CASpringAnimation *animation = makeSpringBounceAnimationImpl(sourceAnimation.keyPath, 0.0, parameters.damping);
+                
+                animation.stiffness = parameters.stiffness;
+                animation.fromValue = sourceAnimation.fromValue;
+                animation.toValue = sourceAnimation.toValue;
+                animation.byValue = sourceAnimation.byValue;
+                animation.additive = sourceAnimation.additive;
+                animation.removedOnCompletion = sourceAnimation.isRemovedOnCompletion;
+                animation.fillMode = sourceAnimation.fillMode;
+                animation.beginTime = sourceAnimation.beginTime;
+                animation.timeOffset = sourceAnimation.timeOffset;
+                animation.repeatCount = sourceAnimation.repeatCount;
+                animation.autoreverses = sourceAnimation.autoreverses;
+                
+                float k = animationDurationFactorImpl();
+                __unused float speed = 1.0f;
+                if (k != 0.0 && k != 1.0) {
+                    speed = 1.0f / k;
+                }
+                animation.speed = sourceAnimation.speed * (float)(animation.duration / parameters.duration);
+                
+                updatedAnimation = animation;
+            } else if ([overrideData.parameters isKindOfClass:[CALayerSpringParametersOverrideParametersCustomCurve class]]) {
+                CALayerSpringParametersOverrideParametersCustomCurve *parameters = (CALayerSpringParametersOverrideParametersCustomCurve *)overrideData.parameters;
+                CABasicAnimation *sourceAnimation = (CABasicAnimation *)anim;
+                
+                CABasicAnimation *animation = [CABasicAnimation animationWithKeyPath:sourceAnimation.keyPath];
+                animation.fromValue = sourceAnimation.fromValue;
+                animation.toValue = sourceAnimation.toValue;
+                animation.byValue = sourceAnimation.byValue;
+                animation.additive = sourceAnimation.additive;
+                animation.duration = sourceAnimation.duration;
+                animation.timingFunction = [[CAMediaTimingFunction alloc] initWithControlPoints:parameters.cp1.x :parameters.cp1.y :parameters.cp2.x :parameters.cp2.y];
+                animation.removedOnCompletion = sourceAnimation.isRemovedOnCompletion;
+                animation.fillMode = sourceAnimation.fillMode;
+                animation.speed = sourceAnimation.speed;
+                animation.beginTime = sourceAnimation.beginTime;
+                animation.timeOffset = sourceAnimation.timeOffset;
+                animation.repeatCount = sourceAnimation.repeatCount;
+                animation.autoreverses = sourceAnimation.autoreverses;
+                
+                float k = animationDurationFactorImpl();
+                float speed = 1.0f;
+                if (k != 0.0 && k != 1.0) {
+                    speed = 1.0f / k;
+                }
+                animation.speed = speed * sourceAnimation.speed;
+                
+                updatedAnimation = animation;
+            } else {
+                bool isNativeGlass = false;
+                if (@available(iOS 26.0, *)) {
+                    isNativeGlass = true;
+                }
+                if (isNativeGlass && ABS(anim.duration - 0.3832) <= 0.0001) {
+                } else if (ABS(anim.duration - 0.5) <= 0.0001) {
+                } else {
+                    CABasicAnimation *sourceAnimation = (CABasicAnimation *)anim;
+                    
+                    CABasicAnimation *animation = [CABasicAnimation animationWithKeyPath:sourceAnimation.keyPath];
+                    animation.fromValue = sourceAnimation.fromValue;
+                    animation.toValue = sourceAnimation.toValue;
+                    animation.byValue = sourceAnimation.byValue;
+                    animation.additive = sourceAnimation.additive;
+                    animation.duration = sourceAnimation.duration;
+                    animation.timingFunction = [[CAMediaTimingFunction alloc] initWithControlPoints:0.380 :0.700 :0.125 :1.000];
+                    animation.removedOnCompletion = sourceAnimation.isRemovedOnCompletion;
+                    animation.fillMode = sourceAnimation.fillMode;
+                    animation.speed = sourceAnimation.speed;
+                    animation.beginTime = sourceAnimation.beginTime;
+                    animation.timeOffset = sourceAnimation.timeOffset;
+                    animation.repeatCount = sourceAnimation.repeatCount;
+                    animation.autoreverses = sourceAnimation.autoreverses;
+                    
+                    float k = animationDurationFactorImpl();
+                    float speed = 1.0f;
+                    if (k != 0.0 && k != 1.0) {
+                        speed = 1.0f / k;
+                    }
+                    animation.speed = speed * sourceAnimation.speed;
+                    
+                    updatedAnimation = animation;
+                }
+            }
+        }
+    }
+    [self _65087dc8_addAnimation:updatedAnimation forKey:key];
+}
+
+@end
+
+@implementation UIScrollView (FrameRateRangeOverride)
+
+- (void)fixScrollDisplayLink {
+    if (@available(iOS 16.0, *)) {
+        return;
+    }
+    static NSString *scrollHeartbeatKey = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        scrollHeartbeatKey = [NSString stringWithFormat:@"_%@", @"scrollHeartbeat"];
+    });
+    
+    id value = [self valueForKey:scrollHeartbeatKey];
+    if ([value isKindOfClass:[CADisplayLink class]]) {
+        CADisplayLink *displayLink = (CADisplayLink *)value;
+        if ([displayLink associatedObjectForKey:forceFullRefreshRateKey] == nil) {
+            [displayLink setAssociatedObject:@true forKey:forceFullRefreshRateKey];
+            
+            if (@available(iOS 15.0, *)) {
+                float maxFps = [UIScreen mainScreen].maximumFramesPerSecond;
+                if (maxFps > 61.0f) {
+                    [displayLink setPreferredFrameRateRange:CAFrameRateRangeMake(maxFps, maxFps, maxFps)];
+                }
+            }
+        }
+    }
+}
+
+@end
+
+@interface UIWindow (Telegram)
+
+@end
+
+@implementation UIWindow (Telegram)
+
+- (instancetype)_65087dc8_initWithFrame:(CGRect)frame {
+    return [self _65087dc8_initWithFrame:frame];
+}
+
+@end
+
+// The keyboard lives in a UIRemoteKeyboardWindow that belongs to an internal keyboard scene, so it is
+// absent from UIWindowScene.windows and from UIApplication.windows (both filter internal windows since
+// iOS 16). It is reached through the window scene's keyboard scene delegate.
+//
+// Do NOT go back to +[UIRemoteKeyboardWindow remoteKeyboardWindowForScreen:create:]: as of iOS 27 that
+// method traps (`brk #0`) when the calling binary is linked against the iOS 27 SDK or newer. The path
+// below has no such guard.
+@protocol UIKeyboardSceneDelegateProtocol
+
+- (UIWindow * _Nullable)keyboardWindow;
+
+@end
+
+@protocol UIWindowSceneKeyboardProtocol
+
+- (id _Nullable)keyboardSceneDelegate;
+
+@end
+
+@interface UIFocusSystem (Telegram)
+
+@end
+
+@implementation UIFocusSystem (Telegram)
+
+- (void)_65087dc8_updateFocusIfNeeded {
+    //TODO:Re-enable
+}
+
+@end
+
+static EffectSettingsContainerView *findTopmostEffectSuperview(UIView *view, int depth) {
+    if (depth > 10) {
+        return nil;
+    }
+    if ([view isKindOfClass:[EffectSettingsContainerView class]]) {
+        return (EffectSettingsContainerView *)view;
+    }
+    if (view.superview != nil) {
+        return findTopmostEffectSuperview(view.superview, depth + 1);
+    } else {
+        return nil;
+    }
+}
+
+static id (*original_backdropLayerDidChangeLuma)(UIView *, SEL, CALayer *, double) = NULL;
+static void replacement_backdropLayerDidChangeLuma(UIView *self, SEL selector, CALayer *layer, double luma) {
+    EffectSettingsContainerView *topmostSuperview = findTopmostEffectSuperview(self, 0);
+    if (topmostSuperview) {
+        luma = MIN(MAX(luma, topmostSuperview.lumaMin), topmostSuperview.lumaMax);
+    }
+    original_backdropLayerDidChangeLuma(self, selector, layer, luma);
+}
+
+static NSString *TGEncodeText(NSString *string, int key) {
+    NSMutableString *result = [[NSMutableString alloc] init];
+    
+    for (int i = 0; i < (int)[string length]; i++) {
+        unichar c = [string characterAtIndex:i];
+        c += key;
+        [result appendString:[NSString stringWithCharacters:&c length:1]];
+    }
+    
+    return result;
+}
+
+static char glassBlurRadiusKey;
+static NSString *glassBackgroundFilterName = nil;
+static NSString *inputBlurRadiusKey = nil;
+static NSString *morphContainerClassSuffix = nil;
+
+static void (*original_backdropSetFilters)(CALayer *, SEL, NSArray *) = NULL;
+static double morphGlassBlurRadius = 0.0;
+
+static double glassBlurRadiusForView(UIView *view) {
+    UIView *current = view;
+    for (int i = 0; current != nil && i < 12; i++) {
+        if ([current isKindOfClass:[EffectSettingsContainerView class]]) {
+            return ((EffectSettingsContainerView *)current).glassBlurRadius;
+        }
+        if (morphGlassBlurRadius > 0.0 && [NSStringFromClass([current class]) hasSuffix:morphContainerClassSuffix]) {
+            return morphGlassBlurRadius;
+        }
+        current = current.superview;
+    }
+    return 0.0;
+}
+
+static void replacement_backdropSetFilters(CALayer *self, SEL selector, NSArray *filters) {
+    id delegate = self.delegate;
+    if (filters.count != 0 && [delegate isKindOfClass:[UIView class]]) {
+        double radius = glassBlurRadiusForView((UIView *)delegate);
+        if (radius > 0.0) {
+            for (id filter in filters) {
+                if ([[filter valueForKey:@"name"] isEqual:glassBackgroundFilterName]) {
+                    objc_setAssociatedObject(filter, &glassBlurRadiusKey, @(radius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    [filter setValue:@(radius) forKey:inputBlurRadiusKey];
+                }
+            }
+        }
+    }
+    original_backdropSetFilters(self, selector, filters);
+}
+
+static void applyGlassBlurRadiusToBackdropLayer(double radius, CALayer *layer) {
+    NSArray *filters = layer.filters;
+    for (id filter in filters) {
+        if (![[filter valueForKey:@"name"] isEqual:glassBackgroundFilterName]) {
+            continue;
+        }
+        objc_setAssociatedObject(filter, &glassBlurRadiusKey, radius > 0.0 ? @(radius) : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (radius <= 0.0) {
+            return;
+        }
+        NSNumber *current = [filter valueForKey:inputBlurRadiusKey];
+        if (current == nil || current.doubleValue != radius) {
+            layer.filters = @[];
+            [filter setValue:@(radius) forKey:inputBlurRadiusKey];
+            layer.filters = filters;
+        }
+        return;
+    }
+}
+
+static void (*original_backdropViewDidMoveToWindow)(UIView *, SEL) = NULL;
+static void replacement_backdropViewDidMoveToWindow(UIView *self, SEL selector) {
+    original_backdropViewDidMoveToWindow(self, selector);
+    if (self.window != nil) {
+        double radius = glassBlurRadiusForView(self);
+        if (radius > 0.0) {
+            applyGlassBlurRadiusToBackdropLayer(radius, self.layer);
+        }
+    }
+}
+
+static void (*original_filterSetValueForKey)(NSObject *, SEL, id, NSString *) = NULL;
+static void replacement_filterSetValueForKey(NSObject *self, SEL selector, id value, NSString *key) {
+    if ([key isEqualToString:inputBlurRadiusKey]) {
+        NSNumber *radius = objc_getAssociatedObject(self, &glassBlurRadiusKey);
+        if (radius != nil) {
+            value = radius;
+        }
+    }
+    original_filterSetValueForKey(self, selector, value, key);
+}
+
+static void registerEffectViewOverrides(void) {
+    glassBackgroundFilterName = TGEncodeText(@"hmbttCbdlhspvoe", -1);
+    inputBlurRadiusKey = TGEncodeText(@"joqvuCmvsSbejvt", -1);
+    morphContainerClassSuffix = TGEncodeText(@"NpsqiBojnbujpoDpoubjofsWjfx", -1);
+    Class filterClass = NSClassFromString(TGEncodeText(@"DBGjmufs", -1));
+    if (filterClass != nil) {
+        Method m = class_getInstanceMethod(filterClass, @selector(setValue:forKey:));
+        if (m) {
+            original_filterSetValueForKey = (void (*)(NSObject *, SEL, id, NSString *))method_getImplementation(m);
+            class_replaceMethod(filterClass, @selector(setValue:forKey:), (IMP)&replacement_filterSetValueForKey, method_getTypeEncoding(m));
+        }
+    }
+    Class backdropClass = NSClassFromString(TGEncodeText(@"DBCbdlespqMbzfs", -1));
+    if (backdropClass != nil) {
+        Method filtersMethod = class_getInstanceMethod(backdropClass, @selector(setFilters:));
+        if (filtersMethod) {
+            original_backdropSetFilters = (void (*)(CALayer *, SEL, NSArray *))method_getImplementation(filtersMethod);
+            class_replaceMethod(backdropClass, @selector(setFilters:), (IMP)&replacement_backdropSetFilters, method_getTypeEncoding(filtersMethod));
+        }
+    }
+
+    NSMutableArray<NSString *> *nameList = [[NSMutableArray alloc] init];
+    [nameList addObject:TGEncodeText(@"_TtC5UIKitP33_ACD4A08F4BE9D00246F2A9C24A80CA8817UISDFBackdropView", 0)];
+    Class backdropViewClass = NSClassFromString(nameList.firstObject);
+    if (backdropViewClass != nil) {
+        Method moveMethod = class_getInstanceMethod(backdropViewClass, @selector(didMoveToWindow));
+        if (moveMethod) {
+            original_backdropViewDidMoveToWindow = (void (*)(UIView *, SEL))method_getImplementation(moveMethod);
+            class_replaceMethod(backdropViewClass, @selector(didMoveToWindow), (IMP)&replacement_backdropViewDidMoveToWindow, method_getTypeEncoding(moveMethod));
+        }
+    }
+    NSString *selectorString = [@"backdropLayer" stringByAppendingString:@":didChangeLuma:"];
+    
+    for (NSString *name in nameList) {
+        Class classValue = NSClassFromString(name);
+        if (classValue == nil) {
+            continue;
+        }
+        
+        Method method = (Method)[RuntimeUtils getMethodOfClass:classValue selector:NSSelectorFromString(selectorString)];
+        if (method) {
+            const char *typeEncoding = method_getTypeEncoding(method);
+            if (strcmp(typeEncoding, "v32@0:8@16d24") == 0) {
+                original_backdropLayerDidChangeLuma = (id (*)(id, SEL, CALayer *, double))method_getImplementation(method);
+                [RuntimeUtils replaceMethodImplementationOfClass:classValue selector:NSSelectorFromString(selectorString) replacement:(IMP)&replacement_backdropLayerDidChangeLuma];
+            }
+        }
+        break;
+    }
+}
+
+static NSLock *webHelpersLock() {
+    static NSLock *value = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        value = [[NSLock alloc] init];
+    });
+    return value;
+}
+
+@interface TrustedWebRecord : NSObject
+
+@property (nonatomic) NSInteger nextReference;
+@property (nonatomic, strong, readonly) NSMutableSet<NSNumber *> *references;
+
+@end
+
+@implementation TrustedWebRecord
+
+- (instancetype)init {
+    self = [super init];
+    if (self != nil) {
+        _references = [[NSMutableSet alloc] init];
+    }
+    return self;
+}
+
+- (NSInteger)addReference {
+    NSInteger reference = _nextReference;
+    _nextReference += 1;
+    [_references addObject:@(reference)];
+    return reference;
+}
+
+- (void)removeReference:(NSInteger)reference {
+    [_references removeObject:@(reference)];
+}
+
+- (bool)isEmpty {
+    return _references.count == 0;
+}
+
+@end
+
+static NSMutableDictionary<NSString *, TrustedWebRecord *> *trustedWebRecords() {
+    static NSMutableDictionary *value = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        value = [[NSMutableDictionary alloc] init];
+    });
+    return value;
+}
+
+@implementation WebHelpers
+
++ (NSArray<NSString *> * _Nonnull)threadSafeTrustedDomains {
+    [webHelpersLock() lock];
+    
+    NSMutableArray<NSString *> *result = [[NSMutableArray alloc] init];
+    for (NSString *domain in trustedWebRecords()) {
+        [result addObject:domain];
+    }
+    [result sortUsingSelector:@selector(compare:)];
+    
+    [webHelpersLock() unlock];
+    
+    return result;
+}
+
++ (dispatch_block_t _Nonnull)addTrustedDomain:(NSString * _Nonnull)domain {
+    [webHelpersLock() lock];
+    
+    TrustedWebRecord *record = trustedWebRecords()[domain];
+    if (record == nil) {
+        record = [[TrustedWebRecord alloc] init];
+        trustedWebRecords()[domain] = record;
+    }
+    NSInteger reference = [record addReference];
+    __block __weak TrustedWebRecord *weakRecord = record;
+    
+    [webHelpersLock() unlock];
+    
+    return ^{
+        [webHelpersLock() lock];
+        
+        TrustedWebRecord *strongRecord = weakRecord;
+        if (strongRecord && trustedWebRecords()[domain] == strongRecord) {
+            [strongRecord removeReference:reference];
+            if ([strongRecord isEmpty]) {
+                [trustedWebRecords() removeObjectForKey:domain];
+            }
+        }
+        
+        [webHelpersLock() unlock];
+    };
+}
+
++ (void)forceRefreshTrustedDomains:(WKWebsiteDataStore * _Nonnull)websiteDataStore {
+    static void (*reinitializeFunction)(CFTypeRef dataStoreRef) = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSString *nameString = [NSString stringWithFormat:@"WK%@", @"WebsiteDataStoreReinitializeAppBoundDomains"];
+        reinitializeFunction = dlsym(RTLD_DEFAULT, [nameString UTF8String]);
+    });
+    
+    if (reinitializeFunction) {
+        reinitializeFunction((__bridge CFTypeRef)(websiteDataStore));
+    }
+}
+
+@end
+
+@implementation NSBundle (Telegram)
+
+- (id)_65087dc8_objectForInfoDictionaryKey:(NSString *)key {
+    if ([key isEqualToString:@"WKAppBoundDomains"]) {
+        NSArray *result = [WebHelpers threadSafeTrustedDomains];
+        if (result.count != 0) {
+            return result;
+        }
+    }
+    return [self _65087dc8_objectForInfoDictionaryKey:key];
+}
+
+@end
+
 @implementation UIViewController (Navigation)
 
 + (void)load
@@ -105,6 +667,34 @@ static bool notyfyingShiftState = false;
         [RuntimeUtils swizzleInstanceMethodOfClass:[UIViewController class] currentSelector:@selector(presentingViewController) newSelector:@selector(_65087dc8_presentingViewController)];
         [RuntimeUtils swizzleInstanceMethodOfClass:[UIViewController class] currentSelector:@selector(presentViewController:animated:completion:) newSelector:@selector(_65087dc8_presentViewController:animated:completion:)];
         [RuntimeUtils swizzleInstanceMethodOfClass:[UIViewController class] currentSelector:@selector(setNeedsStatusBarAppearanceUpdate) newSelector:@selector(_65087dc8_setNeedsStatusBarAppearanceUpdate)];
+        
+        [RuntimeUtils swizzleInstanceMethodOfClass:[UIWindow class] currentSelector:@selector(initWithFrame:) newSelector:@selector(_65087dc8_initWithFrame:)];
+        
+        if (@available(iOS 16.0, *)) {
+        } else if (@available(iOS 15.0, *)) {
+            [RuntimeUtils swizzleInstanceMethodOfClass:[CADisplayLink class] currentSelector:@selector(setPreferredFrameRateRange:) newSelector:@selector(_65087dc8_setPreferredFrameRateRange:)];
+        }
+        
+        [RuntimeUtils swizzleInstanceMethodOfClass:[CALayer class] currentSelector:@selector(addAnimation:forKey:) newSelector:@selector(_65087dc8_addAnimation:forKey:)];
+        
+        [RuntimeUtils swizzleInstanceMethodOfClass:[UIFocusSystem class] currentSelector:@selector(updateFocusIfNeeded) newSelector:@selector(_65087dc8_updateFocusIfNeeded)];
+        
+        [RuntimeUtils swizzleInstanceMethodOfClass:[NSBundle class] currentSelector:@selector(objectForInfoDictionaryKey:) newSelector:@selector(_65087dc8_objectForInfoDictionaryKey:)];
+        
+        if (@available(iOS 26.0, *)) {
+            registerEffectViewOverrides();
+        }
+        /*#if DEBUG
+        Class cls = NSClassFromString(@"WKBrowsingContextController");
+        SEL sel = NSSelectorFromString(@"registerSchemeForCustomProtocol:");
+        if ([cls respondsToSelector:sel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [cls performSelector:sel withObject:@"http"];
+            [cls performSelector:sel withObject:@"https"];
+#pragma clang diagnostic pop
+        }
+        #endif*/
     });
 }
 
@@ -236,6 +826,67 @@ static bool notyfyingShiftState = false;
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [self setStatusBarHidden:hidden withAnimation:animation];
 #pragma clang diagnostic pop
+}
+
+/*static void dumpViews(UIView *view, NSString *indent) {
+    NSLog(@"%@%@", indent, [view debugDescription]);
+    NSString *nextIndent = [indent stringByAppendingString:@"-"];
+    
+    if ([view isKindOfClass:[UIVisualEffectView class]]) {
+        UIVisualEffectView *effectView = (UIVisualEffectView *)view;
+        if (@available(iOS 26.0, *)) {
+            if ([effectView.effect isKindOfClass:[UIGlassEffect class]]) {
+                UIGlassEffect *effect = (UIGlassEffect *)effectView.effect;
+                NSObject *glass = [effect valueForKey:@"glass"];
+                NSLog(@"glass %@", glass.debugDescription);
+            }
+        }
+    }
+    
+    for (UIView *subview in view.subviews) {
+        dumpViews(subview, nextIndent);
+    }
+}*/
+
+- (UIWindow * _Nullable)internalGetKeyboard {
+    UIWindowScene *foundScene = nil;
+    for (UIScene *scene in self.connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) {
+            continue;
+        }
+        if (scene.activationState == UISceneActivationStateForegroundActive) {
+            foundScene = (UIWindowScene *)scene;
+            break;
+        }
+        if (foundScene == nil) {
+            foundScene = (UIWindowScene *)scene;
+        }
+    }
+
+    return [self internalGetKeyboardForScene:foundScene];
+}
+
+- (UIWindow * _Nullable)internalGetKeyboardForScene:(UIWindowScene * _Nullable)scene {
+    if (scene == nil) {
+        return nil;
+    }
+    if (![scene respondsToSelector:@selector(keyboardSceneDelegate)]) {
+        return nil;
+    }
+
+    id keyboardSceneDelegate = [(id<UIWindowSceneKeyboardProtocol>)scene keyboardSceneDelegate];
+    if (![keyboardSceneDelegate respondsToSelector:@selector(keyboardWindow)]) {
+        return nil;
+    }
+
+    // nil until the keyboard has been created for this scene, and also whenever the keyboard UI is
+    // hosted out of process — in that configuration there is no in-process keyboard window at all.
+    UIWindow *result = [(id<UIKeyboardSceneDelegateProtocol>)keyboardSceneDelegate keyboardWindow];
+    if (![result isKindOfClass:[UIWindow class]]) {
+        return nil;
+    }
+
+    return result;
 }
 
 @end
@@ -394,5 +1045,41 @@ void applyKeyboardAutocorrection(UITextView * _Nonnull textView) {
     IMP canBecomeKeyImplementation = method_getImplementation(canBecomeKeyMethod);
     class_addMethod(self, canBecomeKeySelector, canBecomeKeyImplementation, method_getTypeEncoding(canBecomeKeyMethod));
 }
+
+@end
+
+void snapshotViewByDrawingInContext(UIView * _Nonnull view) {
+    [view drawViewHierarchyInRect:view.bounds afterScreenUpdates:false];
+}
+
+@implementation EffectSettingsContainerView
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self != nil) {
+        _lumaMin = 0.0;
+        _lumaMax = 0.0;
+    }
+    return self;
+}
+
++ (double)morphGlassBlurRadius {
+    return morphGlassBlurRadius;
+}
+
++ (void)setMorphGlassBlurRadius:(double)radius {
+    morphGlassBlurRadius = radius;
+}
+
++ (void)applyGlassBlurRadius:(double)radius toLayerTree:(CALayer *)layer depth:(int)depth {
+    if (depth > 12) {
+        return;
+    }
+    applyGlassBlurRadiusToBackdropLayer(radius, layer);
+    for (CALayer *sublayer in layer.sublayers) {
+        [self applyGlassBlurRadius:radius toLayerTree:sublayer depth:depth + 1];
+    }
+}
+
 
 @end

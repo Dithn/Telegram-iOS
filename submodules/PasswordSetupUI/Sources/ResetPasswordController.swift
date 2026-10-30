@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
@@ -12,10 +11,12 @@ import AlertUI
 import PresentationDataUtils
 
 private final class ResetPasswordControllerArguments {
+    let context: AccountContext
     let updateCodeText: (String) -> Void
     let openHelp: () -> Void
     
-    init(updateCodeText: @escaping (String) -> Void, openHelp: @escaping () -> Void) {
+    init(context: AccountContext, updateCodeText: @escaping (String) -> Void, openHelp: @escaping () -> Void) {
+        self.context = context
         self.updateCodeText = updateCodeText
         self.openHelp = openHelp
     }
@@ -71,7 +72,7 @@ private enum ResetPasswordEntry: ItemListNodeEntry, Equatable {
         let arguments = arguments as! ResetPasswordControllerArguments
         switch self {
             case let .code(theme, _, text, value):
-                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(string: text, textColor: theme.list.itemPrimaryTextColor), text: value, placeholder: "", type: .number, spacing: 10.0, tag: ResetPasswordEntryTag.code, sectionId: self.section, textUpdated: { updatedText in
+                return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(string: text, textColor: theme.list.itemPrimaryTextColor), text: value, placeholder: "", type: .number, spacing: 10.0, tag: ResetPasswordEntryTag.code, sectionId: self.section, textUpdated: { updatedText in
                     arguments.updateCodeText(updatedText)
                 }, action: {
                 })
@@ -129,7 +130,7 @@ public func resetPasswordController(context: AccountContext, emailPattern: Strin
     let saveDisposable = MetaDisposable()
     actionsDisposable.add(saveDisposable)
     
-    let arguments = ResetPasswordControllerArguments(updateCodeText: { updatedText in
+    let arguments = ResetPasswordControllerArguments(context: context, updateCodeText: { updatedText in
         updateState { state in
             var state = state
             state.code = updatedText
@@ -159,14 +160,14 @@ public func resetPasswordController(context: AccountContext, emailPattern: Strin
     |> deliverOnMainQueue
     |> map { presentationData, state -> (ItemListControllerState, (ItemListNodeState, Any)) in
         
-        let leftNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Cancel), style: .regular, enabled: true, action: {
+        let leftNavigationButton = ItemListNavigationButton(content: .icon(.close), style: .regular, enabled: true, action: {
             dismissImpl?()
         })
         var rightNavigationButton: ItemListNavigationButton?
         if state.checking {
             rightNavigationButton = ItemListNavigationButton(content: .none, style: .activity, enabled: true, action: {})
         } else {
-            rightNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Done), style: .bold, enabled: !state.code.isEmpty, action: {
+            rightNavigationButton = ItemListNavigationButton(content: .icon(.done), style: .bold, enabled: !state.code.isEmpty, action: {
                 var state: ResetPasswordControllerState?
                 updateState { s in
                     state = s

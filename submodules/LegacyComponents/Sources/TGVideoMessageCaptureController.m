@@ -1,4 +1,4 @@
-#import "TGVideoMessageCaptureController.h"
+#import <LegacyComponents/TGVideoMessageCaptureController.h>
 
 #import "LegacyComponentsInternal.h"
 
@@ -25,10 +25,14 @@
 #import <LegacyComponents/TGModernConversationInputMicButton.h>
 
 #import "TGColor.h"
-#import "TGImageUtils.h"
+#import <LegacyComponents/TGImageUtils.h>
 
-#import "TGMediaPickerSendActionSheetController.h"
-#import "TGOverlayControllerWindow.h"
+#import <LegacyComponents/TGMediaPickerSendActionSheetController.h>
+#import <LegacyComponents/TGOverlayControllerWindow.h>
+#import <LegacyComponents/TGPhotoEditorSparseView.h>
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
 const NSTimeInterval TGVideoMessageMaximumDuration = 60.0;
 
@@ -63,12 +67,13 @@ typedef enum
 @interface TGVideoMessageCaptureController () <TGVideoCameraPipelineDelegate, TGVideoMessageScrubberDataSource, TGVideoMessageScrubberDelegate, UIGestureRecognizerDelegate>
 {
     SQueue *_queue;
-    
+        
     AVCaptureDevicePosition _preferredPosition;
     TGVideoCameraPipeline *_capturePipeline;
     NSURL *_url;
     
     PGCameraVolumeButtonHandler *_buttonHandler;
+    bool _forStory;
     bool _autorotationWasEnabled;
     bool _dismissed;
     bool _gpuAvailable;
@@ -81,6 +86,8 @@ typedef enum
     TGModernButton *_switchButton;
     
     UIView *_wrapperView;
+    CGFloat _circleBandMinX;
+    CGFloat _circleBandWidth;
     
     UIView *_blurView;
     
@@ -149,12 +156,13 @@ typedef enum
 
 @implementation TGVideoMessageCaptureController
 
-- (instancetype)initWithContext:(id<LegacyComponentsContext>)context assets:(TGVideoMessageCaptureControllerAssets *)assets transitionInView:(UIView *(^)(void))transitionInView parentController:(TGViewController *)parentController controlsFrame:(CGRect)controlsFrame isAlreadyLocked:(bool (^)(void))isAlreadyLocked liveUploadInterface:(id<TGLiveUploadInterface>)liveUploadInterface pallete:(TGModernConversationInputMicPallete *)pallete slowmodeTimestamp:(int32_t)slowmodeTimestamp slowmodeView:(UIView *(^)(void))slowmodeView canSendSilently:(bool)canSendSilently canSchedule:(bool)canSchedule reminder:(bool)reminder
+- (instancetype)initWithContext:(id<LegacyComponentsContext>)context forStory:(bool)forStory assets:(TGVideoMessageCaptureControllerAssets *)assets transitionInView:(UIView *(^)(void))transitionInView parentController:(TGViewController *)parentController controlsFrame:(CGRect)controlsFrame isAlreadyLocked:(bool (^)(void))isAlreadyLocked liveUploadInterface:(id<TGLiveUploadInterface>)liveUploadInterface pallete:(TGModernConversationInputMicPallete *)pallete slowmodeTimestamp:(int32_t)slowmodeTimestamp slowmodeView:(UIView *(^)(void))slowmodeView canSendSilently:(bool)canSendSilently canSchedule:(bool)canSchedule reminder:(bool)reminder
 {
     self = [super initWithContext:context];
     if (self != nil)
     {
         _context = context;
+        _forStory = forStory;
         _transitionInView = [transitionInView copy];
         self.isAlreadyLocked = isAlreadyLocked;
         _liveUploadInterface = liveUploadInterface;
@@ -253,15 +261,17 @@ typedef enum
 {
     [super loadView];
     
+    self.view = [[TGPhotoEditorSparseView alloc] initWithFrame:self.view.frame];
+    
     self.view.backgroundColor = [UIColor clearColor];
     
     CGFloat bottomOffset = self.view.frame.size.height - CGRectGetMaxY(_controlsFrame);
     if (bottomOffset > 44.0) {
         bottomOffset = 0.0f;
     }
-    CGRect wrapperFrame = TGIsPad() ? CGRectMake(0.0f, 0.0f, self.view.frame.size.width, CGRectGetMaxY(_controlsFrame) + bottomOffset): CGRectMake(0.0f, 0.0f, self.view.frame.size.width, CGRectGetMinY(_controlsFrame));
+    CGRect wrapperFrame = TGIsPad() || _forStory ? CGRectMake(0.0f, 0.0f, self.view.frame.size.width, CGRectGetMaxY(_controlsFrame) + bottomOffset) : CGRectMake(0.0f, 0.0f, self.view.frame.size.width, CGRectGetMinY(_controlsFrame));
     
-    _wrapperView = [[UIView alloc] initWithFrame:wrapperFrame];
+    _wrapperView = [[TGPhotoEditorSparseView alloc] initWithFrame:wrapperFrame];
     _wrapperView.clipsToBounds = true;
     [self.view addSubview:_wrapperView];
     
@@ -278,7 +288,9 @@ typedef enum
             effect = [UIBlurEffect effectWithStyle:self.pallete.isDark ? UIBlurEffectStyleDark : UIBlurEffectStyleLight];
         
         _blurView = [[UIVisualEffectView alloc] initWithEffect:effect];
-        [_wrapperView addSubview:_blurView];
+        if (!_forStory) {
+            [_wrapperView addSubview:_blurView];
+        }
         
         if (type == TGVideoMessageTransitionTypeSimplified)
         {
@@ -289,7 +301,9 @@ typedef enum
             _fadeView = [[UIView alloc] initWithFrame:fadeFrame];
             _fadeView.alpha = 0.0f;
             _fadeView.backgroundColor = [curtainColor colorWithAlphaComponent:0.4f];
-            [_wrapperView addSubview:_fadeView];
+            if (!_forStory) {
+                [_wrapperView addSubview:_fadeView];
+            }
         }
     }
     else
@@ -297,16 +311,26 @@ typedef enum
         _fadeView = [[UIView alloc] initWithFrame:fadeFrame];
         _fadeView.alpha = 0.0f;
         _fadeView.backgroundColor = [curtainColor colorWithAlphaComponent:0.6f];
-        [_wrapperView addSubview:_fadeView];
+        if (!_forStory) {
+            [_wrapperView addSubview:_fadeView];
+        }
     }
     
-    CGFloat minSide = MIN(_wrapperView.frame.size.width, _wrapperView.frame.size.height);
-    CGFloat diameter = minSide == 320.0 ? 216.0 : MIN(404.0, minSide - 24.0f);
+    // iPhone Duo: one side's safe inset is the side strip, with the status corner at its end; the circle is sized
+    // and centred in the band beside it. With equal side insets the band is the whole width, as before.
+    UIEdgeInsets safeAreaInset = [_context safeAreaInset];
+    bool sideInsetsDiffer = safeAreaInset.left != safeAreaInset.right;
+    _circleBandMinX = sideInsetsDiffer ? safeAreaInset.left : 0.0f;
+    _circleBandWidth = _wrapperView.frame.size.width - (sideInsetsDiffer ? safeAreaInset.left + safeAreaInset.right : 0.0f);
+    
+    CGFloat minSide = MIN(_circleBandWidth, _wrapperView.frame.size.height);
+    bool isSE = _wrapperView.frame.size.width == 320.0 || _wrapperView.frame.size.height == 320.0;
+    CGFloat diameter = isSE ? 216.0 : MIN(404.0, minSide - 24.0f);
     CGFloat shadowSize = 21.0f;
     
     CGFloat circleWrapperViewLength = diameter + shadowSize * 2.0;
     _circleWrapperView = [[UIView alloc] initWithFrame:(CGRect){
-        .origin.x = (_wrapperView.bounds.size.width - circleWrapperViewLength) / 2.0f,
+        .origin.x = _circleBandMinX + (_circleBandWidth - circleWrapperViewLength) / 2.0f,
         .origin.y = _wrapperView.bounds.size.height + circleWrapperViewLength * 0.3f,
         .size.width = circleWrapperViewLength,
         .size.height = circleWrapperViewLength
@@ -315,11 +339,7 @@ typedef enum
     _circleWrapperView.alpha = 0.0f;
     _circleWrapperView.clipsToBounds = false;
     [_wrapperView addSubview:_circleWrapperView];
-    
-    _shadowView = [[UIImageView alloc] initWithImage:TGComponentsImageNamed(@"VideoMessageShadow")];
-    _shadowView.frame = _circleWrapperView.bounds;
-    [_circleWrapperView addSubview:_shadowView];
-    
+        
     _circleView = [[UIView alloc] initWithFrame:CGRectInset(_circleWrapperView.bounds, shadowSize, shadowSize)];
     _circleView.clipsToBounds = true;
     _circleView.layer.cornerRadius = _circleView.frame.size.width / 2.0f;
@@ -351,7 +371,7 @@ typedef enum
     
     CGRect controlsFrame = _controlsFrame;
     
-    _controlsView = [[TGVideoMessageControls alloc] initWithFrame:controlsFrame assets:_assets slowmodeTimestamp:_slowmodeTimestamp slowmodeView:_slowmodeView];
+    _controlsView = [[TGVideoMessageControls alloc] initWithFrame:controlsFrame forStory:_forStory assets:_assets slowmodeTimestamp:_slowmodeTimestamp slowmodeView:_slowmodeView];
     _controlsView.pallete = self.pallete;
     _controlsView.clipsToBounds = true;
     _controlsView.parent = self;
@@ -405,7 +425,9 @@ typedef enum
     _separatorView = [[UIView alloc] initWithFrame:CGRectMake(controlsFrame.origin.x, controlsFrame.origin.y - TGScreenPixel, controlsFrame.size.width, TGScreenPixel)];
     _separatorView.backgroundColor = self.pallete != nil ? self.pallete.borderColor : UIColorRGB(0xb2b2b2);
     _separatorView.userInteractionEnabled = false;
-    [self.view addSubview:_separatorView];
+    if (!_forStory) {
+        [self.view addSubview:_separatorView];
+    }
     
     if ([TGVideoCameraPipeline cameraPositionChangeAvailable])
     {
@@ -427,7 +449,7 @@ typedef enum
     [self.view addGestureRecognizer:_pinchGestureRecognizer];
     
     void (^voidBlock)(void) = ^{};
-    _buttonHandler = [[PGCameraVolumeButtonHandler alloc] initWithUpButtonPressedBlock:voidBlock upButtonReleasedBlock:voidBlock downButtonPressedBlock:voidBlock downButtonReleasedBlock:voidBlock];
+    _buttonHandler = [[PGCameraVolumeButtonHandler alloc] initWithIsCameraSpecific:true eventView:self.view upButtonPressedBlock:voidBlock upButtonReleasedBlock:voidBlock downButtonPressedBlock:voidBlock downButtonReleasedBlock:voidBlock];
     
     [self configureCamera];
 }
@@ -571,10 +593,6 @@ typedef enum
     [self _transitionIn];
     
     [self _beginAudioSession:false];
-    [_queue dispatch:^
-    {
-        [_capturePipeline startRunning];
-    }];
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -590,7 +608,7 @@ typedef enum
     _circleWrapperView.transform = CGAffineTransformMakeScale(0.3f, 0.3f);
     
     CGPoint targetPosition = (CGPoint){
-        .x = _wrapperView.frame.size.width / 2.0f,
+        .x = _circleBandMinX + _circleBandWidth / 2.0f,
         .y = _wrapperView.frame.size.height / 2.0f - _controlsView.frame.size.height
     };
 #pragma clang diagnostic push
@@ -605,7 +623,12 @@ typedef enum
             if (self.view.frame.size.height > self.view.frame.size.width && fabs(_wrapperView.frame.size.height - self.view.frame.size.height) < 50.0f)
                 targetPosition.y = _wrapperView.frame.size.height / 3.0f - 20.0f;
             
-            targetPosition.y = MAX(_circleWrapperView.bounds.size.height / 2.0f + 40.0f, targetPosition.y);
+            CGFloat minY = _circleWrapperView.bounds.size.height / 2.0f + 40.0f;
+            if (fabs(_wrapperView.frame.size.height - self.view.frame.size.height) > 50.0 && _wrapperView.frame.size.width == 320.0) {
+                minY = _circleWrapperView.bounds.size.height / 2.0f + 4.0;
+            }
+            
+            targetPosition.y = MAX(minY, targetPosition.y);
             break;
     }
 #pragma clang diagnostic pop
@@ -632,7 +655,7 @@ typedef enum
 {
     [super viewWillLayoutSubviews];
     
-    CGRect fadeFrame = TGIsPad() ? self.view.bounds : CGRectMake(0.0f, 0.0f, _wrapperView.frame.size.width, _wrapperView.frame.size.height);
+    CGRect fadeFrame = TGIsPad() || _forStory ? self.view.bounds : CGRectMake(0.0f, 0.0f, _wrapperView.frame.size.width, _wrapperView.frame.size.height);
     _blurView.frame = fadeFrame;
 }
 
@@ -680,6 +703,7 @@ typedef enum
     self.view.backgroundColor = [UIColor clearColor];
     self.view.userInteractionEnabled = false;
     
+    _circleWrapperView.layer.allowsGroupOpacity = true;
     [UIView animateWithDuration:0.15 animations:^
     {
         _circleWrapperView.alpha = 0.0f;
@@ -744,7 +768,16 @@ typedef enum
     
     [_activityDisposable dispose];
     [self stopRecording:^{}];
+    
+    if (self.didStop != nil) {
+        self.didStop();
+    }
     return true;
+}
+
+- (void)send
+{
+    [self sendPressed];
 }
 
 - (bool)sendPressed
@@ -774,7 +807,7 @@ typedef enum
         [_generator impactOccurred];
     }
     
-    TGMediaPickerSendActionSheetController *controller = [[TGMediaPickerSendActionSheetController alloc] initWithContext:_context isDark:self.pallete.isDark sendButtonFrame:[_controlsView convertRect:[_controlsView frameForSendButton] toView:nil] canSendSilently:_canSendSilently canSchedule:_canSchedule reminder:_reminder hasTimer:false];
+    TGMediaPickerSendActionSheetController *controller = [[TGMediaPickerSendActionSheetController alloc] initWithContext:_context isDark:self.pallete.isDark sendButtonFrame:[_controlsView convertRect:[_controlsView frameForSendButton] toView:nil] canSendSilently:_canSendSilently canSendWhenOnline:false canSchedule:_canSchedule reminder:_reminder hasTimer:false];
     __weak TGVideoMessageCaptureController *weakSelf = self;
     controller.send = ^{
         __strong TGVideoMessageCaptureController *strongSelf = weakSelf;
@@ -798,6 +831,17 @@ typedef enum
         _automaticDismiss = true;
         [strongSelf dismiss:false];
     };
+    controller.sendWhenOnline = ^{
+        __strong TGVideoMessageCaptureController *strongSelf = weakSelf;
+        if (strongSelf == nil) {
+            return;
+        }
+        
+        [strongSelf finishWithURL:strongSelf->_url dimensions:CGSizeMake(240.0f, 240.0f) duration:strongSelf->_duration liveUploadData:strongSelf->_liveUploadData thumbnailImage:strongSelf->_thumbnailImage isSilent:false scheduleTimestamp:0x7ffffffe];
+        
+        _automaticDismiss = true;
+        [strongSelf dismiss:false];
+    };
     controller.schedule = ^{
         __strong TGVideoMessageCaptureController *strongSelf = weakSelf;
         if (strongSelf == nil) {
@@ -805,13 +849,13 @@ typedef enum
         }
         
         if (strongSelf.presentScheduleController) {
-            strongSelf.presentScheduleController(^(int32_t time) {
+            strongSelf.presentScheduleController(^(int32_t time, bool silentPosting) {
                 __strong TGVideoMessageCaptureController *strongSelf = weakSelf;
                 if (strongSelf == nil) {
                     return;
                 }
                 
-                [strongSelf finishWithURL:strongSelf->_url dimensions:CGSizeMake(240.0f, 240.0f) duration:strongSelf->_duration liveUploadData:strongSelf->_liveUploadData thumbnailImage:strongSelf->_thumbnailImage isSilent:false scheduleTimestamp:time];
+                [strongSelf finishWithURL:strongSelf->_url dimensions:CGSizeMake(240.0f, 240.0f) duration:strongSelf->_duration liveUploadData:strongSelf->_liveUploadData thumbnailImage:strongSelf->_thumbnailImage isSilent:silentPosting scheduleTimestamp:time];
                 
                 _automaticDismiss = true;
                 [strongSelf dismiss:false];
@@ -1237,7 +1281,7 @@ typedef enum
 {
 }
 
-- (void)capturePipeline:(TGVideoCameraPipeline *)__unused capturePipeline previewPixelBufferReadyForDisplay:(CVPixelBufferRef)previewPixelBuffer
+- (void)capturePipeline:(TGVideoCameraPipeline *)__unused capturePipeline previewPixelBufferReadyForDisplay:(TGVideoCameraRendererBuffer *)previewPixelBuffer
 {
     if (!_gpuAvailable)
         return;
@@ -1257,12 +1301,12 @@ typedef enum
 - (void)capturePipelineRecordingDidStart:(TGVideoCameraPipeline *)__unused capturePipeline
 {
     __weak TGVideoMessageCaptureController *weakSelf = self;
-    [_activityDisposable setDisposable:[[[SSignal complete] delay:0.3 onQueue:[SQueue mainQueue]] startWithNext:nil error:nil completed:^{
+    [_activityDisposable setDisposable:[[[SSignal complete] delay:0.3 onQueue:[SQueue mainQueue]] startStrictWithNext:nil error:nil completed:^{
         __strong TGVideoMessageCaptureController *strongSelf = weakSelf;
         if (strongSelf != nil && strongSelf->_requestActivityHolder) {
             strongSelf->_activityHolder = strongSelf->_requestActivityHolder();
         }
-    }]];
+    } file:__FILE_NAME__ line:__LINE__]];
 }
 
 - (void)capturePipelineRecordingWillStop:(TGVideoCameraPipeline *)__unused capturePipeline
@@ -1302,7 +1346,16 @@ typedef enum
         _otherAudioPlaying = [[AVAudioSession sharedInstance] isOtherAudioPlaying];
         
         __weak TGVideoMessageCaptureController *weakSelf = self;
-        id<SDisposable> disposable = [[LegacyComponentsGlobals provider] requestAudioSession:speaker ? TGAudioSessionTypePlayAndRecordHeadphones : TGAudioSessionTypePlayAndRecord interrupted:^
+        id<SDisposable> disposable = [[LegacyComponentsGlobals provider] requestAudioSession:speaker ? TGAudioSessionTypePlayAndRecordHeadphones : TGAudioSessionTypePlayAndRecord
+        activated:^{
+            __strong TGVideoMessageCaptureController *strongSelf = weakSelf;
+            if (strongSelf != nil) {
+                [strongSelf->_queue dispatch:^
+                {
+                    [strongSelf->_capturePipeline startRunning];
+                }];
+            }
+        } interrupted:^
         {
             TGDispatchOnMainThread(^{
                 __strong TGVideoMessageCaptureController *strongSelf = weakSelf;
@@ -1596,3 +1649,5 @@ static UIImage *startImage = nil;
 }
 
 @end
+
+#pragma clang diagnostic pop

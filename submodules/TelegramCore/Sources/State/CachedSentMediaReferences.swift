@@ -2,9 +2,6 @@ import Foundation
 import Postbox
 import SwiftSignalKit
 
-
-private let cachedSentMediaCollectionSpec = ItemCacheCollectionSpec(lowWaterItemCount: 10000, highWaterItemCount: 20000)
-
 enum CachedSentMediaReferenceKey {
     case image(hash: Data)
     case file(hash: Data)
@@ -31,13 +28,27 @@ enum CachedSentMediaReferenceKey {
     }
 }
 
+private struct CachedMediaReferenceEntry: Codable {
+    var data: Data
+}
+
 func cachedSentMediaReference(postbox: Postbox, key: CachedSentMediaReferenceKey) -> Signal<Media?, NoError> {
-    return .single(nil)
-    /*return postbox.transaction { transaction -> Media? in
-        return transaction.retrieveItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedSentMediaReferences, key: key.key)) as? Media
-    }*/
+    return postbox.transaction { transaction -> Media? in
+        guard let entry = transaction.retrieveItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedSentMediaReferences, key: key.key))?.get(CachedMediaReferenceEntry.self) else {
+            return nil
+        }
+        
+        return PostboxDecoder(buffer: MemoryBuffer(data: entry.data)).decodeRootObject() as? Media
+    }
 }
 
 func storeCachedSentMediaReference(transaction: Transaction, key: CachedSentMediaReferenceKey, media: Media) {
-    //transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedSentMediaReferences, key: key.key), entry: media, collectionSpec: cachedSentMediaCollectionSpec)
+    let encoder = PostboxEncoder()
+    encoder.encodeRootObject(media)
+    let mediaData = encoder.makeData()
+    
+    guard let entry = CodableEntry(CachedMediaReferenceEntry(data: mediaData)) else {
+        return
+    }
+    transaction.putItemCacheEntry(id: ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedSentMediaReferences, key: key.key), entry: entry)
 }

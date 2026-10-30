@@ -1,7 +1,7 @@
-#import "TGToolbarButton.h"
+#import <LegacyComponents/TGToolbarButton.h>
 
 #import "LegacyComponentsInternal.h"
-#import "TGImageUtils.h"
+#import <LegacyComponents/TGImageUtils.h>
 
 static UIImage *backgroundBack()
 {
@@ -293,8 +293,11 @@ static UIColor *shadowColorForButton(int type)
         
         _landscapeOffset = 0;
         
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations" // legacy non-configuration UIButton: property is still honored
         self.adjustsImageWhenDisabled = false;
         self.adjustsImageWhenHighlighted = false;
+        #pragma clang diagnostic pop
         self.enabled = true;
         
         [self updateBackground];
@@ -338,8 +341,11 @@ static UIColor *shadowColorForButton(int type)
         
         _landscapeOffset = 0;
         
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations" // legacy non-configuration UIButton: property is still honored
         self.adjustsImageWhenDisabled = false;
         self.adjustsImageWhenHighlighted = false;
+        #pragma clang diagnostic pop
         self.enabled = true;
         
         _customImageNormal = imageNormal;

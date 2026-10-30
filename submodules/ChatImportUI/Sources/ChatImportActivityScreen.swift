@@ -1,9 +1,9 @@
+import LottieSettings
 import UIKit
 import AsyncDisplayKit
 import Display
 import TelegramCore
 import SwiftSignalKit
-import Postbox
 import TelegramPresentationData
 import AccountContext
 import PresentationDataUtils
@@ -16,6 +16,27 @@ import MimeTypes
 import ConfettiEffect
 import TelegramUniversalVideoContent
 import SolidRoundedButtonNode
+import ActivityIndicator
+
+private func fileSize(_ path: String, useTotalFileAllocatedSize: Bool = false) -> Int64? {
+    if useTotalFileAllocatedSize {
+        let url = URL(fileURLWithPath: path)
+        if let values = (try? url.resourceValues(forKeys: Set([.isRegularFileKey, .totalFileAllocatedSizeKey]))) {
+            if values.isRegularFile ?? false {
+                if let fileSize = values.totalFileAllocatedSize {
+                    return Int64(fileSize)
+                }
+            }
+        }
+    }
+    
+    var value = stat()
+    if stat(path, &value) == 0 {
+        return value.st_size
+    } else {
+        return nil
+    }
+}
 
 private final class ProgressEstimator {
     private var averageProgressPerSecond: Double = 0.0
@@ -61,7 +82,7 @@ private final class ImportManager {
     }
     
     enum State {
-        case progress(totalBytes: Int, totalUploadedBytes: Int, totalMediaBytes: Int, totalUploadedMediaBytes: Int)
+        case progress(totalBytes: Int64, totalUploadedBytes: Int64, totalMediaBytes: Int64, totalUploadedMediaBytes: Int64)
         case error(ImportError)
         case done
     }
@@ -74,11 +95,11 @@ private final class ImportManager {
     
     private let disposable = MetaDisposable()
     
-    private let totalBytes: Int
-    private let totalMediaBytes: Int
-    private let mainFileSize: Int
+    private let totalBytes: Int64
+    private let totalMediaBytes: Int64
+    private let mainFileSize: Int64
     private var pendingEntries: [(SSZipEntry, String, TelegramEngine.HistoryImport.MediaType)]
-    private var entryProgress: [String: (Int, Int)] = [:]
+    private var entryProgress: [String: (Int64, Int64)] = [:]
     private var activeEntries: [String: Disposable] = [:]
     
     private var stateValue: State {
@@ -91,7 +112,7 @@ private final class ImportManager {
         return self.statePromise.get()
     }
     
-    init(account: Account, peerId: PeerId, mainFile: TempBoxFile, archivePath: String?, entries: [(SSZipEntry, String, TelegramEngine.HistoryImport.MediaType)]) {
+    init(account: Account, peerId: EnginePeer.Id, mainFile: EngineTempBox.File, archivePath: String?, entries: [(SSZipEntry, String, TelegramEngine.HistoryImport.MediaType)]) {
         self.account = account
         self.archivePath = archivePath
         self.entries = entries
@@ -99,10 +120,10 @@ private final class ImportManager {
         
         self.mainFileSize = fileSize(mainFile.path) ?? 0
         
-        var totalMediaBytes = 0
+        var totalMediaBytes: Int64 = 0
         for entry in self.entries {
-            self.entryProgress[entry.1] = (Int(entry.0.uncompressedSize), 0)
-            totalMediaBytes += Int(entry.0.uncompressedSize)
+            self.entryProgress[entry.1] = (Int64(entry.0.uncompressedSize), 0)
+            totalMediaBytes += Int64(entry.0.uncompressedSize)
         }
         self.totalBytes = self.mainFileSize + totalMediaBytes
         self.totalMediaBytes = totalMediaBytes
@@ -129,7 +150,7 @@ private final class ImportManager {
                 return .limitExceeded
             }
         }
-        |> deliverOnMainQueue).start(next: { [weak self] session in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] session in
             guard let strongSelf = self else {
                 return
             }
@@ -155,7 +176,7 @@ private final class ImportManager {
             return
         }
         
-        var totalUploadedMediaBytes = 0
+        var totalUploadedMediaBytes: Int64 = 0
         for (_, entrySizes) in self.entryProgress {
             totalUploadedMediaBytes += entrySizes.1
         }
@@ -181,7 +202,7 @@ private final class ImportManager {
             return
         }
         self.disposable.set((TelegramEngine(account: self.account).historyImport.startImport(session: session)
-        |> deliverOnMainQueue).start(error: { [weak self] _ in
+        |> deliverOnMainQueue).startStrict(error: { [weak self] _ in
             guard let strongSelf = self else {
                 return
             }
@@ -234,8 +255,8 @@ private final class ImportManager {
             
             Logger.shared.log("ChatImportScreen", "updateState take pending entry \(entry.1)")
             
-            let unpackedFile = Signal<TempBoxFile, ImportError> { subscriber in
-                let tempFile = TempBox.shared.tempFile(fileName: entry.0.path)
+            let unpackedFile = Signal<EngineTempBox.File, ImportError> { subscriber in
+                let tempFile = EngineTempBox.shared.tempFile(fileName: entry.0.path)
                 Logger.shared.log("ChatImportScreen", "Extracting \(entry.0.path) to \(tempFile.path)...")
                 let startTime = CACurrentMediaTime()
                 if SSZipArchive.extractFileFromArchive(atPath: archivePath, filePath: entry.0.path, toPath: tempFile.path) {
@@ -278,7 +299,7 @@ private final class ImportManager {
                     return
                 }
                 if let (size, _) = strongSelf.entryProgress[entry.1] {
-                    strongSelf.entryProgress[entry.1] = (size, Int(progress * Float(entry.0.uncompressedSize)))
+                    strongSelf.entryProgress[entry.1] = (size, Int64(progress * Float(entry.0.uncompressedSize)))
                     strongSelf.updateProgress()
                 }
             }, error: { [weak self] error in
@@ -321,7 +342,7 @@ public final class ChatImportActivityScreen: ViewController {
         
         private var validLayout: (ContainerViewLayout, CGFloat)?
         
-        private let totalBytes: Int
+        private let totalBytes: Int64
         private var state: ImportManager.State
         
         private var videoNode: UniversalVideoNode?
@@ -329,7 +350,7 @@ public final class ChatImportActivityScreen: ViewController {
         
         fileprivate var remainingAnimationSeconds: Double?
         
-        init(controller: ChatImportActivityScreen, context: AccountContext, totalBytes: Int, totalMediaBytes: Int) {
+        init(controller: ChatImportActivityScreen, context: AccountContext, totalBytes: Int64, totalMediaBytes: Int64) {
             self.controller = controller
             self.context = context
             self.totalBytes = totalBytes
@@ -337,8 +358,8 @@ public final class ChatImportActivityScreen: ViewController {
             
             self.presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
             
-            self.animationNode = AnimatedStickerNode()
-            self.doneAnimationNode = AnimatedStickerNode()
+            self.animationNode = DefaultAnimatedStickerNodeImpl(lottieSettings: self.context.lottieRenderingSettings)
+            self.doneAnimationNode = DefaultAnimatedStickerNodeImpl(lottieSettings: self.context.lottieRenderingSettings)
             self.doneAnimationNode.isHidden = true
             
             self.radialStatus = RadialStatusNode(backgroundNodeColor: .clear)
@@ -375,7 +396,7 @@ public final class ChatImportActivityScreen: ViewController {
             
             self.statusButton = HighlightableButtonNode()
             
-            self.doneButton = SolidRoundedButtonNode(title: self.presentationData.strings.ChatImportActivity_OpenApp, theme: SolidRoundedButtonTheme(backgroundColor: self.presentationData.theme.list.itemCheckColors.fillColor, foregroundColor: self.presentationData.theme.list.itemCheckColors.foregroundColor), height: 50.0, cornerRadius: 10.0, gloss: false)
+            self.doneButton = SolidRoundedButtonNode(title: self.presentationData.strings.ChatImportActivity_OpenApp, theme: SolidRoundedButtonTheme(backgroundColor: self.presentationData.theme.list.itemCheckColors.fillColor, foregroundColor: self.presentationData.theme.list.itemCheckColors.foregroundColor), height: 50.0, cornerRadius: 10.0, isShimmering: false)
             
             super.init()
             
@@ -440,11 +461,11 @@ public final class ChatImportActivityScreen: ViewController {
             if let path = getAppBundle().path(forResource: "BlankVideo", ofType: "m4v"), let size = fileSize(path) {
                 let decoration = ChatBubbleVideoDecoration(corners: ImageCorners(), nativeSize: CGSize(width: 100.0, height: 100.0), contentMode: .aspectFit, backgroundColor: .black)
                 
-                let dummyFile = TelegramMediaFile(fileId: MediaId(namespace: 0, id: 1), partialReference: nil, resource: LocalFileReferenceMediaResource(localFilePath: path, randomId: 12345), previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: size, attributes: [.Video(duration: 1, size: PixelDimensions(width: 100, height: 100), flags: [])])
+                let dummyFile = TelegramMediaFile(fileId: EngineMedia.Id(namespace: 0, id: 1), partialReference: nil, resource: LocalFileReferenceMediaResource(localFilePath: path, randomId: 12345), previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: size, attributes: [.Video(duration: 1, size: PixelDimensions(width: 100, height: 100), flags: [], preloadSize: nil, coverTime: nil, videoCodec: nil)], alternativeRepresentations: [])
                 
-                let videoContent = NativeVideoContent(id: .message(1, MediaId(namespace: 0, id: 1)), fileReference: .standalone(media: dummyFile), streamVideo: .none, loopVideo: true, enableSound: false, fetchAutomatically: true, onlyFullSizeThumbnail: false, continuePlayingWithoutSoundOnLostAudioSession: false, placeholderColor: .black)
+                let videoContent = NativeVideoContent(id: .message(1, EngineMedia.Id(namespace: 0, id: 1)), userLocation: .other, fileReference: .standalone(media: dummyFile), streamVideo: .none, loopVideo: true, enableSound: false, fetchAutomatically: true, onlyFullSizeThumbnail: false, continuePlayingWithoutSoundOnLostAudioSession: false, placeholderColor: .black, storeAfterDownload: nil)
                 
-                let videoNode = UniversalVideoNode(postbox: context.account.postbox, audioSession: context.sharedContext.mediaManager.audioSession, manager: context.sharedContext.mediaManager.universalVideoManager, decoration: decoration, content: videoContent, priority: .embedded)
+                let videoNode = UniversalVideoNode(context: context, postbox: context.account.postbox, audioSession: context.sharedContext.mediaManager.audioSession, manager: context.sharedContext.mediaManager.universalVideoManager, decoration: decoration, content: videoContent, priority: .embedded)
                 videoNode.frame = CGRect(origin: CGPoint(), size: CGSize(width: 2.0, height: 2.0))
                 videoNode.alpha = 0.01
                 self.videoNode = videoNode
@@ -528,11 +549,16 @@ public final class ChatImportActivityScreen: ViewController {
                 effectiveProgress = 1.0
             }
             
+            // iPhone Duo: beside a side strip the content centres in the band between the side insets. Elsewhere the
+            // insets are equal and the band is the whole width, as before.
+            let bandInsets: (left: CGFloat, right: CGFloat) = layout.safeInsets.left != layout.safeInsets.right ? (layout.safeInsets.left, layout.safeInsets.right) : (0.0, 0.0)
+            let bandWidth = layout.size.width - bandInsets.left - bandInsets.right
+            
             self.radialStatusText.attributedText = NSAttributedString(string: "\(Int(effectiveProgress * 100.0))%", font: Font.with(size: floor(36.0 * maxK), design: .round, weight: .semibold), textColor: self.presentationData.theme.list.itemPrimaryTextColor)
             let radialStatusTextSize = self.radialStatusText.updateLayout(CGSize(width: 200.0, height: .greatestFiniteMagnitude))
             
             self.progressText.attributedText = NSAttributedString(string: "\(dataSizeString(Int(effectiveProgress * CGFloat(self.totalBytes)), formatting: DataSizeStringFormatting(presentationData: self.presentationData))) of \(dataSizeString(Int(1.0 * CGFloat(self.totalBytes)), formatting: DataSizeStringFormatting(presentationData: self.presentationData)))", font: Font.semibold(17.0), textColor: self.presentationData.theme.list.itemPrimaryTextColor)
-            let progressTextSize = self.progressText.updateLayout(CGSize(width: layout.size.width - 16.0 * 2.0, height: .greatestFiniteMagnitude))
+            let progressTextSize = self.progressText.updateLayout(CGSize(width: bandWidth - 16.0 * 2.0, height: .greatestFiniteMagnitude))
             
             switch self.state {
             case .progress, .done:
@@ -540,7 +566,7 @@ public final class ChatImportActivityScreen: ViewController {
             case .error:
                 self.statusButtonText.attributedText = NSAttributedString(string: self.presentationData.strings.ChatImportActivity_Retry, font: Font.semibold(17.0), textColor: self.presentationData.theme.list.itemAccentColor)
             }
-            let statusButtonTextSize = self.statusButtonText.updateLayout(CGSize(width: layout.size.width - 16.0 * 2.0, height: .greatestFiniteMagnitude))
+            let statusButtonTextSize = self.statusButtonText.updateLayout(CGSize(width: bandWidth - 16.0 * 2.0, height: .greatestFiniteMagnitude))
             
             switch self.state {
             case .progress:
@@ -564,7 +590,7 @@ public final class ChatImportActivityScreen: ViewController {
                 self.statusText.attributedText = NSAttributedString(string: self.presentationData.strings.ChatImportActivity_Success, font: Font.semibold(17.0), textColor: self.presentationData.theme.list.itemPrimaryTextColor)
             }
             
-            let statusTextSize = self.statusText.updateLayout(CGSize(width: layout.size.width - 16.0 * 2.0, height: .greatestFiniteMagnitude))
+            let statusTextSize = self.statusText.updateLayout(CGSize(width: bandWidth - 16.0 * 2.0, height: .greatestFiniteMagnitude))
             
             let contentHeight: CGFloat
             var hideIcon = false
@@ -589,40 +615,40 @@ public final class ChatImportActivityScreen: ViewController {
             
             let contentOriginY = navigationHeight + floor((layout.size.height - contentHeight) / 2.0)
             
-            self.animationNode.frame = CGRect(origin: CGPoint(x: floor((layout.size.width - iconSize.width) / 2.0), y: contentOriginY), size: iconSize)
+            self.animationNode.frame = CGRect(origin: CGPoint(x: bandInsets.left + floor((bandWidth - iconSize.width) / 2.0), y: contentOriginY), size: iconSize)
             self.animationNode.updateLayout(size: iconSize)
-            self.doneAnimationNode.frame = CGRect(origin: CGPoint(x: floor((layout.size.width - iconSize.width) / 2.0), y: contentOriginY), size: iconSize)
+            self.doneAnimationNode.frame = CGRect(origin: CGPoint(x: bandInsets.left + floor((bandWidth - iconSize.width) / 2.0), y: contentOriginY), size: iconSize)
             self.doneAnimationNode.updateLayout(size: iconSize)
             
-            self.radialStatus.frame = CGRect(origin: CGPoint(x: floor((layout.size.width - radialStatusSize.width) / 2.0), y: contentOriginY + iconSize.height + maxIconStatusSpacing), size: radialStatusSize)
+            self.radialStatus.frame = CGRect(origin: CGPoint(x: bandInsets.left + floor((bandWidth - radialStatusSize.width) / 2.0), y: contentOriginY + iconSize.height + maxIconStatusSpacing), size: radialStatusSize)
             let checkSize: CGFloat = 130.0
             self.radialCheck.frame = CGRect(origin: CGPoint(x: self.radialStatus.frame.minX + floor((self.radialStatus.frame.width - checkSize) / 2.0), y: self.radialStatus.frame.minY + floor((self.radialStatus.frame.height - checkSize) / 2.0)), size: CGSize(width: checkSize, height: checkSize))
             self.radialStatusBackground.frame = self.radialStatus.frame
             
             self.radialStatusText.frame = CGRect(origin: CGPoint(x: self.radialStatus.frame.minX + floor((self.radialStatus.frame.width - radialStatusTextSize.width) / 2.0), y: self.radialStatus.frame.minY + floor((self.radialStatus.frame.height - radialStatusTextSize.height) / 2.0)), size: radialStatusTextSize)
             
-            self.progressText.frame = CGRect(origin: CGPoint(x: floor((layout.size.width - progressTextSize.width) / 2.0), y: hideIcon ? contentOriginY : (self.radialStatus.frame.maxY + maxProgressTextSpacing)), size: progressTextSize)
+            self.progressText.frame = CGRect(origin: CGPoint(x: bandInsets.left + floor((bandWidth - progressTextSize.width) / 2.0), y: hideIcon ? contentOriginY : (self.radialStatus.frame.maxY + maxProgressTextSpacing)), size: progressTextSize)
             
             if case .progress = self.state {
-                self.statusText.frame = CGRect(origin: CGPoint(x: floor((layout.size.width - statusTextSize.width) / 2.0), y: self.progressText.frame.maxY + progressStatusSpacing), size: statusTextSize)
+                self.statusText.frame = CGRect(origin: CGPoint(x: bandInsets.left + floor((bandWidth - statusTextSize.width) / 2.0), y: self.progressText.frame.maxY + progressStatusSpacing), size: statusTextSize)
                 self.statusButtonText.isHidden = true
                 self.statusButton.isHidden = true
                 self.doneButton.isHidden = true
                 self.progressText.isHidden = false
             } else if case .error = self.state {
-                self.statusText.frame = CGRect(origin: CGPoint(x: floor((layout.size.width - statusTextSize.width) / 2.0), y: self.progressText.frame.minY), size: statusTextSize)
+                self.statusText.frame = CGRect(origin: CGPoint(x: bandInsets.left + floor((bandWidth - statusTextSize.width) / 2.0), y: self.progressText.frame.minY), size: statusTextSize)
                 self.statusButtonText.isHidden = false
                 self.statusButton.isHidden = false
                 self.doneButton.isHidden = true
                 self.progressText.isHidden = true
             } else {
-                self.statusText.frame = CGRect(origin: CGPoint(x: floor((layout.size.width - statusTextSize.width) / 2.0), y: self.progressText.frame.minY), size: statusTextSize)
+                self.statusText.frame = CGRect(origin: CGPoint(x: bandInsets.left + floor((bandWidth - statusTextSize.width) / 2.0), y: self.progressText.frame.minY), size: statusTextSize)
                 self.statusButtonText.isHidden = false
                 self.statusButton.isHidden = false
                 self.doneButton.isHidden = true
                 self.progressText.isHidden = true
             }/* else {
-                self.statusText.frame = CGRect(origin: CGPoint(x: floor((layout.size.width - statusTextSize.width) / 2.0), y: self.progressText.frame.minY), size: statusTextSize)
+                self.statusText.frame = CGRect(origin: CGPoint(x: bandInsets.left + floor((bandWidth - statusTextSize.width) / 2.0), y: self.progressText.frame.minY), size: statusTextSize)
                 self.statusButtonText.isHidden = true
                 self.statusButton.isHidden = true
                 self.doneButton.isHidden = false
@@ -630,14 +656,14 @@ public final class ChatImportActivityScreen: ViewController {
             }*/
             
             let buttonSideInset: CGFloat = 75.0
-            let buttonWidth = max(240.0, min(layout.size.width - buttonSideInset * 2.0, horizontalContainerFillingSizeForLayout(layout: layout, sideInset: buttonSideInset)))
+            let buttonWidth = max(240.0, min(bandWidth - buttonSideInset * 2.0, horizontalContainerFillingSizeForLayout(layout: layout, sideInset: buttonSideInset)))
             
             let buttonHeight = self.doneButton.updateLayout(width: buttonWidth, transition: .immediate)
             
-            let doneButtonFrame = CGRect(origin: CGPoint(x: floor((layout.size.width - buttonWidth) / 2.0), y: self.statusText.frame.maxY + statusButtonSpacing + 10.0), size: CGSize(width: buttonWidth, height: buttonHeight))
+            let doneButtonFrame = CGRect(origin: CGPoint(x: bandInsets.left + floor((bandWidth - buttonWidth) / 2.0), y: self.statusText.frame.maxY + statusButtonSpacing + 10.0), size: CGSize(width: buttonWidth, height: buttonHeight))
             self.doneButton.frame = doneButtonFrame
             
-            let statusButtonTextFrame = CGRect(origin: CGPoint(x: floor((layout.size.width - statusButtonTextSize.width) / 2.0), y: self.statusText.frame.maxY + statusButtonSpacing), size: statusButtonTextSize)
+            let statusButtonTextFrame = CGRect(origin: CGPoint(x: bandInsets.left + floor((bandWidth - statusButtonTextSize.width) / 2.0), y: self.statusText.frame.maxY + statusButtonSpacing), size: statusButtonTextSize)
             self.statusButtonText.frame = statusButtonTextFrame
             self.statusButton.frame = statusButtonTextFrame.insetBy(dx: -10.0, dy: -10.0)
             
@@ -724,11 +750,11 @@ public final class ChatImportActivityScreen: ViewController {
     private let context: AccountContext
     private var presentationData: PresentationData
     fileprivate let cancel: () -> Void
-    fileprivate var peerId: PeerId
+    fileprivate var peerId: EnginePeer.Id
     private let archivePath: String?
-    private let mainEntry: TempBoxFile
-    private let totalBytes: Int
-    private let totalMediaBytes: Int
+    private let mainEntry: EngineTempBox.File
+    private let totalBytes: Int64
+    private let totalMediaBytes: Int64
     private let otherEntries: [(SSZipEntry, String, TelegramEngine.HistoryImport.MediaType)]
     
     private var importManager: ImportManager?
@@ -746,7 +772,7 @@ public final class ChatImportActivityScreen: ViewController {
         }
     }
     
-    public init(context: AccountContext, cancel: @escaping () -> Void, peerId: PeerId, archivePath: String?, mainEntry: TempBoxFile, otherEntries: [(SSZipEntry, String, TelegramEngine.HistoryImport.MediaType)]) {
+    public init(context: AccountContext, cancel: @escaping () -> Void, peerId: EnginePeer.Id, archivePath: String?, mainEntry: EngineTempBox.File, otherEntries: [(SSZipEntry, String, TelegramEngine.HistoryImport.MediaType)]) {
         self.context = context
         self.cancel = cancel
         self.peerId = peerId
@@ -759,9 +785,9 @@ public final class ChatImportActivityScreen: ViewController {
         
         let mainEntrySize = fileSize(self.mainEntry.path) ?? 0
         
-        var totalMediaBytes = 0
+        var totalMediaBytes: Int64 = 0
         for entry in self.otherEntries {
-            totalMediaBytes += Int(entry.0.uncompressedSize)
+            totalMediaBytes += Int64(entry.0.uncompressedSize)
         }
         self.totalBytes = mainEntrySize + totalMediaBytes
         self.totalMediaBytes = totalMediaBytes
@@ -818,7 +844,7 @@ public final class ChatImportActivityScreen: ViewController {
         self.progressEstimator = ProgressEstimator()
         self.beganCompletion = false
         
-        let resolvedPeerId: Signal<PeerId, ImportManager.ImportError>
+        let resolvedPeerId: Signal<EnginePeer.Id, ImportManager.ImportError>
         if self.peerId.namespace == Namespaces.Peer.CloudGroup {
             resolvedPeerId = self.context.engine.peers.convertGroupToSupergroup(peerId: self.peerId)
             |> mapError { _ -> ImportManager.ImportError in
@@ -829,14 +855,14 @@ public final class ChatImportActivityScreen: ViewController {
         }
         
         self.disposable.set((resolvedPeerId
-        |> deliverOnMainQueue).start(next: { [weak self] peerId in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] peerId in
             guard let strongSelf = self else {
                 return
             }
             let importManager = ImportManager(account: strongSelf.context.account, peerId: peerId, mainFile: strongSelf.mainEntry, archivePath: strongSelf.archivePath, entries: strongSelf.otherEntries)
             strongSelf.importManager = importManager
             strongSelf.progressDisposable.set((importManager.state
-            |> deliverOnMainQueue).start(next: { state in
+            |> deliverOnMainQueue).startStrict(next: { state in
                 guard let strongSelf = self else {
                     return
                 }
@@ -867,3 +893,48 @@ public final class ChatImportActivityScreen: ViewController {
         }
     }
 }
+
+public final class ChatImportTempController: ViewController {
+    override public var _presentedInModal: Bool {
+        get {
+            return true
+        } set(value) {
+        }
+    }
+    
+    private let activityIndicator: ActivityIndicator
+    
+    public init(presentationData: PresentationData) {
+        let presentationData = presentationData
+        
+        self.activityIndicator = ActivityIndicator(type: .custom(presentationData.theme.list.itemAccentColor, 22.0, 1.0, false))
+        
+        super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: presentationData))
+        
+        self.title = presentationData.strings.ChatImport_Title
+        self.navigationItem.setLeftBarButton(UIBarButtonItem(title: presentationData.strings.Common_Cancel, style: .plain, target: self, action: #selector(self.cancelPressed)), animated: false)
+    }
+    
+    required public init(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    @objc private func cancelPressed() {
+        //self?.getExtensionContext()?.completeRequest(returningItems: nil, completionHandler: nil)
+    }
+    
+    override public func displayNodeDidLoad() {
+        super.displayNodeDidLoad()
+        
+        self.displayNode.addSubnode(self.activityIndicator)
+    }
+    
+    override public func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+        super.containerLayoutUpdated(layout, transition: transition)
+        
+        let indicatorSize = self.activityIndicator.measure(CGSize(width: 100.0, height: 100.0))
+        let navigationHeight = self.navigationLayout(layout: layout).navigationFrame.maxY
+        transition.updateFrame(node: self.activityIndicator, frame: CGRect(origin: CGPoint(x: floor((layout.size.width - indicatorSize.width) / 2.0), y: navigationHeight + floor((layout.size.height - navigationHeight - indicatorSize.height) / 2.0)), size: indicatorSize))
+    }
+}
+

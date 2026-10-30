@@ -304,7 +304,11 @@ int32_t WelsWriteSpsSyntax (SWelsSPS* pSps, SBitStringAux* pBitStringAux, int32_
   BsWriteUE (pLocalBitStringAux, pSps->iMbHeight - 1);          // pic_height_in_map_units_minus1
   BsWriteOneBit (pLocalBitStringAux, true/*pSps->bFrameMbsOnlyFlag*/);  // bFrameMbsOnlyFlag
 
-  BsWriteOneBit (pLocalBitStringAux, 0/*pSps->bDirect8x8InferenceFlag*/);       // direct_8x8_inference_flag
+  uint8_t d8x8 = 0;
+  if (pSps->iLevelIdc >= 30)
+    d8x8 = 1;
+  BsWriteOneBit (pLocalBitStringAux, d8x8/*pSps->bDirect8x8InferenceFlag*/);       // direct_8x8_inference_flag
+
   BsWriteOneBit (pLocalBitStringAux, pSps->bFrameCroppingFlag); // bFrameCroppingFlag
   if (pSps->bFrameCroppingFlag) {
     BsWriteUE (pLocalBitStringAux, pSps->sFrameCrop.iCropLeft);         // frame_crop_left_offset
@@ -481,14 +485,14 @@ static inline bool WelsGetPaddingOffset (int32_t iActualWidth, int32_t iActualHe
 int32_t WelsInitSps (SWelsSPS* pSps, SSpatialLayerConfig* pLayerParam, SSpatialLayerInternal* pLayerParamInternal,
                      const uint32_t kuiIntraPeriod, const int32_t kiNumRefFrame,
                      const uint32_t kuiSpsId, const bool kbEnableFrameCropping, bool bEnableRc,
-                     const int32_t kiDlayerCount, bool bSVCBaselayer) {
+                     const int32_t kiDlayerCount, bool bSVCBaselayer, bool bSubcodecMode) {
   memset (pSps, 0, sizeof (SWelsSPS));
   pSps->uiSpsId         = kuiSpsId;
   pSps->iMbWidth        = (pLayerParam->iVideoWidth + 15) >> 4;
   pSps->iMbHeight       = (pLayerParam->iVideoHeight + 15) >> 4;
 
   //max value of both iFrameNum and POC are 2^16-1, in our encoder, iPOC=2*iFrameNum, so max of iFrameNum should be 2^15-1.--
-  pSps->uiLog2MaxFrameNum = 15;//16;
+  pSps->uiLog2MaxFrameNum = bSubcodecMode ? 4 : 15;//16;
   pSps->iLog2MaxPocLsb = 1 + pSps->uiLog2MaxFrameNum;
 
   pSps->iNumRefFrames = kiNumRefFrame;        /* min pRef size when fifo pRef operation*/
@@ -561,7 +565,7 @@ int32_t WelsInitSubsetSps (SSubsetSps* pSubsetSps, SSpatialLayerConfig* pLayerPa
   memset (pSubsetSps, 0, sizeof (SSubsetSps));
 
   WelsInitSps (pSps, pLayerParam, pLayerParamInternal, kuiIntraPeriod, kiNumRefFrame, kuiSpsId, kbEnableFrameCropping,
-               bEnableRc, kiDlayerCount, false);
+               bEnableRc, kiDlayerCount, false, false);
 
   pSps->uiProfileIdc = pLayerParam->uiProfileIdc ;
 

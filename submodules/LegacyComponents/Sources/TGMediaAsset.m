@@ -1,9 +1,9 @@
-#import "TGMediaAsset.h"
-#import "TGMediaAssetImageSignals.h"
+#import <LegacyComponents/TGMediaAsset.h>
+#import <LegacyComponents/TGMediaAssetImageSignals.h>
 
 #import "LegacyComponentsInternal.h"
 
-#import <MobileCoreServices/MobileCoreServices.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @interface TGMediaAsset ()
 {
@@ -99,7 +99,7 @@
 
 - (bool)_isGif
 {
-    return [self.uniformTypeIdentifier isEqualToString:(NSString *)kUTTypeGIF];
+    return [self.uniformTypeIdentifier isEqualToString:UTTypeGIF.identifier];
 }
 
 - (bool)isFavorite
@@ -143,7 +143,7 @@
 - (SSignal *)actualVideoDuration
 {
     if (!self.isVideo)
-        return [SSignal fail:nil];
+        return nil;
     
     if (_cachedDuration == nil)
     {

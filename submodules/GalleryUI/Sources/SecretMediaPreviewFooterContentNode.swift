@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import Display
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 
@@ -32,15 +31,15 @@ final class SecretMediaPreviewFooterContentNode: GalleryFooterContentNode {
         }
     }
     
-    override func updateLayout(size: CGSize, metrics: LayoutMetrics, leftInset: CGFloat, rightInset: CGFloat, bottomInset: CGFloat, contentInset: CGFloat, transition: ContainedViewLayoutTransition) -> CGFloat {
+    override func updateLayout(size: CGSize, metrics: LayoutMetrics, leftInset: CGFloat, rightInset: CGFloat, bottomInset: CGFloat, contentInset: CGFloat, transition: ContainedViewLayoutTransition) -> LayoutInfo {
         let width = size.width
         let panelHeight: CGFloat = 44.0 + bottomInset
         
-        let sideInset: CGFloat = leftInset + 8.0
-        let textSize = self.textNode.updateLayout(CGSize(width: width - sideInset * 2.0, height: CGFloat.greatestFiniteMagnitude))
-        transition.updateFrame(node: self.textNode, frame: CGRect(origin: CGPoint(x: floor((width - textSize.width) / 2.0), y: floor((44.0 - textSize.height) / 2.0)), size: textSize))
+        // Centred in the band between the side insets (they differ beside iPhone Duo's side strip).
+        let textSize = self.textNode.updateLayout(CGSize(width: width - leftInset - rightInset - 8.0 * 2.0, height: CGFloat.greatestFiniteMagnitude))
+        transition.updateFrame(node: self.textNode, frame: CGRect(origin: CGPoint(x: leftInset + floor((width - leftInset - rightInset - textSize.width) / 2.0), y: floor((44.0 - textSize.height) / 2.0)), size: textSize))
         
-        return panelHeight
+        return LayoutInfo(height: panelHeight, needsShadow: false)
     }
 }
 

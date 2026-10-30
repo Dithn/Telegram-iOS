@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import ItemListUI
@@ -11,10 +10,10 @@ import AccountContext
 
 final class ChannelMembersSearchItem: ItemListControllerSearch {
     let context: AccountContext
-    let peerId: PeerId
+    let peerId: EnginePeer.Id
     let searchContext: GroupMembersSearchContext?
     let cancel: () -> Void
-    let openPeer: (Peer, RenderedChannelParticipant?) -> Void
+    let openPeer: (EnginePeer, RenderedChannelParticipant?) -> Void
     let pushController: (ViewController) -> Void
     let dismissInput: () -> Void
     let searchMode: ChannelMembersSearchMode
@@ -23,7 +22,7 @@ final class ChannelMembersSearchItem: ItemListControllerSearch {
     private var activity: ValuePromise<Bool> = ValuePromise(ignoreRepeated: false)
     private let activityDisposable = MetaDisposable()
     
-    init(context: AccountContext, peerId: PeerId, searchContext: GroupMembersSearchContext?, searchMode: ChannelMembersSearchMode = .searchMembers, cancel: @escaping () -> Void, openPeer: @escaping (Peer, RenderedChannelParticipant?) -> Void, pushController: @escaping (ViewController) -> Void, dismissInput: @escaping () -> Void) {
+    init(context: AccountContext, peerId: EnginePeer.Id, searchContext: GroupMembersSearchContext?, searchMode: ChannelMembersSearchMode = .searchMembers, cancel: @escaping () -> Void, openPeer: @escaping (EnginePeer, RenderedChannelParticipant?) -> Void, pushController: @escaping (ViewController) -> Void, dismissInput: @escaping () -> Void) {
         self.context = context
         self.peerId = peerId
         self.searchContext = searchContext
@@ -61,7 +60,7 @@ final class ChannelMembersSearchItem: ItemListControllerSearch {
         }
     }
     
-    func titleContentNode(current: (NavigationBarContentNode & ItemListControllerSearchNavigationContentNode)?) -> NavigationBarContentNode & ItemListControllerSearchNavigationContentNode {
+    func titleContentNode(current: (NavigationBarContentNode & ItemListControllerSearchNavigationContentNode)?) -> (NavigationBarContentNode & ItemListControllerSearchNavigationContentNode)? {
         let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
         if let current = current as? GroupInfoSearchNavigationContentNode {
             current.updateTheme(presentationData.theme)
@@ -85,7 +84,7 @@ final class ChannelMembersSearchItem: ItemListControllerSearch {
 private final class ChannelMembersSearchItemNode: ItemListControllerSearchNode {
     private let containerNode: ChannelMembersSearchContainerNode
     
-    init(context: AccountContext, peerId: PeerId, searchMode: ChannelMembersSearchMode, searchContext: GroupMembersSearchContext?, openPeer: @escaping (Peer, RenderedChannelParticipant?) -> Void, cancel: @escaping () -> Void, updateActivity: @escaping(Bool) -> Void, pushController: @escaping (ViewController) -> Void, dismissInput: @escaping () -> Void) {
+    init(context: AccountContext, peerId: EnginePeer.Id, searchMode: ChannelMembersSearchMode, searchContext: GroupMembersSearchContext?, openPeer: @escaping (EnginePeer, RenderedChannelParticipant?) -> Void, cancel: @escaping () -> Void, updateActivity: @escaping(Bool) -> Void, pushController: @escaping (ViewController) -> Void, dismissInput: @escaping () -> Void) {
         self.containerNode = ChannelMembersSearchContainerNode(context: context, forceTheme: nil, peerId: peerId, mode: searchMode, filters: [], searchContext: searchContext, openPeer: { peer, participant in
             openPeer(peer, participant)
         }, updateActivity: updateActivity, pushController: pushController)
@@ -111,8 +110,8 @@ private final class ChannelMembersSearchItemNode: ItemListControllerSearchNode {
     }
     
     override func updateLayout(layout: ContainerViewLayout, navigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition) {
-        transition.updateFrame(node: self.containerNode, frame: CGRect(origin: CGPoint(x: 0.0, y: navigationBarHeight), size: CGSize(width: layout.size.width, height: layout.size.height - navigationBarHeight)))
-        self.containerNode.containerLayoutUpdated(layout.withUpdatedSize(CGSize(width: layout.size.width, height: layout.size.height - navigationBarHeight)), navigationBarHeight: 0.0, transition: transition)
+        transition.updateFrame(node: self.containerNode, frame: CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: layout.size.width, height: layout.size.height)))
+        self.containerNode.containerLayoutUpdated(layout.withUpdatedSize(CGSize(width: layout.size.width, height: layout.size.height)), navigationBarHeight: navigationBarHeight, transition: transition)
     }
     
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {

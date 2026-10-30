@@ -1,15 +1,15 @@
-#import "TGCameraFlashControl.h"
+#import <LegacyComponents/TGCameraFlashControl.h>
 
 #import "LegacyComponentsInternal.h"
 
-#import "TGImageUtils.h"
+#import <LegacyComponents/TGImageUtils.h>
 
-#import "UIControl+HitTestEdgeInsets.h"
+#import <LegacyComponents/UIControl+HitTestEdgeInsets.h>
 
-#import "TGCameraInterfaceAssets.h"
+#import <LegacyComponents/TGCameraInterfaceAssets.h>
 #import <LegacyComponents/TGModernButton.h>
 
-#import "POPBasicAnimation.h"
+#import <LegacyComponents/POPBasicAnimation.h>
 
 const CGFloat TGCameraFlashControlHeight = 44.0f;
 
@@ -136,7 +136,10 @@ const CGFloat TGCameraFlashControlHeight = 44.0f;
         [self addSubview:_icon];
         
         _button = [[UIButton alloc] initWithFrame:CGRectMake(0, 0, 44, 44)];
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations" // legacy non-configuration UIButton: property is still honored
         _button.adjustsImageWhenHighlighted = false;
+        #pragma clang diagnostic pop
         _button.contentMode = UIViewContentModeCenter;
         _button.exclusiveTouch = true;
         _button.hitTestEdgeInsets = UIEdgeInsetsMake(0, -10, 0, -10);

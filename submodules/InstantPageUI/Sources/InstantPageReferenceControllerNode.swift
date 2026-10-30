@@ -2,21 +2,20 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import Postbox
 import TelegramCore
 import SafariServices
 import TelegramPresentationData
 import AccountContext
-import ShareController
 import OpenInExternalAppUI
 import TelegramUIPreferences
+import UrlWhitelist
 
-class InstantPageReferenceControllerNode: ViewControllerTracingNode, UIScrollViewDelegate {
+class InstantPageReferenceControllerNode: ViewControllerTracingNode, ASScrollViewDelegate {
     private let context: AccountContext
-    private let sourcePeerType: MediaAutoDownloadPeerType
+    private let sourceLocation: InstantPageSourceLocation
     private let theme: InstantPageTheme
     private var presentationData: PresentationData
-    private let webPage: TelegramMediaWebpage
+    private let webPage: (webPage: TelegramMediaWebpage, instantPage: InstantPage?)
     private let anchorText: NSAttributedString
 
     private let dimNode: ASDisplayNode
@@ -39,12 +38,12 @@ class InstantPageReferenceControllerNode: ViewControllerTracingNode, UIScrollVie
     var dismiss: (() -> Void)?
     var close: (() -> Void)?
     
-    init(context: AccountContext, sourcePeerType: MediaAutoDownloadPeerType, theme: InstantPageTheme, webPage: TelegramMediaWebpage, anchorText: NSAttributedString, openUrl: @escaping (InstantPageUrlItem) -> Void, openUrlIn: @escaping (InstantPageUrlItem) -> Void, present: @escaping (ViewController, Any?) -> Void) {
+    init(context: AccountContext, sourceLocation: InstantPageSourceLocation, theme: InstantPageTheme, webPage: TelegramMediaWebpage, instantPage: InstantPage?, anchorText: NSAttributedString, openUrl: @escaping (InstantPageUrlItem) -> Void, openUrlIn: @escaping (InstantPageUrlItem) -> Void, present: @escaping (ViewController, Any?) -> Void) {
         self.context = context
-        self.sourcePeerType = sourcePeerType
+        self.sourceLocation = sourceLocation
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
         self.theme = theme
-        self.webPage = webPage
+        self.webPage = (webPage, instantPage)
         self.anchorText = anchorText
         self.openUrl = openUrl
         self.openUrlIn = openUrlIn
@@ -54,6 +53,7 @@ class InstantPageReferenceControllerNode: ViewControllerTracingNode, UIScrollVie
         self.wrappingScrollNode.view.alwaysBounceVertical = true
         self.wrappingScrollNode.view.delaysContentTouches = false
         self.wrappingScrollNode.view.canCancelContentTouches = true
+        self.wrappingScrollNode.view.scrollsToTop = false
         
         self.dimNode = ASDisplayNode()
         self.dimNode.backgroundColor = UIColor(white: 0.0, alpha: 0.5)
@@ -85,7 +85,7 @@ class InstantPageReferenceControllerNode: ViewControllerTracingNode, UIScrollVie
         self.dimNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.dimTapGesture(_:))))
         self.addSubnode(self.dimNode)
         
-        self.wrappingScrollNode.view.delegate = self
+        self.wrappingScrollNode.view.delegate = self.wrappedScrollViewDelegate
         self.addSubnode(self.wrappingScrollNode)
         
         self.wrappingScrollNode.addSubnode(self.contentBackgroundNode)
@@ -192,19 +192,23 @@ class InstantPageReferenceControllerNode: ViewControllerTracingNode, UIScrollVie
         let titleAreaHeight: CGFloat = 54.0
         var contentHeight = titleAreaHeight + bottomInset
         
-        let width = horizontalContainerFillingSizeForLayout(layout: layout, sideInset: layout.safeInsets.left)
+        // Centered, or in the band beside a side strip (iPhone Duo). The panel is anchored at the bottom: placed as
+        // `horizontalContainerFillingPlacementForLayout(anchoredAtBottom:)` describes (it spans iPhone Duo's side strip
+        // in compact width, clear only of a corner block at the bottom).
+        let placement = horizontalContainerFillingPlacementForLayout(layout: layout, margin: 0.0, includesSafeInsets: true, anchoredAtBottom: true)
+        let width = placement.width
         
         if self.contentNode == nil || self.contentNode?.frame.width != width {
             self.contentNode?.removeFromSupernode()
             
-            var media: [MediaId: Media] = [:]
-            if case let .Loaded(content) = self.webPage.content, let instantPage = content.instantPage  {
+            var media: [EngineMedia.Id: EngineMedia] = [:]
+            if let instantPage = self.webPage.instantPage  {
                 media = instantPage.media
             }
             
             let sideInset: CGFloat = 16.0
-            let (_, items, contentSize) = layoutTextItemWithString(self.anchorText, boundingWidth: width - sideInset * 2.0, offset: CGPoint(x: sideInset, y: sideInset), media: media, webpage: self.webPage)
-            let contentNode = InstantPageContentNode(context: self.context, strings: self.presentationData.strings, nameDisplayOrder: self.presentationData.nameDisplayOrder, sourcePeerType: self.sourcePeerType, theme: self.theme, items: items, contentSize: CGSize(width: width, height: contentSize.height), inOverlayPanel: true, openMedia: { _ in }, longPressMedia: { _ in }, openPeer: { _ in }, openUrl: { _ in })
+            let (_, items, contentSize) = layoutTextItemWithString(self.anchorText, boundingWidth: width - sideInset * 2.0, offset: CGPoint(x: sideInset, y: sideInset), media: media, webpage: self.webPage.webPage)
+            let contentNode = InstantPageContentNode(context: self.context, strings: self.presentationData.strings, nameDisplayOrder: self.presentationData.nameDisplayOrder, sourceLocation: self.sourceLocation, theme: self.theme, items: items, contentSize: CGSize(width: width, height: contentSize.height), inOverlayPanel: true, openMedia: { _ in }, longPressMedia: { _ in }, activatePinchPreview: nil, pinchPreviewFinished: nil, openPeer: { _ in }, openUrl: { _ in }, getPreloadedResource: { url in return nil})
             transition.updateFrame(node: contentNode, frame: CGRect(origin: CGPoint(x: 0.0, y: titleAreaHeight), size: CGSize(width: width, height: contentSize.height)))
             self.contentContainerNode.insertSubnode(contentNode, at: 0)
             self.contentNode = contentNode
@@ -214,7 +218,7 @@ class InstantPageReferenceControllerNode: ViewControllerTracingNode, UIScrollVie
             contentNode.updateVisibleItems(visibleBounds: contentNode.bounds, animated: false)
         }
         
-        let sideInset = floor((layout.size.width - width) / 2.0)
+        let sideInset = placement.left
         let contentContainerFrame = CGRect(origin: CGPoint(x: sideInset, y: layout.size.height - contentHeight), size: CGSize(width: width, height: contentHeight))
         let contentFrame = contentContainerFrame
         
@@ -347,7 +351,7 @@ class InstantPageReferenceControllerNode: ViewControllerTracingNode, UIScrollVie
                                 let openText = canOpenIn ? self.presentationData.strings.Conversation_FileOpenIn : self.presentationData.strings.Conversation_LinkDialogOpen
                                 let actionSheet = ActionSheetController(instantPageTheme: self.theme)
                                 actionSheet.setItemGroups([ActionSheetItemGroup(items: [
-                                    ActionSheetTextItem(title: url.url),
+                                    ActionSheetTextItem(title: displayUrlRevealingLoginPart(url.url) ?? url.url),
                                     ActionSheetButtonItem(title: openText, color: .accent, action: { [weak self, weak actionSheet] in
                                         actionSheet?.dismissAnimated()
                                         if let strongSelf = self {
@@ -411,11 +415,11 @@ class InstantPageReferenceControllerNode: ViewControllerTracingNode, UIScrollVie
                 coveringRect = coveringRect.union(rects[i])
             }
             
-            let controller = ContextMenuController(actions: [ContextMenuAction(content: .text(title: self.presentationData.strings.Conversation_ContextMenuCopy, accessibilityLabel: self.presentationData.strings.Conversation_ContextMenuCopy), action: {
+            let controller = makeContextMenuController(actions: [ContextMenuAction(content: .text(title: self.presentationData.strings.Conversation_ContextMenuCopy, accessibilityLabel: self.presentationData.strings.Conversation_ContextMenuCopy), action: {
                 UIPasteboard.general.string = text
             }), ContextMenuAction(content: .text(title: self.presentationData.strings.Conversation_ContextMenuShare, accessibilityLabel: self.presentationData.strings.Conversation_ContextMenuShare), action: { [weak self] in
-                if let strongSelf = self, case let .Loaded(content) = strongSelf.webPage.content {
-                    strongSelf.present(ShareController(context: strongSelf.context, subject: .quote(text: text, url: content.url)), nil)
+                if let strongSelf = self, case let .Loaded(content) = strongSelf.webPage.webPage.content {
+                    strongSelf.present(strongSelf.context.sharedContext.makeShareScreen(context: strongSelf.context, params: ShareControllerParams(subject: .quote(text: text, url: content.url))), nil)
                 }
             })])
             controller.dismissed = { [weak self] in

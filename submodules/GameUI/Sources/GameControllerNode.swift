@@ -9,6 +9,7 @@ import TelegramPresentationData
 import AccountContext
 import ShareController
 import UndoUI
+import EmojiStatusComponent
 
 private class WeakGameScriptMessageHandler: NSObject, WKScriptMessageHandler {
     private let f: (WKScriptMessage) -> ()
@@ -65,8 +66,6 @@ final class GameControllerNode: ViewControllerTracingNode {
         configuration.allowsInlineMediaPlayback = true
         if #available(iOSApplicationExtension 10.0, iOS 10.0, *) {
             configuration.mediaTypesRequiringUserActionForPlayback = []
-        } else if #available(iOSApplicationExtension 9.0, iOS 9.0, *) {
-            configuration.requiresUserActionForMediaPlayback = false
         } else {
             configuration.mediaPlaybackRequiresUserAction = false
         }
@@ -92,7 +91,11 @@ final class GameControllerNode: ViewControllerTracingNode {
     
     func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition) {
         if let webView = self.webView {
-            webView.frame = CGRect(origin: CGPoint(x: 0.0, y: navigationBarHeight), size: CGSize(width: layout.size.width, height: max(1.0, layout.size.height - navigationBarHeight)))
+            // Beside a side strip (iPhone Duo) the game keeps to the band: a game page does not read the safe area, so
+            // laid out across the screen its controls run under the strip. Equal side insets keep the full width.
+            let bandMinX: CGFloat = layout.safeInsets.left != layout.safeInsets.right ? layout.safeInsets.left : 0.0
+            let bandWidth: CGFloat = layout.safeInsets.left != layout.safeInsets.right ? layout.size.width - layout.safeInsets.left - layout.safeInsets.right : layout.size.width
+            webView.frame = CGRect(origin: CGPoint(x: bandMinX, y: navigationBarHeight), size: CGSize(width: bandWidth, height: max(1.0, layout.size.height - navigationBarHeight)))
         }
     }
     
@@ -146,19 +149,21 @@ final class GameControllerNode: ViewControllerTracingNode {
         if eventName == "share_game" || eventName == "share_score" {
             if let (botPeer, gameName) = self.shareData(), let addressName = botPeer.addressName, !addressName.isEmpty, !gameName.isEmpty {
                 if eventName == "share_score" {
-                    self.present(ShareController(context: self.context, subject: .fromExternal({ [weak self] peerIds, text, account, _ in
-                        if let strongSelf = self, let message = strongSelf.message {
-                            let signals = peerIds.map { TelegramEngine(account: account).messages.forwardGameWithScore(messageId: message.id, to: $0, as: nil) }
-                            return .single(.preparing)
+                    self.present(self.context.sharedContext.makeShareScreen(context: self.context, params: ShareControllerParams(subject: .fromExternal(1, { [weak self] peerIds, threadIds, requireStars, text, account, _ in
+                        if let strongSelf = self, let message = strongSelf.message, let account = account as? ShareControllerAppAccountContext {
+                            let signals = peerIds.map { TelegramEngine(account: account.context.account).messages.forwardGameWithScore(messageId: message.id, to: $0, threadId: threadIds[$0], as: nil) }
+                            return .single(.preparing(false))
+                            |> castError(ShareControllerError.self)
                             |> then(
                                 combineLatest(signals)
-                                |> mapToSignal { _ -> Signal<ShareControllerExternalStatus, NoError> in return .complete() }
+                                |> castError(ShareControllerError.self)
+                                |> mapToSignal { _ -> Signal<ShareControllerExternalStatus, ShareControllerError> in return .complete() }
                             )
                             |> then(.single(.done))
                         } else {
                             return .single(.done)
                         }
-                    }), showInChat: nil, externalShare: false, immediateExternalShare: false), nil)
+                    }), showInChat: nil, externalShare: false, immediateExternalShare: false)), nil)
                 } else {
                     self.shareWithoutScore()
                 }
@@ -171,13 +176,12 @@ final class GameControllerNode: ViewControllerTracingNode {
             let url = "https://t.me/\(addressName)?game=\(gameName)"
             
             let context = self.context
-            let shareController = ShareController(context: context, subject: .url(url), showInChat: nil, externalShare: true)
-            shareController.actionCompleted = { [weak self] in
+            let shareController = context.sharedContext.makeShareScreen(context: context, params: ShareControllerParams(subject: .url(url), showInChat: nil, externalShare: true, actionCompleted: { [weak self] in
                 if let strongSelf = self {
                     let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                    strongSelf.present(UndoOverlayController(presentationData: presentationData, content: .linkCopied(text: presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
+                    strongSelf.present(UndoOverlayController(presentationData: presentationData, content: .linkCopied(title: nil, text: presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
                 }
-            }
+            }))
             self.present(shareController, nil)
         }
     }

@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Intents
 import Display
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import TelegramUIPreferences
@@ -55,7 +54,7 @@ public enum SendMessageIntentSubject: CaseIterable {
     }
 }
 
-public func donateSendMessageIntent(account: Account, sharedContext: SharedAccountContext, intentContext: SendMessageIntentContext, peerIds: [PeerId]) {
+public func donateSendMessageIntent(account: Account, sharedContext: SharedAccountContext, intentContext: SendMessageIntentContext, peerIds: [EnginePeer.Id]) {
     if #available(iOSApplicationExtension 13.2, iOS 13.2, *) {
         let _ = (sharedContext.accountManager.transaction { transaction -> Bool in
             if case .none = transaction.getAccessChallengeData() {
@@ -64,11 +63,11 @@ public func donateSendMessageIntent(account: Account, sharedContext: SharedAccou
                 return false
             }
         }
-        |> mapToSignal { unlocked -> Signal<[(Peer, SendMessageIntentSubject, UIImage?)], NoError> in
+        |> mapToSignal { unlocked -> Signal<[(EngineRawPeer, SendMessageIntentSubject, UIImage?)], NoError> in
             if unlocked {
                 return sharedContext.accountManager.sharedData(keys: [ApplicationSpecificSharedDataKeys.intentsSettings])
                 |> take(1)
-                |> mapToSignal { sharedData -> Signal<[(Peer, SendMessageIntentSubject)], NoError> in
+                |> mapToSignal { sharedData -> Signal<[(EngineRawPeer, SendMessageIntentSubject)], NoError> in
                     let settings = sharedData.entries[ApplicationSpecificSharedDataKeys.intentsSettings]?.get(IntentsSettings.self) ?? IntentsSettings.defaultSettings
                     if let accountId = settings.account, accountId != account.peerId {
                         return .single([])
@@ -76,13 +75,19 @@ public func donateSendMessageIntent(account: Account, sharedContext: SharedAccou
                     if case .chat = intentContext, settings.onlyShared {
                         return .single([])
                     }
-                    return account.postbox.transaction { transaction -> [(Peer, SendMessageIntentSubject)] in
-                        var peers: [(Peer, SendMessageIntentSubject)] = []
+                    
+                    return TelegramEngine(account: account).data.get(
+                        EngineDataMap(peerIds.map(TelegramEngine.EngineData.Item.Peer.Peer.init)),
+                        EngineDataMap(peerIds.map(TelegramEngine.EngineData.Item.Peer.IsContact.init)),
+                        EngineDataMap(peerIds.map(TelegramEngine.EngineData.Item.Messages.ChatListGroup.init))
+                    )
+                    |> map { peerMap, isContactMap, chatListGroupMap -> [(EngineRawPeer, SendMessageIntentSubject)] in
+                        var peers: [(EngineRawPeer, SendMessageIntentSubject)] = []
                         for peerId in peerIds {
-                            if peerId.namespace != Namespaces.Peer.SecretChat, let peer = transaction.getPeer(peerId) {
+                            if peerId.namespace != Namespaces.Peer.SecretChat, let maybePeer = peerMap[peerId], let peer = maybePeer {
                                 var subject: SendMessageIntentSubject?
-                                let chatListIndex = transaction.getPeerChatListIndex(peerId)
-                                if chatListIndex?.0 == Namespaces.PeerGroup.archive {
+                                let chatListGroup = chatListGroupMap[peerId]
+                                if chatListGroup == .archive {
                                     continue
                                 }
                                 if peerId.namespace == Namespaces.Peer.CloudUser {
@@ -91,7 +96,7 @@ public func donateSendMessageIntent(account: Account, sharedContext: SharedAccou
                                             continue
                                         }
                                         subject = .savedMessages
-                                    } else if transaction.isPeerContact(peerId: peerId) {
+                                    } else if let isContact = isContactMap[peerId], isContact {
                                         if !settings.contacts {
                                             continue
                                         }
@@ -107,7 +112,7 @@ public func donateSendMessageIntent(account: Account, sharedContext: SharedAccou
                                          continue
                                     }
                                     subject = .group
-                                } else if let peer = peer as? TelegramChannel {
+                                } else if case let .channel(peer) = peer {
                                     if case .group = peer.info {
                                         if !settings.groups {
                                             continue
@@ -121,21 +126,21 @@ public func donateSendMessageIntent(account: Account, sharedContext: SharedAccou
                                 }
                                 
                                 if let subject = subject {
-                                    peers.append((peer, subject))
+                                    peers.append((peer._asPeer(), subject))
                                 }
                             }
                         }
                         return peers
                     }
                 }
-                |> mapToSignal { peers -> Signal<[(Peer, SendMessageIntentSubject, UIImage?)], NoError> in
-                    var signals: [Signal<(Peer, SendMessageIntentSubject, UIImage?), NoError>] = []
+                |> mapToSignal { peers -> Signal<[(EngineRawPeer, SendMessageIntentSubject, UIImage?)], NoError> in
+                    var signals: [Signal<(EngineRawPeer, SendMessageIntentSubject, UIImage?), NoError>] = []
                     for (peer, subject) in peers {
                         if peer.id == account.peerId {
                             signals.append(.single((peer, subject, savedMessagesAvatar)))
                         } else {
-                            let peerAndAvatar = (peerAvatarImage(account: account, peerReference: PeerReference(peer), authorOfMessage: nil, representation: peer.smallProfileImage, round: false) ?? .single(nil))
-                            |> map { imageVersions -> (Peer, SendMessageIntentSubject, UIImage?) in
+                            let peerAndAvatar = (peerAvatarImage(account: account, peerReference: PeerReference(peer), authorOfMessage: nil, representation: peer.smallProfileImage, clipStyle: .none) ?? .single(nil))
+                            |> map { imageVersions -> (EngineRawPeer, SendMessageIntentSubject, UIImage?) in
                                 var avatarImage: UIImage?
                                 if let image = imageVersions?.0 {
                                     avatarImage = image
@@ -145,7 +150,7 @@ public func donateSendMessageIntent(account: Account, sharedContext: SharedAccou
                                     if let image = generateImage(size, rotatedContext: { size, context in
                                         context.clear(CGRect(origin: CGPoint(), size: size))
                                         
-                                        drawPeerAvatarLetters(context: context, size: CGSize(width: size.width, height: size.height), font: avatarFont, letters: peer.displayLetters, peerId: peer.id)
+                                        drawPeerAvatarLetters(context: context, size: CGSize(width: size.width, height: size.height), font: avatarFont, letters: peer.displayLetters, peerId: peer.id, nameColor: peer.nameColor)
                                     })?.withRenderingMode(.alwaysOriginal) {
                                         avatarImage = image
                                     }
@@ -187,12 +192,14 @@ public func donateSendMessageIntent(account: Account, sharedContext: SharedAccou
                     nameComponents.givenName = displayTitle
                 }
                 
-                let recipient = INPerson(personHandle: recipientHandle, nameComponents: nameComponents, displayName: displayTitle, image: nil, contactIdentifier: nil, customIdentifier: "tg\(peer.id.toInt64())")
-               
-                let intent = INSendMessageIntent(recipients: [recipient], content: nil, speakableGroupName: INSpeakableString(spokenPhrase: displayTitle), conversationIdentifier: "tg\(peer.id.toInt64())", serviceName: nil, sender: nil)
+                var personImage: INImage?
                 if let avatarImage = avatarImage, let avatarImageData = avatarImage.jpegData(compressionQuality: 0.8) {
-                    intent.setImage(INImage(imageData: avatarImageData), forParameterNamed: \.groupName)
+                    personImage = INImage(imageData: avatarImageData)
                 }
+                
+                let recipient = INPerson(personHandle: recipientHandle, nameComponents: nameComponents, displayName: displayTitle, image: personImage, contactIdentifier: nil, customIdentifier: "tg\(peer.id.toInt64())")
+               
+                let intent = INSendMessageIntent(recipients: [recipient], outgoingMessageType: .outgoingMessageText, content: nil, speakableGroupName: INSpeakableString(spokenPhrase: displayTitle), conversationIdentifier: "tg\(peer.id.toInt64())", serviceName: nil, sender: nil, attachments: nil)
                 let interaction = INInteraction(intent: intent, response: nil)
                 interaction.direction = .outgoing
                 interaction.groupIdentifier = "sendMessage_\(peer.id.toInt64())"
@@ -206,7 +213,7 @@ public func donateSendMessageIntent(account: Account, sharedContext: SharedAccou
     }
 }
 
-public func deleteSendMessageIntents(peerId: PeerId) {
+public func deleteSendMessageIntents(peerId: EnginePeer.Id) {
     if #available(iOS 10.0, *) {
         INInteraction.delete(with: "sendMessage_\(peerId.toInt64())")
     }

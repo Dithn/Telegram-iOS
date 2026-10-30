@@ -1,34 +1,45 @@
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
 headers = [
     "decode.h",
     "encode.h",
     "types.h",
-    #"demux.h",
-    #"mux_types.h",
 ]
 
 libs = [
     "webp",
+    "sharpyuv",
 ]
+
+# libwebp at c1ffd9ac7593894c40a1de99d03f0b7af8af2577
+filegroup(
+    name = "libwebp_sources",
+    srcs = glob([
+        "libwebp/**/*"
+    ]),
+)
 
 genrule(
     name = "webp_build",
     srcs = [
         "build-webp-bazel.sh",
-        "libwebp-1.1.0.tar.gz",
+        ":libwebp_sources",
+        "@cmake_tar_gz//file",
     ],
     cmd_bash = 
     """
     set -ex
 
-    if [ "$(TARGET_CPU)" == "ios_armv7" ]; then
-        BUILD_ARCH="armv7"
-    elif [ "$(TARGET_CPU)" == "ios_arm64" ]; then
+    if [ "$(TARGET_CPU)" == "ios_arm64" ]; then
         BUILD_ARCH="arm64"
     elif [ "$(TARGET_CPU)" == "ios_sim_arm64" ]; then
         BUILD_ARCH="sim_arm64"
     elif [ "$(TARGET_CPU)" == "ios_x86_64" ]; then
         BUILD_ARCH="x86_64"
+    elif [ "$(TARGET_CPU)" == "darwin_arm64" ]; then
+        BUILD_ARCH="macos_arm64"
     else
         echo "Unsupported architecture $(TARGET_CPU)"
     fi
@@ -37,19 +48,27 @@ genrule(
     rm -rf "$$BUILD_DIR"
     mkdir -p "$$BUILD_DIR"
 
+    CMAKE_DIR="$$(pwd)/$$BUILD_DIR/cmake"
+    rm -rf "$$CMAKE_DIR"
+    mkdir -p "$$CMAKE_DIR"
+    tar -xzf "$(location @cmake_tar_gz//file)" -C "$$CMAKE_DIR"
+
     cp $(location :build-webp-bazel.sh) "$$BUILD_DIR/"
-    cp $(location :libwebp-1.1.0.tar.gz) "$$BUILD_DIR/"
 
-    mkdir -p "$$BUILD_DIR/Public/webp"
+    SOURCE_PATH="third-party/webp/libwebp"
 
-    sh $$BUILD_DIR/build-webp-bazel.sh $$BUILD_ARCH "$$BUILD_DIR" libwebp-1.1.0.tar.gz
+    cp -R "$$SOURCE_PATH" "$$BUILD_DIR/"
+
+    mkdir -p "$$BUILD_DIR/Public/libwebp"
+
+    PATH="$$CMAKE_DIR/cmake-4.1.2-macos-universal/CMake.app/Contents/bin:$$PATH" sh $$BUILD_DIR/build-webp-bazel.sh $$BUILD_ARCH "$$BUILD_DIR/libwebp" "$$BUILD_DIR"
     """ +
     "\n".join([
-        "cp -f \"$$BUILD_DIR/src/libwebp-1.1.0/build-output/include/webp/{}\" \"$(location Public/webp/{})\"".format(header, header) for header in headers
+        "cp -f \"$$BUILD_DIR/libwebp/src/webp/{}\" \"$(location Public/webp/{})\"".format(header, header) for header in headers
     ]) +
     "\n" +
     "\n".join([
-        "cp -f \"$$BUILD_DIR/src/libwebp-1.1.0/build-output/lib/lib{}.a\" \"$(location Public/webp/lib/lib{}.a)\"".format(lib, lib) for lib in libs
+        "cp -f \"$$BUILD_DIR/build/lib{}.a\" \"$(location Public/webp/lib/lib{}.a)\"".format(lib, lib) for lib in libs
     ]),
     outs = ["Public/webp/" + x for x in headers] +
     ["Public/webp/lib/lib{}.a".format(x) for x in libs],
@@ -70,7 +89,6 @@ objc_library(
     hdrs = [":Public/webp/" + x for x in headers],
     includes = [
         "Public",
-        "Public/webp",
     ],
     deps = [
         ":webp_lib",

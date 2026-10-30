@@ -6,6 +6,7 @@ import ComponentFlow
 import SwiftSignalKit
 import AnimationUI
 import TelegramPresentationData
+import GlassBackgroundComponent
 
 public final class MultilineText: Component {
     public let text: String
@@ -51,7 +52,7 @@ public final class MultilineText: Component {
             preconditionFailure()
         }
 
-        func update(component: MultilineText, availableSize: CGSize, environment: Environment<Empty>, transition: Transition) -> CGSize {
+        func update(component: MultilineText, availableSize: CGSize, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
             self.text.attributedText = NSAttributedString(string: component.text, font: component.font, textColor: component.color, paragraphAlignment: nil)
             let textSize = self.text.updateLayout(availableSize)
             transition.setFrame(view: self.text.view, frame: CGRect(origin: CGPoint(), size: textSize))
@@ -64,7 +65,7 @@ public final class MultilineText: Component {
         return View()
     }
 
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, environment: environment, transition: transition)
     }
 }
@@ -97,7 +98,7 @@ public final class LottieAnimationComponent: Component {
             preconditionFailure()
         }
 
-        func update(component: LottieAnimationComponent, availableSize: CGSize, environment: Environment<Empty>, transition: Transition) -> CGSize {
+        func update(component: LottieAnimationComponent, availableSize: CGSize, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
             if self.currentName != component.name {
                 self.currentName = component.name
 
@@ -126,7 +127,7 @@ public final class LottieAnimationComponent: Component {
         return View()
     }
 
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, environment: environment, transition: transition)
     }
 }
@@ -184,7 +185,7 @@ private final class ScrollingTooltipAnimationComponent: Component {
             self.animator = animator
         }
 
-        func update(component: ScrollingTooltipAnimationComponent, availableSize: CGSize, environment: Environment<Empty>, transition: Transition) -> CGSize {
+        func update(component: ScrollingTooltipAnimationComponent, availableSize: CGSize, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
             return CGSize(width: 32.0, height: 32.0)
         }
 
@@ -249,7 +250,7 @@ private final class ScrollingTooltipAnimationComponent: Component {
         return View()
     }
 
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, environment: environment, transition: transition)
     }
 }
@@ -324,7 +325,7 @@ public final class TooltipComponent: Component {
             preconditionFailure()
         }
 
-        func update(component: TooltipComponent, availableSize: CGSize, environment: Environment<Empty>, transition: Transition) -> CGSize {
+        func update(component: TooltipComponent, availableSize: CGSize, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
             let insets = UIEdgeInsets(top: 8.0, left: 8.0, bottom: 8.0, right: 8.0)
             let spacing: CGFloat = 8.0
 
@@ -400,7 +401,7 @@ public final class TooltipComponent: Component {
         return View()
     }
 
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, environment: environment, transition: transition)
     }
 }
@@ -437,7 +438,7 @@ private final class RoundedRectangle: Component {
             preconditionFailure()
         }
 
-        func update(component: RoundedRectangle, availableSize: CGSize, environment: Environment<Empty>, transition: Transition) -> CGSize {
+        func update(component: RoundedRectangle, availableSize: CGSize, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
             let shadowInset: CGFloat = 0.0
             let diameter = min(availableSize.width, availableSize.height)
 
@@ -476,7 +477,7 @@ private final class RoundedRectangle: Component {
         return View()
     }
 
-    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, environment: environment, transition: transition)
     }
 }
@@ -514,7 +515,7 @@ private final class ShadowRoundedRectangle: Component {
             preconditionFailure()
         }
 
-        func update(component: ShadowRoundedRectangle, availableSize: CGSize, environment: Environment<Empty>, transition: Transition) -> CGSize {
+        func update(component: ShadowRoundedRectangle, availableSize: CGSize, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
             let diameter = min(availableSize.width, availableSize.height)
 
             var updated = false
@@ -551,7 +552,7 @@ private final class ShadowRoundedRectangle: Component {
         return View()
     }
 
-    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, environment: environment, transition: transition)
     }
 }
@@ -628,7 +629,7 @@ public final class RollingText: Component {
                     
                     self.containerView.layer.removeAnimation(forKey: "opacity")
                 }
-                if let snapshotView = self.containerView.snapshotView(afterScreenUpdates: true) {
+                if let snapshotView = self.containerView.snapshotContentTree() {
                     let horizontalOffset = boundingRect.width - snapshotView.frame.width
                     let verticalOffset: CGFloat = 12.0
                     
@@ -702,13 +703,15 @@ public final class RollingText: Component {
         return View()
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize)
     }
 }
 
 
 final class SparseItemGridScrollingIndicatorComponent: CombinedComponent {
+    let isDark: Bool
+    let isVisible: Bool
     let backgroundColor: UIColor
     let shadowColor: UIColor
     let foregroundColor: UIColor
@@ -716,12 +719,16 @@ final class SparseItemGridScrollingIndicatorComponent: CombinedComponent {
     let previousDate: (String, Int32)?
 
     init(
+        isDark: Bool,
+        isVisible: Bool,
         backgroundColor: UIColor,
         shadowColor: UIColor,
         foregroundColor: UIColor,
         date: (String, Int32),
         previousDate: (String, Int32)?
     ) {
+        self.isDark = isDark
+        self.isVisible = isVisible
         self.backgroundColor = backgroundColor
         self.shadowColor = shadowColor
         self.foregroundColor = foregroundColor
@@ -730,6 +737,12 @@ final class SparseItemGridScrollingIndicatorComponent: CombinedComponent {
     }
 
     static func ==(lhs: SparseItemGridScrollingIndicatorComponent, rhs: SparseItemGridScrollingIndicatorComponent) -> Bool {
+        if lhs.isDark != rhs.isDark {
+            return false
+        }
+        if lhs.isVisible != rhs.isVisible {
+            return false
+        }
         if lhs.backgroundColor != rhs.backgroundColor {
             return false
         }
@@ -749,17 +762,15 @@ final class SparseItemGridScrollingIndicatorComponent: CombinedComponent {
     }
 
     static var body: Body {
-        let rect = Child(ShadowRoundedRectangle.self)
+        let rect = Child(GlassBackgroundComponent.self)
         let textMonth = Child(RollingText.self)
         let textYear = Child(RollingText.self)
 
         return { context in
-            context.view.clipsToBounds = true
-            
             let date = context.component.date
             
             let components = date.0.components(separatedBy: " ")
-            let month = components.first ?? ""
+            let month = String(components.prefix(upTo: components.count - 1).joined(separator: " "))
             let year = components.last ?? ""
             
             var monthAnimation: RollingText.AnimationDirection?
@@ -804,11 +815,17 @@ final class SparseItemGridScrollingIndicatorComponent: CombinedComponent {
                 transition: .immediate
             )
 
+            let rectSize = CGSize(width: textMonth.size.width + 3.0 + textYear.size.width + 26.0, height: 32.0)
             let rect = rect.update(
-                component: ShadowRoundedRectangle(
-                    color: context.component.backgroundColor
+                component: GlassBackgroundComponent(
+                    size: rectSize,
+                    cornerRadius: rectSize.height * 0.5,
+                    isDark: context.component.isDark,
+                    tintColor: .init(kind: .panel),
+                    isInteractive: false,
+                    isVisible: context.component.isVisible
                 ),
-                availableSize: CGSize(width: textMonth.size.width + 3.0 + textYear.size.width + 26.0, height: 32.0),
+                availableSize: rectSize,
                 transition: .easeInOut(duration: 0.2)
             )
 
@@ -818,7 +835,7 @@ final class SparseItemGridScrollingIndicatorComponent: CombinedComponent {
             ))
 
             context.add(rect
-                .position(CGPoint(x: rectFrame.midX + shadowInset, y: rectFrame.midY + shadowInset))
+                .position(CGPoint(x: rectFrame.midX, y: rectFrame.midY))
             )
             
             let offset = CGSize(width: textMonth.size.width + 3.0 + textYear.size.width, height: textMonth.size.height).centered(in: rectFrame)
@@ -827,9 +844,11 @@ final class SparseItemGridScrollingIndicatorComponent: CombinedComponent {
             let yearTextFrame = textYear.size.leftCentered(in: rectFrame).offsetBy(dx: offset.minX + monthTextFrame.width + 3.0, dy: 0.0)
             context.add(textMonth
                 .position(CGPoint(x: monthTextFrame.midX, y: monthTextFrame.midY))
+                .opacity(context.component.isVisible ? 1.0 : 0.0)
             )
             context.add(textYear
                 .position(CGPoint(x: yearTextFrame.midX, y: yearTextFrame.midY))
+                .opacity(context.component.isVisible ? 1.0 : 0.0)
             )
             
             return rect.size
@@ -838,16 +857,25 @@ final class SparseItemGridScrollingIndicatorComponent: CombinedComponent {
 }
 
 public final class SparseItemGridScrollingArea: ASDisplayNode {
+    private struct ShouldBegin {
+        var shouldDelay: Bool
+        
+        init(shouldDelay: Bool) {
+            self.shouldDelay = shouldDelay
+        }
+    }
+    
     private final class DragGesture: UIGestureRecognizer {
-        private let shouldBegin: (CGPoint) -> Bool
+        private let shouldBegin: (CGPoint) -> ShouldBegin?
         private let began: () -> Void
         private let ended: () -> Void
         private let moved: (CGFloat) -> Void
 
         private var initialLocation: CGPoint?
+        private var beginDelayTimer: SwiftSignalKit.Timer?
 
         public init(
-            shouldBegin: @escaping (CGPoint) -> Bool,
+            shouldBegin: @escaping (CGPoint) -> ShouldBegin?,
             began: @escaping () -> Void,
             ended: @escaping () -> Void,
             moved: @escaping (CGFloat) -> Void
@@ -868,6 +896,9 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
 
             self.initialLocation = nil
             self.initialLocation = nil
+            
+            self.beginDelayTimer?.invalidate()
+            self.beginDelayTimer = nil
         }
 
         override public func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -881,10 +912,29 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
 
             if self.state == .possible {
                 if let location = touches.first?.location(in: self.view) {
-                    if self.shouldBegin(location) {
+                    if let shouldBeginValue = self.shouldBegin(location) {
                         self.initialLocation = location
-                        self.state = .began
-                        self.began()
+                        
+                        if shouldBeginValue.shouldDelay {
+                            self.state = .began
+                            if self.beginDelayTimer == nil {
+                                self.beginDelayTimer = SwiftSignalKit.Timer(timeout: 0.2, repeat: false, completion: { [weak self] in
+                                    guard let self else {
+                                        return
+                                    }
+                                    
+                                    self.beginDelayTimer = nil
+                                    
+                                    if self.initialLocation != nil {
+                                        self.began()
+                                    }
+                                }, queue: .mainQueue())
+                                self.beginDelayTimer?.start()
+                            }
+                        } else {
+                            self.state = .began
+                            self.began()
+                        }
                     } else {
                         self.state = .failed
                     }
@@ -919,10 +969,20 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
         override public func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
             super.touchesMoved(touches, with: event)
 
-            if (self.state == .began || self.state == .changed), let initialLocation = self.initialLocation, let location = touches.first?.location(in: self.view) {
-                self.state = .changed
+            if let initialLocation = self.initialLocation, let location = touches.first?.location(in: self.view) {
                 let offset = location.y - initialLocation.y
-                self.moved(offset)
+                
+                if self.beginDelayTimer != nil {
+                    if abs(offset) > 16.0 {
+                        self.ended()
+                        self.state = .failed
+                    } else {
+                        self.initialLocation = location
+                    }
+                } else if (self.state == .began || self.state == .changed) {
+                    self.state = .changed
+                    self.moved(offset)
+                }
             }
         }
     }
@@ -948,8 +1008,10 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
     private var activityTimer: SwiftSignalKit.Timer?
 
     public var beginScrolling: (() -> UIScrollView?)?
+    public var finishedScrolling: (() -> Void)?
     public var setContentOffset: ((CGPoint) -> Void)?
     public var openCurrentDate: (() -> Void)?
+    public var isDecelerating: (() -> Bool)?
 
     private var offsetBarTimer: SwiftSignalKit.Timer?
     private var beganAtDateIndicator = false
@@ -986,7 +1048,6 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
         self.dateIndicator = ComponentHostView<Empty>()
         self.lineIndicator = ComponentHostView<Empty>()
 
-        self.dateIndicator.alpha = 0.0
         self.lineIndicator.alpha = 0.0
 
         super.init()
@@ -1001,7 +1062,7 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
         let dragGesture = DragGesture(
             shouldBegin: { [weak self] point in
                 guard let strongSelf = self else {
-                    return false
+                    return nil
                 }
 
                 if strongSelf.dateIndicator.frame.contains(point) {
@@ -1010,7 +1071,7 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
                     strongSelf.beganAtDateIndicator = false
                 }
 
-                return true
+                return ShouldBegin(shouldDelay: strongSelf.isDecelerating?() ?? false)
             },
             began: { [weak self] in
                 guard let strongSelf = self else {
@@ -1059,6 +1120,8 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
                 strongSelf.updateLineIndicator(transition: transition)
 
                 strongSelf.updateActivityTimer(isScrolling: false)
+                
+                strongSelf.finishedScrolling?()
             },
             moved: { [weak self] relativeOffset in
                 guard let strongSelf = self else {
@@ -1112,6 +1175,37 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
     }
 
     private var currentDate: (String, Int32)?
+    private var isScrolling: Bool = false
+    
+    private var isDateIndicatorVisible = false
+    
+    private func requestUpdate(animated: Bool) {
+        guard let containerSize = self.containerSize else {
+            return
+        }
+        let _ = self.updateIndicator(containerSize: containerSize, animated: animated)
+    }
+    
+    private func updateIndicator(containerSize: CGSize, previousDate: (String, Int32)? = nil, animated: Bool) -> CGSize {
+        guard let theme = self.theme, let date = self.currentDate else {
+            return .zero
+        }
+        let indicatorSize = self.dateIndicator.update(
+            transition: animated ? .easeInOut(duration: 0.2) : .immediate,
+            component: AnyComponent(SparseItemGridScrollingIndicatorComponent(
+                isDark: theme.overallDarkAppearance,
+                isVisible: self.isDateIndicatorVisible,
+                backgroundColor: theme.list.itemBlocksBackgroundColor,
+                shadowColor: .black,
+                foregroundColor: theme.list.itemPrimaryTextColor,
+                date: date,
+                previousDate: previousDate
+            )),
+            environment: {},
+            containerSize: containerSize
+        )
+        return indicatorSize
+    }
     
     public func update(
         containerSize: CGSize,
@@ -1127,6 +1221,8 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
         self.theme = theme
         let previousDate = self.currentDate
         self.currentDate = date
+        
+        self.isScrolling = isScrolling
 
         if self.dateIndicator.alpha.isZero {
             let transition: ContainedViewLayoutTransition = .immediate
@@ -1138,21 +1234,10 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
         }
 
         let animateIndicatorFrame = previousDate != nil && previousDate?.1 != date.1
-        let indicatorSize = self.dateIndicator.update(
-            transition: animateIndicatorFrame ? .easeInOut(duration: 0.2) : .immediate,
-            component: AnyComponent(SparseItemGridScrollingIndicatorComponent(
-                backgroundColor: theme.list.itemBlocksBackgroundColor,
-                shadowColor: .black,
-                foregroundColor: theme.list.itemPrimaryTextColor,
-                date: date,
-                previousDate: previousDate
-            )),
-            environment: {},
-            containerSize: containerSize
-        )
+        let indicatorSize = self.updateIndicator(containerSize: containerSize, previousDate: previousDate, animated: animateIndicatorFrame)
 
         let scrollIndicatorHeightFraction = min(1.0, max(0.0, (containerSize.height - containerInsets.top - containerInsets.bottom) / contentHeight))
-        if scrollIndicatorHeightFraction >= 1.0 - .ulpOfOne {
+        if scrollIndicatorHeightFraction >= 0.55 - .ulpOfOne {
             self.dateIndicator.isHidden = true
             self.lineIndicator.isHidden = true
         } else {
@@ -1196,7 +1281,6 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
     
         if isScrolling {
             let transition: ContainedViewLayoutTransition = .animated(duration: 0.3, curve: .easeInOut)
-            transition.updateAlpha(layer: self.dateIndicator.layer, alpha: 1.0)
             transition.updateAlpha(layer: self.lineIndicator.layer, alpha: 1.0)
         }
 
@@ -1204,7 +1288,7 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
 
         self.updateLineIndicator(transition: transition)
 
-        if isScrolling {
+        if isScrolling && !self.dateIndicator.isHidden {
             self.displayTooltipOnFirstScroll()
         }
     }
@@ -1215,12 +1299,12 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
         }
 
         let lineIndicatorSize = CGSize(width: (self.isDragging || self.lineTooltip != nil) ? 6.0 : 3.0, height: scrollIndicatorHeight)
-        let mappedTransition: Transition
+        let mappedTransition: ComponentTransition
         switch transition {
         case .immediate:
             mappedTransition = .immediate
         case let .animated(duration, _):
-            mappedTransition = Transition(animation: .curve(duration: duration, curve: .easeInOut))
+            mappedTransition = ComponentTransition(animation: .curve(duration: duration, curve: .easeInOut))
         }
         let _ = self.lineIndicator.update(
             transition: mappedTransition,
@@ -1236,10 +1320,13 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
 
     private func updateActivityTimer(isScrolling: Bool) {
         self.activityTimer?.invalidate()
+        
+        if isScrolling || self.isDragging {
+            self.isDateIndicatorVisible = true
+        }
 
         if self.isDragging {
             let transition: ContainedViewLayoutTransition = .animated(duration: 0.3, curve: .easeInOut)
-            transition.updateAlpha(layer: self.dateIndicator.layer, alpha: 1.0)
             transition.updateAlpha(layer: self.lineIndicator.layer, alpha: 1.0)
         } else {
             self.activityTimer = SwiftSignalKit.Timer(timeout: 2.0, repeat: false, completion: { [weak self] in
@@ -1247,9 +1334,11 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
                     return
                 }
                 let transition: ContainedViewLayoutTransition = .animated(duration: 0.3, curve: .easeInOut)
-                transition.updateAlpha(layer: strongSelf.dateIndicator.layer, alpha: 0.0)
                 transition.updateAlpha(layer: strongSelf.lineIndicator.layer, alpha: 0.0)
 
+                strongSelf.isDateIndicatorVisible = false
+                strongSelf.requestUpdate(animated: true)
+                
                 strongSelf.dismissLineTooltip()
             }, queue: .mainQueue())
             self.activityTimer?.start()
@@ -1324,7 +1413,7 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
     }
 
     override public func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        if self.dateIndicator.alpha <= 0.01 {
+        if self.dateIndicator.alpha <= 0.01 || !self.isDateIndicatorVisible {
             return nil
         }
         if self.dateIndicator.frame.offsetBy(dx: self.dateIndicatorContainer.frame.minX, dy: self.dateIndicatorContainer.frame.minY).contains(point) {
@@ -1343,9 +1432,11 @@ public final class SparseItemGridScrollingArea: ASDisplayNode {
 
     public func hideScroller() {
         let transition: ContainedViewLayoutTransition = .animated(duration: 0.3, curve: .easeInOut)
-        transition.updateAlpha(layer: self.dateIndicator.layer, alpha: 0.0)
         transition.updateAlpha(layer: self.lineIndicator.layer, alpha: 0.0)
 
+        self.isDateIndicatorVisible = false
+        self.requestUpdate(animated: true)
+        
         self.dismissLineTooltip()
     }
 }

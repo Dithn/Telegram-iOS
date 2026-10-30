@@ -1,3 +1,6 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
 openssl_headers = [
     "aes.h",
     "asn1.h",
@@ -162,6 +165,9 @@ genrule(
 cc_library(
     name = "openssl_lib",
     srcs = [":" + x for x in openssl_libs],
+    cxxopts = [
+        "-std=c++17",
+    ],
 )
 
 objc_library(

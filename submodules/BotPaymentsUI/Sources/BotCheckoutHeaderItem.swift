@@ -13,21 +13,33 @@ class BotCheckoutHeaderItem: ListViewItem, ItemListItem {
     let account: Account
     let theme: PresentationTheme
     let invoice: TelegramMediaInvoice
+    let source: BotPaymentInvoiceSource
     let botName: String
     let sectionId: ItemListSectionId
-    
-    init(account: Account, theme: PresentationTheme, invoice: TelegramMediaInvoice, botName: String, sectionId: ItemListSectionId) {
+
+    var neighborDescriptor: AnyEquatable {
+        return AnyEquatable(BotCheckoutNeighborDescriptor(
+            sectionId: self.sectionId,
+            isAlwaysPlain: self.isAlwaysPlain,
+            requestsNoInset: self.requestsNoInset,
+            isCheckoutHeaderItem: true,
+            priceItemIsFinal: nil
+        ))
+    }
+
+    init(account: Account, theme: PresentationTheme, invoice: TelegramMediaInvoice, source: BotPaymentInvoiceSource, botName: String, sectionId: ItemListSectionId) {
         self.account = account
         self.theme = theme
         self.invoice = invoice
+        self.source = source
         self.botName = botName
         self.sectionId = sectionId
     }
     
-    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = BotCheckoutHeaderItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -40,13 +52,13 @@ class BotCheckoutHeaderItem: ListViewItem, ItemListItem {
         }
     }
     
-    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? BotCheckoutHeaderItemNode {
                 let makeLayout = nodeValue.asyncLayout()
                 
                 async {
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply()
@@ -76,6 +88,8 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
     private let botNameNode: TextNode
     
     private var item: BotCheckoutHeaderItem?
+    
+    private let fetchDisposable = MetaDisposable()
     
     init() {
         self.backgroundNode = ASDisplayNode()
@@ -110,13 +124,17 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
         self.highlightedBackgroundNode = ASDisplayNode()
         self.highlightedBackgroundNode.isLayerBacked = true
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
 
         self.addSubnode(self.backgroundNode)
         self.addSubnode(self.imageNode)
         self.addSubnode(self.titleNode)
         self.addSubnode(self.textNode)
         self.addSubnode(self.botNameNode)
+    }
+    
+    deinit {
+        self.fetchDisposable.dispose()
     }
     
     func asyncLayout() -> (_ item: BotCheckoutHeaderItem, _ params: ListViewItemLayoutParams, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, () -> Void) {
@@ -127,7 +145,7 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
         
         let currentItem = self.item
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             var updatedTheme: PresentationTheme?
             
             if currentItem?.theme !== item.theme {
@@ -159,12 +177,26 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
             
             var imageApply: (() -> Void)?
             var updatedImageSignal: Signal<(TransformImageArguments) -> DrawingContext?, NoError>?
+            var updatedFetchSignal: Signal<Never, NoError>?
             if let photo = item.invoice.photo, let dimensions = photo.dimensions {
                 let arguments = TransformImageArguments(corners: ImageCorners(radius: 4.0), imageSize: dimensions.cgSize.aspectFilled(imageSize), boundingSize: imageSize, intrinsicInsets: UIEdgeInsets(), emptyColor: item.theme.list.mediaPlaceholderColor)
                 imageApply = makeImageLayout(arguments)
                 maxTextWidth = max(1.0, maxTextWidth - imageSize.width - imageTextSpacing)
                 if imageUpdated {
                     updatedImageSignal = chatWebFileImage(account: item.account, file: photo)
+                    
+                    var userLocation: MediaResourceUserLocation = .other
+                    switch item.source {
+                    case let .message(messageId):
+                        userLocation = .peer(messageId.peerId)
+                    default:
+                        break
+                    }
+                    updatedFetchSignal = TelegramEngine(account: item.account).resources.fetch(reference: .standalone(resource: photo.resource), userLocation: userLocation, userContentType: .image)
+                    |> ignoreValues
+                    |> `catch` { _ -> Signal<Never, NoError> in
+                        return .complete()
+                    }
                 }
             }
             
@@ -172,7 +204,9 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
             
             let (botNameLayout, botNameApply) = makeBotNameLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.botName, font: textFont, textColor: item.theme.list.itemSecondaryTextColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: maxTextWidth, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
-            let (textLayout, textApply) = makeTextLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.invoice.description, font: textFont, textColor: textColor), backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: maxTextWidth, height: maxTextHeight - titleLayout.size.height - titleTextSpacing - botNameLayout.size.height - textBotNameSpacing), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let textLayoutMaxHeight: CGFloat = maxTextHeight - titleLayout.size.height - titleTextSpacing - botNameLayout.size.height - textBotNameSpacing
+            let textArguments = TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.invoice.description, font: textFont, textColor: textColor), backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: maxTextWidth, height: textLayoutMaxHeight), alignment: .natural, cutout: nil, insets: UIEdgeInsets())
+            let (textLayout, textApply) = makeTextLayout(textArguments)
             
             let contentHeight: CGFloat
             if let _ = imageApply {
@@ -182,7 +216,7 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
             }
             
             let contentSize = CGSize(width: params.width, height: contentHeight)
-            let insets = itemListNeighborsPlainInsets(neighbors)
+            let insets = itemListNeighborsGroupedInsets(neighbors, params)
             
             let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
             
@@ -205,6 +239,9 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
                         let _ = imageApply()
                         if let updatedImageSignal = updatedImageSignal {
                             strongSelf.imageNode.setSignal(updatedImageSignal)
+                        }
+                        if let updatedFetchSignal = updatedFetchSignal {
+                            strongSelf.fetchDisposable.set(updatedFetchSignal.start())
                         }
                         strongSelf.imageNode.isHidden = false
                     } else {
@@ -243,7 +280,7 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
                             strongSelf.bottomStripeNode.isHidden = hasCorners
                     }
                     
-                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: true) : nil
                     
                     strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: contentSize.height - separatorHeight), size: CGSize(width: params.width, height: separatorHeight))
                     
@@ -259,7 +296,7 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
                     strongSelf.botNameNode.frame = CGRect(origin: CGPoint(x: textFrame.minX, y: textFrame.maxY + textBotNameSpacing), size: botNameLayout.size)
 
                     strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(), size: CGSize(width: params.width, height: contentSize.height))
-                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                     strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: contentSize.height + UIScreenPixel + UIScreenPixel))
                 }
             })
@@ -304,7 +341,7 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     

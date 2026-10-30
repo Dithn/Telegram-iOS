@@ -1,11 +1,12 @@
 
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
 objc_library(
     name = "OpenSSLEncryptionProvider",
     enable_modules = True,
     module_name = "OpenSSLEncryptionProvider",
     srcs = glob([
         "Sources/**/*.m",
-        "Sources/**/*.h",
     ]),
     hdrs = glob([
         "PublicHeaders/**/*.h",

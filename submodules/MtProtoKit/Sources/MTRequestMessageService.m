@@ -17,12 +17,51 @@
 #import <MtProtoKit/MTDropResponseContext.h>
 #import <MtProtoKit/MTApiEnvironment.h>
 #import <MtProtoKit/MTDatacenterAuthInfo.h>
+#import <MtProtoKit/MTSignal.h>
 #import "MTBuffer.h"
 
 #import "MTInternalMessageParser.h"
 #import "MTRpcResultMessage.h"
 #import <MtProtoKit/MTRpcError.h>
 #import "MTDropRpcResultMessage.h"
+
+@interface MTRequestVerificationData : NSObject
+
+@property (nonatomic, strong, readonly) NSString *nonce;
+@property (nonatomic, strong, readonly) NSString *secret;
+
+@end
+
+@implementation MTRequestVerificationData
+
+- (instancetype)initWithNonce:(NSString *)nonce secret:(NSString *)secret {
+    self = [super init];
+    if (self != nil) {
+        _nonce = nonce;
+        _secret = secret;
+    }
+    return self;
+}
+
+@end
+
+@interface MTRequestRecaptchaVerificationData : NSObject
+
+@property (nonatomic, strong, readonly) NSString *token;
+
+@end
+
+@implementation MTRequestRecaptchaVerificationData
+
+- (instancetype)initWithToken:(NSString *)token {
+    self = [super init];
+    if (self != nil) {
+        _token = token;
+    }
+    return self;
+}
+
+@end
 
 @interface MTRequestMessageService ()
 {
@@ -36,6 +75,10 @@
     NSMutableArray *_dropReponseContexts;
     
     MTTimer *_requestsServiceTimer;
+    MTTimer *_requestsTimeoutTimer;
+    
+    bool _handingOver;
+    void (^_handOverReleased)(MTRequest *, bool, double);
 }
 
 @end
@@ -72,6 +115,10 @@
         [_requestsServiceTimer invalidate];
         _requestsServiceTimer = nil;
     }
+    if (_requestsTimeoutTimer != nil) {
+        [_requestsTimeoutTimer invalidate];
+        _requestsTimeoutTimer = nil;
+    }
 }
 
 - (void)addRequest:(MTRequest *)request
@@ -84,6 +131,15 @@
         
         if (![_requests containsObject:request])
         {
+            if (MTLogEnabled()) {
+                MTLog(@"[MTRequestMessageService#%" PRIxPTR " add request %@]", (intptr_t)self, request.metadata);
+            }
+            
+            if (self->_handingOver) {
+                self->_handOverReleased(request, false, 0.0);
+                return;
+            }
+            
             [_requests addObject:request];
             [mtProto requestTransportTransaction];
         }
@@ -101,18 +157,22 @@
     {
         bool anyNewDropRequests = false;
         bool removedAnyRequest = false;
+        bool mergedAskForReconnectionOnDrop = askForReconnectionOnDrop;
         
         int index = -1;
         for (MTRequest *request in _requests)
         {
             index++;
             
-            if ([request.internalId isEqual:internalId])
+            if ([[request scanInternalId] isEqual:internalId])
             {
                 if (request.requestContext != nil)
                 {
-                    [_dropReponseContexts addObject:[[MTDropResponseContext alloc] initWithDropMessageId:request.requestContext.messageId]];
+                    //[_dropReponseContexts addObject:[[MTDropResponseContext alloc] initWithDropMessageId:request.requestContext.messageId]];
                     anyNewDropRequests = true;
+                    if (request.expectedResponseSize >= 512 * 1024) {
+                        mergedAskForReconnectionOnDrop = true;
+                    }
                 }
                 
                 if (request.requestContext.messageId != 0) {
@@ -133,8 +193,9 @@
         {
             MTProto *mtProto = _mtProto;
             
-            if (askForReconnectionOnDrop)
-                [mtProto requestSecureTransportReset];
+            if (mergedAskForReconnectionOnDrop) {
+                [mtProto resetSessionInfo:true];
+            }
 
             [mtProto requestTransportTransaction];
         }
@@ -147,6 +208,7 @@
         }
         
         [self updateRequestsTimer];
+        [self updateRequestsTimeoutTimerWithReset:false];
     }];
 }
 
@@ -194,7 +256,7 @@
         
         for (MTRequest *request in _requests)
         {
-            if (request.errorContext != nil)
+            if ([request scanErrorContext] != nil)
             {
                 if (request.errorContext.waitingForRequestToComplete != nil) {
                     bool foundDependency = false;
@@ -267,6 +329,75 @@
     [mtProto requestTransportTransaction];
 }
 
+- (void)updateRequestsTimeoutTimerWithReset:(bool)reset {
+    CFAbsoluteTime currentTime = MTAbsoluteSystemTime();
+    
+    bool needTimer = false;
+    
+    for (MTRequest *request in _requests) {
+        if (![request scanNeedsTimeoutTimer]) {
+            continue;
+        }
+        if (request.errorContext != nil) {
+            if (request.errorContext.waitingForRequestToComplete != nil) {
+                bool foundDependency = false;
+                for (MTRequest *anotherRequest in _requests) {
+                    if (request.errorContext.waitingForRequestToComplete == anotherRequest.internalId) {
+                        foundDependency = true;
+                        break;
+                    }
+                }
+                
+                if (!foundDependency) {
+                    needTimer = true;
+                }
+            }
+            
+            if (request.requestContext == nil) {
+                if (request.errorContext.minimalExecuteTime > currentTime + DBL_EPSILON) {
+                } else {
+                    request.errorContext.minimalExecuteTime = 0.0;
+                    needTimer = true;
+                }
+            }
+        } else {
+            needTimer = true;
+        }
+    }
+    
+    if (needTimer) {
+        if (reset) {
+            if (_requestsTimeoutTimer != nil) {
+                [_requestsTimeoutTimer invalidate];
+                _requestsTimeoutTimer = nil;
+            }
+        }
+        
+        if (_requestsTimeoutTimer == nil) {
+            __weak MTRequestMessageService *weakSelf = self;
+            _requestsTimeoutTimer = [[MTTimer alloc] initWithTimeout:5.0 repeat:false completion:^
+            {
+                __strong MTRequestMessageService *strongSelf = weakSelf;
+                [strongSelf requestTimerTimeoutEvent];
+            } queue:_queue.nativeQueue];
+            [_requestsTimeoutTimer start];
+        }
+    } else {
+        if (_requestsTimeoutTimer != nil) {
+            [_requestsTimeoutTimer invalidate];
+            _requestsTimeoutTimer = nil;
+        }
+    }
+}
+
+- (void)requestTimerTimeoutEvent {
+    MTProto *mtProto = _mtProto;
+    if (mtProto) {
+        [mtProto requestSecureTransportReset];
+        [mtProto requestTransportTransaction];
+    }
+}
+
 - (void)mtProtoWillAddService:(MTProto *)mtProto
 {
     _queue = [mtProto messageServiceQueue];
@@ -290,15 +421,15 @@
         MTRequestNoopParser responseParser = [[_context serialization] requestNoop:&noopData];
         [request setPayload:noopData metadata:@"noop" shortMetadata:@"noop" responseParser:responseParser];
         
-        [request setCompleted:^(__unused id result, __unused NSTimeInterval timestamp, __unused id error) {
+        [request setCompleted:^(__unused id result, __unused MTRequestResponseInfo *info, __unused id error) {
         }];
         
         [self addRequest:request];
     }
 }
 
-- (NSData *)decorateRequestData:(MTRequest *)request initializeApi:(bool)initializeApi unresolvedDependencyOnRequestInternalId:(__autoreleasing id *)unresolvedDependencyOnRequestInternalId decoratedDebugDescription:(__autoreleasing NSString **)decoratedDebugDescription
-{    
+- (NSData *)decorateRequestData:(MTRequest *)request initializeApi:(bool)initializeApi requestVerificationData:(MTRequestVerificationData *)requestVerificationData recaptchaVerificationData:(MTRequestRecaptchaVerificationData *)recaptchaVerificationData unresolvedDependencyOnRequestInternalId:(__autoreleasing id *)unresolvedDependencyOnRequestInternalId decoratedDebugDescription:(__autoreleasing NSString **)decoratedDebugDescription
+{
     NSData *currentData = request.payload;
     
     NSString *debugDescription = @"";
@@ -313,8 +444,6 @@
         // invokeWithLayer
         [buffer appendInt32:(int32_t)0xda9b0d0d];
         [buffer appendInt32:(int32_t)[_serialization currentLayer]];
-        
-        //initConnection#c1cd5ea9 {X:Type} flags:# api_id:int device_model:string system_version:string app_version:string system_lang_code:string lang_pack:string lang_code:string proxy:flags.0?InputClientProxy query:!X = X;
 
         int32_t flags = 0;
         if (_apiEnvironment.socksProxySettings.secret != nil) {
@@ -398,6 +527,31 @@
         }
     }
     
+    if (requestVerificationData != nil) {
+        MTBuffer *buffer = [[MTBuffer alloc] init];
+        
+        [buffer appendInt32:(int32_t)0xdae54f8];
+        [buffer appendTLString:requestVerificationData.nonce];
+        [buffer appendTLString:requestVerificationData.secret];
+
+        [buffer appendBytes:currentData.bytes length:currentData.length];
+        currentData = buffer.data;
+        
+        debugDescription = [debugDescription stringByAppendingFormat:@", apnsSecret(%@, %@)", requestVerificationData.nonce, requestVerificationData.secret];
+    }
+    
+    if (recaptchaVerificationData != nil) {
+        MTBuffer *buffer = [[MTBuffer alloc] init];
+        
+        [buffer appendInt32:(int32_t)0xadbb0f94];
+        [buffer appendTLString:recaptchaVerificationData.token];
+
+        [buffer appendBytes:currentData.bytes length:currentData.length];
+        currentData = buffer.data;
+        
+        debugDescription = [debugDescription stringByAppendingFormat:@", recaptcha(%@)", recaptchaVerificationData.token];
+    }
+    
     if (decoratedDebugDescription != nil) {
         *decoratedDebugDescription = debugDescription;
     }
@@ -407,6 +561,10 @@
 
 - (MTMessageTransaction *)mtProtoMessageTransaction:(MTProto *)mtProto authInfoSelector:(MTDatacenterAuthInfoSelector)authInfoSelector sessionInfo:(MTSessionInfo *)sessionInfo scheme:(MTTransportScheme *)scheme
 {
+    if (_handingOver) {
+        [self _releaseHandedOverRequests];
+    }
+    
     NSMutableArray *messages = nil;
     NSMutableDictionary *requestInternalIdToMessageInternalId = nil;
     
@@ -416,6 +574,9 @@
     
     for (MTRequest *request in _requests)
     {
+        if (_handingOver && request.requestContext == nil)
+            continue;
+        
         if (request.dependsOnPasswordEntry && [_context isPasswordInputRequiredForDatacenterWithId:mtProto.datacenterId])
             continue;
         
@@ -426,6 +587,16 @@
             }
             if (request.errorContext.waitingForTokenExport) {
                 continue;
+            }
+            if (request.errorContext.pendingVerificationData != nil) {
+                if (!request.errorContext.pendingVerificationData.isResolved) {
+                    continue;
+                }
+            }
+            if (request.errorContext.pendingRecaptchaVerificationData != nil) {
+                if (!request.errorContext.pendingRecaptchaVerificationData.isResolved) {
+                    continue;
+                }
             }
 
             bool foundDependency = false;
@@ -458,7 +629,25 @@
                 messageSeqNo = request.requestContext.messageSeqNo;
             }
             
-            NSData *decoratedRequestData = [self decorateRequestData:request initializeApi:requestsWillInitializeApi unresolvedDependencyOnRequestInternalId:&autoreleasingUnresolvedDependencyOnRequestInternalId decoratedDebugDescription:&decoratedDebugDescription];
+            MTRequestVerificationData *requestVerificationData = nil;
+            if (request.errorContext != nil) {
+                if (request.errorContext.pendingVerificationData != nil) {
+                    if (request.errorContext.pendingVerificationData.isResolved) {
+                        requestVerificationData = [[MTRequestVerificationData alloc] initWithNonce:request.errorContext.pendingVerificationData.nonce secret:request.errorContext.pendingVerificationData.secret];
+                    }
+                }
+            }
+            
+            MTRequestRecaptchaVerificationData *recaptchaVerificationData = nil;
+            if (request.errorContext != nil) {
+                if (request.errorContext.pendingRecaptchaVerificationData != nil) {
+                    if (request.errorContext.pendingRecaptchaVerificationData.isResolved) {
+                        recaptchaVerificationData = [[MTRequestRecaptchaVerificationData alloc] initWithToken:request.errorContext.pendingRecaptchaVerificationData.token];
+                    }
+                }
+            }
+            
+            NSData *decoratedRequestData = [self decorateRequestData:request initializeApi:requestsWillInitializeApi requestVerificationData:requestVerificationData recaptchaVerificationData:recaptchaVerificationData unresolvedDependencyOnRequestInternalId:&autoreleasingUnresolvedDependencyOnRequestInternalId decoratedDebugDescription:&decoratedDebugDescription];
             
             MTOutgoingMessage *outgoingMessage = [[MTOutgoingMessage alloc] initWithData:decoratedRequestData metadata:request.metadata additionalDebugDescription:decoratedDebugDescription shortMetadata:request.shortMetadata messageId:messageId messageSeqNo:messageSeqNo];
             outgoingMessage.needsQuickAck = request.acknowledgementReceived != nil;
@@ -535,9 +724,11 @@
                         }
                         
                         MTRequestContext *requestContext = [[MTRequestContext alloc] initWithMessageId:preparedMessage.messageId messageSeqNo:preparedMessage.seqNo transactionId:nil quickAckId:0];
+                        requestContext.sentTimestamp = CFAbsoluteTimeGetCurrent();
                         requestContext.willInitializeApi = requestsWillInitializeApi;
                         requestContext.waitingForMessageId = true;
                         request.requestContext = requestContext;
+                        request.mayHaveReachedServer = true;
                     }
                 }
             }
@@ -567,8 +758,10 @@
                             continue;
                         }
                         MTRequestContext *requestContext = [[MTRequestContext alloc] initWithMessageId:preparedMessage.messageId messageSeqNo:preparedMessage.seqNo transactionId:messageInternalIdToTransactionId[messageInternalId] quickAckId:(int32_t)[messageInternalIdToQuickAckId[messageInternalId] intValue]];
+                        requestContext.sentTimestamp = CFAbsoluteTimeGetCurrent();
                         requestContext.willInitializeApi = requestsWillInitializeApi;
                         request.requestContext = requestContext;
+                        request.mayHaveReachedServer = true;
                     }
                 }
             }
@@ -588,13 +781,16 @@
     return nil;
 }
 
-- (void)mtProto:(MTProto *)__unused mtProto receivedMessage:(MTIncomingMessage *)message authInfoSelector:(MTDatacenterAuthInfoSelector)authInfoSelector
+- (void)mtProto:(MTProto *)__unused mtProto receivedMessage:(MTIncomingMessage *)message authInfoSelector:(MTDatacenterAuthInfoSelector)authInfoSelector networkType:(int32_t)networkType
 {
     if ([message.body isKindOfClass:[MTRpcResultMessage class]])
     {
         MTRpcResultMessage *rpcResultMessage = message.body;
-        
-        id maybeInternalMessage = [MTInternalMessageParser parseMessage:rpcResultMessage.data];
+
+        // Unwrap once, up front: a gzip_packed rpc_error or rpc_answer_dropped must be
+        // recognised as such instead of degrading into a synthetic TL_PARSING_ERROR.
+        NSData *resultData = [MTInternalMessageParser unwrapMessage:rpcResultMessage.data];
+        id maybeInternalMessage = resultData != nil ? [MTInternalMessageParser parseMessage:resultData] : nil;
         
         if ([maybeInternalMessage isKindOfClass:[MTDropRpcResultMessage class]])
         {
@@ -613,13 +809,9 @@
         {
             bool requestFound = false;
             
-            int index = -1;
-            for (MTRequest *request in _requests)
-            {
-                index++;
-                
-                if (request.requestContext != nil && request.requestContext.messageId == rpcResultMessage.requestMessageId)
-                {
+            NSMutableArray<MTRequest *> *removeRequests = [[NSMutableArray alloc] init];
+            for (MTRequest *request in _requests) {
+                if (request.requestContext != nil && request.requestContext.messageId == rpcResultMessage.requestMessageId) {
                     requestFound = true;
                     
                     bool restartRequest = false;
@@ -631,8 +823,9 @@
                         rpcError = maybeInternalMessage;
                     else
                     {
-                        NSData *unwrappedData = [MTInternalMessageParser unwrapMessage:rpcResultMessage.data];
-                        rpcResult = request.responseParser(unwrappedData);
+                        if (resultData != nil) {
+                            rpcResult = request.responseParser(resultData);
+                        }
                         if (rpcResult == nil)
                         {
                             rpcError = [[MTRpcError alloc] initWithErrorCode:500 errorDescription:@"TL_PARSING_ERROR"];
@@ -648,25 +841,20 @@
                         }
                     }
                     
-                    if (rpcResult != nil)
-                    {
+                    if (rpcResult != nil) {
                         if (MTLogEnabled()) {
                             MTLog(@"[MTRequestMessageService#%p response for %" PRId64 " is %@]", self, request.requestContext.messageId, rpcResult);
                         }
-                    }
-                    else
-                    {
+                    } else {
                         if (MTLogEnabled()) {
                             MTLog(@"[MTRequestMessageService#%p response for %" PRId64 " is error: %d: %@]", self, request.requestContext.messageId, (int)rpcError.errorCode, rpcError.errorDescription);
                         }
                     }
                     
-                    if (rpcResult != nil && request.requestContext.willInitializeApi)
-                    {
+                    if (rpcResult != nil && request.requestContext.willInitializeApi) {
                         MTDatacenterAuthInfo *authInfo = [_context authInfoForDatacenterWithId:mtProto.datacenterId selector:authInfoSelector];
                         
-                        if (![_apiEnvironment.apiInitializationHash isEqualToString:authInfo.authKeyAttributes[@"apiInitializationHash"]])
-                        {
+                        if (![_apiEnvironment.apiInitializationHash isEqualToString:authInfo.authKeyAttributes[@"apiInitializationHash"]]) {
                             NSMutableDictionary *authKeyAttributes = [[NSMutableDictionary alloc] initWithDictionary:authInfo.authKeyAttributes];
                             authKeyAttributes[@"apiInitializationHash"] = _apiEnvironment.apiInitializationHash;
                             
@@ -675,19 +863,14 @@
                         }
                     }
                     
-                    if (rpcError != nil)
-                    {
-                        if (rpcError.errorCode == 401)
-                        {
-                            if ([rpcError.errorDescription rangeOfString:@"SESSION_PASSWORD_NEEDED"].location != NSNotFound)
-                            {
+                    if (rpcError != nil) {
+                        if (rpcError.errorCode == 401) {
+                            if ([rpcError.errorDescription rangeOfString:@"SESSION_PASSWORD_NEEDED"].location != NSNotFound) {
                                 if (!request.passthroughPasswordEntryError)
                                 {
                                     [_context updatePasswordInputRequiredForDatacenterWithId:mtProto.datacenterId required:true];
                                 }
-                            }
-                            else
-                            {
+                            } else {
                                 id<MTRequestMessageServiceDelegate> delegate = _delegate;
                                 if ([delegate respondsToSelector:@selector(requestMessageServiceAuthorizationRequired:)])
                                 {
@@ -704,15 +887,12 @@
                                     restartRequest = true;
                                 }
                             }
-                        }
-                        else if (rpcError.errorCode == -500 || rpcError.errorCode == 500)
-                        {
+                        } else if (rpcError.errorCode == -500 || rpcError.errorCode == 500) {
                             if (request.errorContext == nil)
                                 request.errorContext = [[MTRequestErrorContext alloc] init];
                             request.errorContext.internalServerErrorCount++;
                             
-                            if (request.shouldContinueExecutionWithErrorContext != nil && request.shouldContinueExecutionWithErrorContext(request.errorContext))
-                            {
+                            if (request.shouldContinueExecutionWithErrorContext != nil && request.shouldContinueExecutionWithErrorContext(request.errorContext)) {
                                 restartRequest = true;
                                 request.errorContext.minimalExecuteTime = MAX(request.errorContext.minimalExecuteTime, MTAbsoluteSystemTime() + 2.0);
                             }
@@ -739,13 +919,11 @@
                             }
                             restartRequest = true;
                         }
-                        else if (rpcError.errorCode == 420 || [rpcError.errorDescription rangeOfString:@"FLOOD_WAIT_"].location != NSNotFound)
-                        {
+                        else if ((rpcError.errorCode == 420 && [rpcError.errorDescription rangeOfString:@"FROZEN_METHOD_INVALID"].location == NSNotFound) || [rpcError.errorDescription rangeOfString:@"FLOOD_WAIT_"].location != NSNotFound || [rpcError.errorDescription rangeOfString:@"FLOOD_PREMIUM_WAIT_"].location != NSNotFound) {
                             if (request.errorContext == nil)
                                 request.errorContext = [[MTRequestErrorContext alloc] init];
                             
-                            if ([rpcError.errorDescription rangeOfString:@"FLOOD_WAIT_"].location != NSNotFound)
-                            {
+                            if ([rpcError.errorDescription rangeOfString:@"FLOOD_WAIT_"].location != NSNotFound) {
                                 int errorWaitTime = 0;
                                 
                                 NSScanner *scanner = [[NSScanner alloc] initWithString:rpcError.errorDescription];
@@ -754,6 +932,32 @@
                                 if ([scanner scanInt:&errorWaitTime])
                                 {
                                     request.errorContext.floodWaitSeconds = errorWaitTime;
+                                    request.errorContext.floodWaitErrorText = rpcError.errorDescription;
+                                    
+                                    if (request.shouldContinueExecutionWithErrorContext != nil)
+                                    {
+                                        if (request.shouldContinueExecutionWithErrorContext(request.errorContext))
+                                        {
+                                            restartRequest = true;
+                                            request.errorContext.minimalExecuteTime = MAX(request.errorContext.minimalExecuteTime, MTAbsoluteSystemTime() + (CFAbsoluteTime)errorWaitTime);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        restartRequest = true;
+                                        request.errorContext.minimalExecuteTime = MAX(request.errorContext.minimalExecuteTime, MTAbsoluteSystemTime() + (CFAbsoluteTime)errorWaitTime);
+                                    }
+                                }
+                            } else if ([rpcError.errorDescription rangeOfString:@"FLOOD_PREMIUM_WAIT_"].location != NSNotFound) {
+                                int errorWaitTime = 0;
+                                
+                                NSScanner *scanner = [[NSScanner alloc] initWithString:rpcError.errorDescription];
+                                [scanner scanUpToString:@"FLOOD_PREMIUM_WAIT_" intoString:nil];
+                                [scanner scanString:@"FLOOD_PREMIUM_WAIT_" intoString:nil];
+                                if ([scanner scanInt:&errorWaitTime])
+                                {
+                                    request.errorContext.floodWaitSeconds = errorWaitTime;
+                                    request.errorContext.floodWaitErrorText = rpcError.errorDescription;
                                     
                                     if (request.shouldContinueExecutionWithErrorContext != nil)
                                     {
@@ -771,10 +975,8 @@
                                 }
                             }
                         }
-                        else if (rpcError.errorCode == 400 && [rpcError.errorDescription rangeOfString:@"CONNECTION_NOT_INITED"].location != NSNotFound)
-                        {
-                            [_context performBatchUpdates:^
-                            {
+                        else if (rpcError.errorCode == 400 && [rpcError.errorDescription rangeOfString:@"CONNECTION_NOT_INITED"].location != NSNotFound) {
+                            [_context performBatchUpdates:^{
                                 MTDatacenterAuthInfo *authInfo = [_context authInfoForDatacenterWithId:mtProto.datacenterId selector:authInfoSelector];
                                 
                                 NSMutableDictionary *authKeyAttributes = [[NSMutableDictionary alloc] initWithDictionary:authInfo.authKeyAttributes];
@@ -783,6 +985,75 @@
                                 authInfo = [authInfo withUpdatedAuthKeyAttributes:authKeyAttributes];
                                 [_context updateAuthInfoForDatacenterWithId:mtProto.datacenterId authInfo:authInfo selector:authInfoSelector];
                             }];
+                            
+                            restartRequest = true;
+                        } else if (rpcError.errorCode == 403 && [rpcError.errorDescription rangeOfString:@"APNS_VERIFY_CHECK_"].location != NSNotFound) {
+                            if (request.errorContext == nil) {
+                                request.errorContext = [[MTRequestErrorContext alloc] init];
+                            }
+                            
+                            NSString *nonce = [rpcError.errorDescription substringFromIndex:[@"APNS_VERIFY_CHECK_" length]];
+                            request.errorContext.pendingVerificationData = [[MTRequestPendingVerificationData alloc] initWithNonce:nonce];
+                            
+                            __weak MTRequestMessageService *weakSelf = self;
+                            MTQueue *queue = _queue;
+                            id requestId = request.internalId;
+                            request.errorContext.pendingVerificationData.disposable = [[_context performExternalRequestVerificationWithNonce:nonce] startWithNext:^(id result) {
+                                [queue dispatchOnQueue:^{
+                                    __strong MTRequestMessageService *strongSelf = weakSelf;
+                                    if (!strongSelf) {
+                                        return;
+                                    }
+                                    for (MTRequest *request in strongSelf->_requests) {
+                                        if (request.internalId == requestId) {
+                                            request.errorContext.pendingVerificationData.secret = result;
+                                            request.errorContext.pendingVerificationData.isResolved = true;
+                                        }
+                                    }
+                                    [strongSelf->_mtProto requestTransportTransaction];
+                                }];
+                            }];
+                            
+                            restartRequest = true;
+                        } else if (rpcError.errorCode == 403 && [rpcError.errorDescription rangeOfString:@"RECAPTCHA_CHECK_"].location != NSNotFound) {
+                            NSString *checkData = [rpcError.errorDescription substringFromIndex:[@"RECAPTCHA_CHECK_" length]];
+                            
+                            NSRange separatorRange = [checkData rangeOfString:@"__"];
+                            NSString *method = nil;
+                            NSString *siteKey = nil;
+                            if (separatorRange.location != NSNotFound) {
+                                method = [checkData substringToIndex:separatorRange.location];
+                                siteKey = [checkData substringFromIndex:separatorRange.location + separatorRange.length];
+                            }
+                            
+                            if (method != nil && siteKey != nil) {
+                                if (request.errorContext == nil) {
+                                    request.errorContext = [[MTRequestErrorContext alloc] init];
+                                }
+                                
+                                request.errorContext.pendingRecaptchaVerificationData = [[MTRequestPendingRecaptchaVerificationData alloc] initWithSiteKey:siteKey];
+                                
+                                __weak MTRequestMessageService *weakSelf = self;
+                                MTQueue *queue = _queue;
+                                id requestId = request.internalId;
+                                request.errorContext.pendingRecaptchaVerificationData.disposable = [[_context performExternalRecaptchaRequestVerificationWithMethod:method siteKey:siteKey] startWithNext:^(id result) {
+                                    [queue dispatchOnQueue:^{
+                                        __strong MTRequestMessageService *strongSelf = weakSelf;
+                                        if (!strongSelf) {
+                                            return;
+                                        }
+                                        for (MTRequest *request in strongSelf->_requests) {
+                                            if (request.internalId == requestId) {
+                                                request.errorContext.pendingRecaptchaVerificationData.token = result;
+                                                request.errorContext.pendingRecaptchaVerificationData.isResolved = true;
+                                            }
+                                        }
+                                        [strongSelf->_mtProto requestTransportTransaction];
+                                    }];
+                                }];
+                                
+                                restartRequest = true;
+                            }
                         } else if (rpcError.errorCode == 406) {
                             if (_didReceiveSoftAuthResetError) {
                                 _didReceiveSoftAuthResetError();
@@ -790,28 +1061,41 @@
                         }
                     }
                     
+                    double sentTimestamp = request.requestContext.sentTimestamp;
+                    
                     request.requestContext = nil;
                     
-                    if (restartRequest)
-                    {
+                    if (restartRequest) {
+                        request.mayHaveReachedServer = false;
+                    } else {
+                        void (^completed)(id result, MTRequestResponseInfo *info, id error) = [request.completed copy];
+                        [removeRequests addObject:request];
                         
-                    }
-                    else
-                    {
-                        void (^completed)(id result, NSTimeInterval completionTimestamp, id error) = [request.completed copy];
-                        [_requests removeObjectAtIndex:(NSUInteger)index];
-                        
-                        if (completed)
-                            completed(rpcResult, message.timestamp, rpcError);
+                        if (completed) {
+                            double duration = 0.0;
+                            if (sentTimestamp != 0.0) {
+                                duration = CFAbsoluteTimeGetCurrent() - sentTimestamp;
+                            }
+                            MTRequestResponseInfo *info = [[MTRequestResponseInfo alloc] initWithNetworkType:networkType timestamp:message.timestamp duration:duration];
+                            completed(rpcResult, info, rpcError);
+                        }
                     }
                     
                     break;
                 }
             }
             
+            for (MTRequest *request in removeRequests) {
+                [_requests removeObject:request];
+            }
+            
+            if (_handingOver) {
+                [self _releaseHandedOverRequests];
+            }
+            
             if (!requestFound) {
                 if (MTLogEnabled()) {
-                    MTLog(@"[MTRequestMessageService#%p response %" PRId64 " didn't match any request]", self, message.messageId);
+                    MTLog(@"[MTRequestMessageService#%p response %" PRId64 " for % " PRId64 " didn't match any request]", self, message.messageId, rpcResultMessage.requestMessageId);
                 }
             }
             else if (_requests.count == 0)
@@ -822,6 +1106,7 @@
             }
             
             [self updateRequestsTimer];
+            [self updateRequestsTimeoutTimerWithReset:false];
         }
     }
 }
@@ -830,12 +1115,18 @@
 {
     for (MTRequest *request in _requests)
     {
-        if (request.requestContext != nil && request.requestContext.quickAckId == quickAckId)
+        // A context only carries a real token once its transaction id is known;
+        // before that quickAckId is 0, which is also a valid 31-bit token.
+        if (request.requestContext != nil && request.requestContext.transactionId != nil && request.requestContext.quickAckId == quickAckId)
         {
             if (request.acknowledgementReceived != nil)
                 request.acknowledgementReceived();
         }
     }
+}
+
+- (void)mtProtoTransportActivityUpdated:(MTProto *) __unused mtProto {
+    [self updateRequestsTimeoutTimerWithReset:true];
 }
 
 - (void)mtProto:(MTProto *)__unused mtProto messageDeliveryConfirmed:(NSArray *)messageIds
@@ -930,6 +1221,7 @@
         if (request.requestContext != nil && request.requestContext.messageId == messageId)
         {
             if (request.requestContext.transactionId == nil || [request.requestContext.transactionId isEqual:currentTransactionId]) {
+                MTLog(@"[MTRequestMessageService#%" PRIxPTR " will request message %" PRId64 "]", (intptr_t)self, messageId);
                 request.requestContext.responseMessageId = responseMessageId;
                 return true;
             } else {
@@ -939,6 +1231,8 @@
             }
         }
     }
+    
+    MTLog(@"[MTRequestMessageService#%" PRIxPTR " will not request message %" PRId64 " (request not found)]", (intptr_t)self, messageId);
     
     return false;
 }
@@ -972,6 +1266,85 @@
                 request.progressUpdated(progress, packetLength);
         }
     }
+}
+
+- (void)handOverRequests:(void (^)(MTRequest *, bool, double))released
+{
+    [_queue dispatchOnQueue:^
+    {
+        if (self->_handingOver || released == nil) {
+            return;
+        }
+        self->_handingOver = true;
+        self->_handOverReleased = [released copy];
+        [self _releaseHandedOverRequests];
+    }];
+}
+
+- (void)releaseHandedOverRequests
+{
+    [_queue dispatchOnQueue:^
+    {
+        if (!self->_handingOver) {
+            return;
+        }
+        NSArray *remaining = [self->_requests copy];
+        [self->_requests removeAllObjects];
+        for (MTRequest *request in remaining) {
+            bool mayHaveReachedServer = request.requestContext != nil || request.mayHaveReachedServer;
+            [self _handBack:request mayHaveReachedServer:mayHaveReachedServer];
+        }
+        [self updateRequestsTimer];
+        [self updateRequestsTimeoutTimerWithReset:false];
+    }];
+}
+
+- (void)_releaseHandedOverRequests
+{
+    NSMutableArray *held = [[NSMutableArray alloc] init];
+    NSMutableArray *released = [[NSMutableArray alloc] init];
+    for (MTRequest *request in _requests) {
+        if (request.requestContext != nil) {
+            [held addObject:request];
+            continue;
+        }
+        bool waits = false;
+        if (request.shouldDependOnRequest != nil) {
+            for (MTRequest *other in held) {
+                if (request.shouldDependOnRequest(other)) {
+                    waits = true;
+                    break;
+                }
+            }
+        }
+        if (waits) {
+            [held addObject:request];
+            continue;
+        }
+        [released addObject:request];
+    }
+    if (released.count == 0) {
+        return;
+    }
+    [_requests removeObjectsInArray:released];
+    for (MTRequest *request in released) {
+        [self _handBack:request mayHaveReachedServer:request.mayHaveReachedServer];
+    }
+    [self updateRequestsTimer];
+    [self updateRequestsTimeoutTimerWithReset:false];
+}
+
+- (void)_handBack:(MTRequest *)request mayHaveReachedServer:(bool)mayHaveReachedServer
+{
+    double retryAfter = 0.0;
+    if (!mayHaveReachedServer && request.errorContext != nil) {
+        retryAfter = MAX(0.0, request.errorContext.minimalExecuteTime - MTAbsoluteSystemTime());
+    }
+    request.requestContext = nil;
+    if (MTLogEnabled()) {
+        MTLog(@"[MTRequestMessageService#%" PRIxPTR " hands over %@ (%s, retry after %.1f s)]", (intptr_t)self, request.metadata, mayHaveReachedServer ? "may have reached the server" : "never ran", retryAfter);
+    }
+    _handOverReleased(request, mayHaveReachedServer, retryAfter);
 }
 
 - (void)mtProtoDidChangeSession:(MTProto *)mtProto

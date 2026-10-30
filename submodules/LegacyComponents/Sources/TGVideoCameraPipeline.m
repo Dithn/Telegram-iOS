@@ -2,7 +2,7 @@
 
 #import "LegacyComponentsInternal.h"
 
-#import <libkern/OSAtomic.h>
+#import <os/lock.h>
 #import <CoreMedia/CoreMedia.h>
 #import <ImageIO/ImageIO.h>
 #import <Accelerate/Accelerate.h>
@@ -57,7 +57,7 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
     
     NSTimeInterval _resultDuration;
     
-    CVPixelBufferRef _previousPixelBuffer;
+    TGVideoCameraRendererBuffer *_previousPixelBuffer;
     int32_t _repeatingCount;
     
     int16_t _micLevelPeak;
@@ -69,10 +69,10 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
     id<TGLiveUploadInterface> _watcher;
     id _liveUploadData;
     
-    OSSpinLock _recordLock;
+    os_unfair_lock _recordLock;
     bool _startRecordAfterAudioBuffer;
     
-    CVPixelBufferRef _currentPreviewPixelBuffer;
+    TGVideoCameraRendererBuffer *_currentPreviewPixelBuffer;
     NSMutableDictionary *_thumbnails;
     
     NSTimeInterval _firstThumbnailTime;
@@ -172,7 +172,10 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
 
 	_audioConnection = [_audioOutput connectionWithMediaType:AVMediaTypeAudio];
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo];
+#pragma clang diagnostic pop
     AVCaptureDevice *videoDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
     for (AVCaptureDevice *device in devices)
     {
@@ -332,13 +335,10 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
 			return;
 		
 		self.outputVideoFormatDescription = NULL;
+        
 		[_renderer reset];
         
-        if (_currentPreviewPixelBuffer != NULL)
-        {
-            CFRelease(_currentPreviewPixelBuffer);
-            _currentPreviewPixelBuffer = NULL;
-        }
+        _currentPreviewPixelBuffer = nil;
 	});
 }
 
@@ -404,7 +404,7 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
         
         CFRelease(blockBuffer);
         
-        OSSpinLockLock(&_recordLock);
+        os_unfair_lock_lock(&_recordLock);
         if (_startRecordAfterAudioBuffer)
         {
             _startRecordAfterAudioBuffer = false;
@@ -413,7 +413,7 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
                 [self startRecording:_recordingURL preset:_preset liveUpload:_liveUpload];
             });
         }
-        OSSpinLockUnlock(&_recordLock);
+        os_unfair_lock_unlock(&_recordLock);
     }
 }
 
@@ -440,23 +440,23 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
     }
 }
 
-- (UIImage *)imageFromImageBuffer:(CVPixelBufferRef)imageBuffer
+- (UIImage *)imageFromImageBuffer:(TGVideoCameraRendererBuffer *)imageBuffer
 {
-    CVPixelBufferLockBaseAddress(imageBuffer, 0);
+    CVPixelBufferLockBaseAddress(imageBuffer.buffer, 0);
     
-    void *baseAddress = CVPixelBufferGetBaseAddress(imageBuffer);
+    void *baseAddress = CVPixelBufferGetBaseAddress(imageBuffer.buffer);
     
-    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer);
+    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer.buffer);
     
-    size_t width = CVPixelBufferGetWidth(imageBuffer);
-    size_t height = CVPixelBufferGetHeight(imageBuffer);
+    size_t width = CVPixelBufferGetWidth(imageBuffer.buffer);
+    size_t height = CVPixelBufferGetHeight(imageBuffer.buffer);
     
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
     
-    CGContextRef context = CGBitmapContextCreate(baseAddress, width, height, 8, bytesPerRow, colorSpace, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
+    CGContextRef context = CGBitmapContextCreate(baseAddress, width, height, 8, bytesPerRow, colorSpace, ((uint32_t)kCGBitmapByteOrder32Little) | ((uint32_t)kCGImageAlphaPremultipliedFirst));
     
     CGImageRef cgImage = CGBitmapContextCreateImage(context);
-    CVPixelBufferUnlockBaseAddress(imageBuffer,0);
+    CVPixelBufferUnlockBaseAddress(imageBuffer.buffer, 0);
     
     CGContextRelease(context);
     CGColorSpaceRelease(colorSpace);
@@ -470,7 +470,7 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
 
 - (void)renderVideoSampleBuffer:(CMSampleBufferRef)sampleBuffer
 {
-	CVPixelBufferRef renderedPixelBuffer = NULL;
+	TGVideoCameraRendererBuffer *renderedPixelBuffer = nil;
 	CMTime timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
     
 	@synchronized (_renderer)
@@ -486,8 +486,7 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
                     _repeatingCount = 11;
                     
                     [_renderer setPreviousPixelBuffer:_previousPixelBuffer];
-                    CFRelease(_previousPixelBuffer);
-                    _previousPixelBuffer = NULL;
+                    _previousPixelBuffer = nil;
                 }
                 
                 if (_repeatingCount > 0)
@@ -506,7 +505,11 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
                     [_renderer setPreviousPixelBuffer:NULL];
             }
             
-			CVPixelBufferRef sourcePixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+			CVPixelBufferRef sourcePixelBufferValue = CMSampleBufferGetImageBuffer(sampleBuffer);
+            TGVideoCameraRendererBuffer *sourcePixelBuffer = nil;
+            if (sourcePixelBufferValue) {
+                sourcePixelBuffer = [[TGVideoCameraRendererBuffer alloc] initWithRetainedBuffer:CVPixelBufferRetain(sourcePixelBufferValue)];
+            }
 			renderedPixelBuffer = [_renderer copyRenderedPixelBuffer:sourcePixelBuffer];
             
             @synchronized (self)
@@ -542,14 +545,11 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
                 
                 if (!repeatingFrames)
                 {
-                    if (_previousPixelBuffer != NULL)
-                    {
-                        CFRelease(_previousPixelBuffer);
+                    if (_previousPixelBuffer != NULL) {
                         _previousPixelBuffer = NULL;
                     }
                     
                     _previousPixelBuffer = sourcePixelBuffer;
-                    CFRetain(sourcePixelBuffer);
                 }
             }
 		}
@@ -568,8 +568,6 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
 			if (_recordingStatus == TGVideoCameraRecordingStatusRecording)
 				[_recorder appendVideoPixelBuffer:renderedPixelBuffer withPresentationTime:timestamp];
 		}
-		
-		CFRelease(renderedPixelBuffer);
 	}
 	else
 	{
@@ -577,33 +575,27 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
 	}
 }
 
-- (void)outputPreviewPixelBuffer:(CVPixelBufferRef)previewPixelBuffer
+- (void)outputPreviewPixelBuffer:(TGVideoCameraRendererBuffer *)previewPixelBuffer
 {
     if (_currentPreviewPixelBuffer != NULL)
     {
-        CFRelease(_currentPreviewPixelBuffer);
         _currentPreviewPixelBuffer = NULL;
     }
     
     if (_previousPixelBuffer != NULL)
     {
         _currentPreviewPixelBuffer = previewPixelBuffer;
-        CFRetain(_currentPreviewPixelBuffer);
     }
     
     [self invokeDelegateCallbackAsync:^
     {
-		CVPixelBufferRef currentPreviewPixelBuffer = NULL;
+        TGVideoCameraRendererBuffer *currentPreviewPixelBuffer = nil;
 		@synchronized (self)
 		{
 			currentPreviewPixelBuffer = _currentPreviewPixelBuffer;
-			if (currentPreviewPixelBuffer != NULL)
-            {
-				CFRetain(currentPreviewPixelBuffer);
-                if (_currentPreviewPixelBuffer != NULL)
-                {
-                    CFRelease(_currentPreviewPixelBuffer);
-                    _currentPreviewPixelBuffer = NULL;
+			if (currentPreviewPixelBuffer != NULL) {
+                if (_currentPreviewPixelBuffer != NULL) {
+                    _currentPreviewPixelBuffer = nil;
                 }
 			}
 		}
@@ -611,7 +603,6 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
 		if (currentPreviewPixelBuffer != NULL)
         {
 			[_delegate capturePipeline:self previewPixelBufferReadyForDisplay:currentPreviewPixelBuffer];
-			CFRelease(currentPreviewPixelBuffer);
 		}
 	}];
 }
@@ -642,7 +633,7 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
     inBuff.data = baseAddress + startpos;
     
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    CGContextRef context = CGBitmapContextCreateWithData(NULL, outWidth, outHeight, 8, outWidth * 4, colorSpace, kCGImageByteOrder32Little | kCGImageAlphaPremultipliedFirst, NULL, nil);
+    CGContextRef context = CGBitmapContextCreateWithData(NULL, outWidth, outHeight, 8, outWidth * 4, colorSpace, ((uint32_t)kCGImageByteOrder32Little) | ((uint32_t)kCGImageAlphaPremultipliedFirst), NULL, nil);
     
     unsigned char *outImg = CGBitmapContextGetData(context);
     vImage_Buffer outBuff = {outImg, outHeight, outWidth, 4 * outWidth};
@@ -669,14 +660,14 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
     _preset = preset;
     _liveUpload = liveUpload;
     
-    OSSpinLockLock(&_recordLock);
+    os_unfair_lock_lock(&_recordLock);
     if (self.outputAudioFormatDescription == NULL)
     {
         _startRecordAfterAudioBuffer = true;
-        OSSpinLockUnlock(&_recordLock);
+        os_unfair_lock_unlock(&_recordLock);
         return;
     }
-    OSSpinLockUnlock(&_recordLock);
+    os_unfair_lock_unlock(&_recordLock);
     
 	@synchronized (self)
 	{
@@ -695,7 +686,7 @@ const NSInteger TGVideoCameraRetainedBufferCount = 16;
     _videoTransform = [self transformForOrientation:self.orientation];
 
     CGSize size = [TGMediaVideoConversionPresetSettings maximumSizeForPreset:preset];
-    NSDictionary *videoSettings = [TGMediaVideoConversionPresetSettings videoSettingsForPreset:preset dimensions:size];
+    NSDictionary *videoSettings = [TGMediaVideoConversionPresetSettings videoSettingsForPreset:preset dimensions:size frameRate:30];
 	[recorder addVideoTrackWithSourceFormatDescription:self.outputVideoFormatDescription transform:CGAffineTransformIdentity settings:videoSettings];
 	_recorder = recorder;
 	
@@ -918,10 +909,7 @@ static CGFloat angleOffsetFromPortraitOrientationToOrientation(AVCaptureVideoOri
 {
     if (![device respondsToSelector:@selector(setVideoZoomFactor:)])
         return false;
-    
-    if (device.position == AVCaptureDevicePositionFront)
-        return false;
-    
+
     return true;
 }
 
@@ -936,7 +924,10 @@ static CGFloat angleOffsetFromPortraitOrientationToOrientation(AVCaptureVideoOri
     {
         NSError *error;
         
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo];
+#pragma clang diagnostic pop
         AVCaptureDevice *deviceForTargetPosition = nil;
         for (AVCaptureDevice *device in devices)
         {
@@ -1073,7 +1064,10 @@ static CGFloat angleOffsetFromPortraitOrientationToOrientation(AVCaptureVideoOri
 
 + (bool)cameraPositionChangeAvailable
 {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     return [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo].count > 1;
+#pragma clang diagnostic pop
 }
 
 + (SQueue *)cameraQueue

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct MediaId: Hashable, PostboxCoding, CustomStringConvertible, Codable {
+public struct MediaId: Hashable, Comparable, PostboxCoding, CustomStringConvertible, Codable {
     public typealias Namespace = Int32
     public typealias Id = Int64
     
@@ -39,6 +39,14 @@ public struct MediaId: Hashable, PostboxCoding, CustomStringConvertible, Codable
         encoder.encodeInt64(self.id, forKey: "i")
     }
     
+    public static func <(lhs: MediaId, rhs: MediaId) -> Bool {
+        if lhs.namespace != rhs.namespace {
+            return lhs.namespace < rhs.namespace
+        } else {
+            return lhs.id < rhs.id
+        }
+    }
+    
     public func encodeToBuffer(_ buffer: WriteBuffer) {
         var namespace = self.namespace
         var id = self.id
@@ -68,13 +76,11 @@ public struct MediaId: Hashable, PostboxCoding, CustomStringConvertible, Codable
     }
 }
 
-public protocol AssociatedMediaData: AnyObject, PostboxCoding {
-    func isEqual(to: AssociatedMediaData) -> Bool
-}
-
 public protocol Media: AnyObject, PostboxCoding {
     var id: MediaId? { get }
     var peerIds: [PeerId] { get }
+    var storyIds: [StoryId] { get }
+    var mediaIds: [MediaId] { get }
     
     var indexableText: String? { get }
     
@@ -84,6 +90,55 @@ public protocol Media: AnyObject, PostboxCoding {
     
     func isEqual(to other: Media) -> Bool
     func isSemanticallyEqual(to other: Media) -> Bool
+}
+
+public extension Media {
+    var storyIds: [StoryId] {
+        return []
+    }
+    var mediaIds: [MediaId] {
+        return []
+    }
+}
+
+public func areMediaArraysEqual(_ lhs: [Media], _ rhs: [Media]) -> Bool {
+    if lhs.count != rhs.count {
+        return false
+    }
+    for i in 0 ..< lhs.count {
+        if !lhs[i].isEqual(to: rhs[i]) {
+            return false
+        }
+    }
+    return true
+}
+
+public func areMediaArraysSemanticallyEqual(_ lhs: [Media], _ rhs: [Media]) -> Bool {
+    if lhs.count != rhs.count {
+        return false
+    }
+    for i in 0 ..< lhs.count {
+        if !lhs[i].isSemanticallyEqual(to: rhs[i]) {
+            return false
+        }
+    }
+    return true
+}
+
+public func areMediaDictionariesEqual(_ lhs: [MediaId: Media], _ rhs: [MediaId: Media]) -> Bool {
+    if lhs.count != rhs.count {
+        return false
+    }
+    for (key, value) in lhs {
+        if let rhsValue = rhs[key] {
+            if !value.isEqual(to: rhsValue) {
+                return false
+            }
+        } else {
+            return false
+        }
+    }
+    return true
 }
 
 public extension Media {

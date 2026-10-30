@@ -13,7 +13,6 @@ swift_library(
         "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
         "//submodules/AsyncDisplayKit:AsyncDisplayKit",
         "//submodules/Display:Display",
-        "//submodules/Postbox:Postbox",
         "//submodules/TelegramCore:TelegramCore",
         "//submodules/TelegramPresentationData:TelegramPresentationData",
         "//submodules/AccountContext:AccountContext",
@@ -24,6 +23,7 @@ swift_library(
         "//submodules/PeerAvatarGalleryUI:PeerAvatarGalleryUI",
         "//submodules/MediaResources:MediaResources",
         "//submodules/WebsiteType:WebsiteType",
+        "//submodules/TelegramUI/Components/Stories/StoryContainerScreen",
     ],
     visibility = [
         "//visibility:public",

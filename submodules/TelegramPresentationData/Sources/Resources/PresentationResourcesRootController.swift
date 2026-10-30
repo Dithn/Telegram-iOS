@@ -45,7 +45,7 @@ public struct PresentationResourcesRootController {
     
     public static func navigationShareIcon(_ theme: PresentationTheme) -> UIImage? {
         return theme.image(PresentationResourceKey.navigationShareIcon.rawValue, { theme in
-            return generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Accessory Panels/MessageSelectionForward"), color: theme.rootController.navigationBar.accentTextColor)
+            return generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Accessory Panels/MessageSelectionForward"), color: theme.chat.inputPanel.panelControlColor)
         })
 //        return theme.image(PresentationResourceKey.navigationShareIcon.rawValue, generateShareButtonImage)
     }
@@ -64,13 +64,31 @@ public struct PresentationResourcesRootController {
     
     public static func navigationSearchIcon(_ theme: PresentationTheme) -> UIImage? {
         return theme.image(PresentationResourceKey.navigationSearchIcon.rawValue, { theme in
-            return generateTintedImage(image: UIImage(bundleImageName: "Chat List/SearchIcon"), color: theme.rootController.navigationBar.accentTextColor)
+            return generateTintedImage(image: UIImage(bundleImageName: "Navigation/Search"), color: theme.chat.inputPanel.panelControlColor)
         })
     }
     
     public static func navigationCompactSearchIcon(_ theme: PresentationTheme) -> UIImage? {
         return theme.image(PresentationResourceKey.navigationCompactSearchIcon.rawValue, { theme in
-            return generateTintedImage(image: UIImage(bundleImageName: "Chat List/SearchIcon"), color: theme.rootController.navigationBar.accentTextColor)
+            return generateTintedImage(image: UIImage(bundleImageName: "Chat List/SearchIcon"), color: theme.chat.inputPanel.panelControlColor)
+        })
+    }
+    
+    public static func navigationCompactSearchWhiteIcon(_ theme: PresentationTheme) -> UIImage? {
+        return theme.image(PresentationResourceKey.navigationCompactSearchWhiteIcon.rawValue, { theme in
+            return generateTintedImage(image: UIImage(bundleImageName: "Chat List/SearchIcon"), color: .white)
+        })
+    }
+    
+    public static func navigationCompactTagsSearchIcon(_ theme: PresentationTheme) -> UIImage? {
+        return theme.image(PresentationResourceKey.navigationCompactTagsSearchIcon.rawValue, { theme in
+            return generateTintedImage(image: UIImage(bundleImageName: "Chat/NavigationSearchTagsIcon"), color: theme.chat.inputPanel.panelControlColor)
+        })
+    }
+    
+    public static func navigationCompactTagsSearchWhiteIcon(_ theme: PresentationTheme) -> UIImage? {
+        return theme.image(PresentationResourceKey.navigationCompactTagsSearchWhiteIcon.rawValue, { theme in
+            return generateTintedImage(image: UIImage(bundleImageName: "Chat/NavigationSearchTagsIcon"), color: .white)
         })
     }
 
@@ -95,19 +113,19 @@ public struct PresentationResourcesRootController {
 
     public static func navigationMoreCircledIcon(_ theme: PresentationTheme) -> UIImage? {
         return theme.image(PresentationResourceKey.navigationMoreCircledIcon.rawValue, { theme in
-            generateTintedImage(image: UIImage(bundleImageName: "Chat List/NavigationMore"), color: theme.rootController.navigationBar.accentTextColor)
+            generateTintedImage(image: UIImage(bundleImageName: "Chat List/NavigationMore"), color: theme.rootController.navigationBar.buttonColor)
         })
     }
 
     public static func navigationQrCodeIcon(_ theme: PresentationTheme) -> UIImage? {
         return theme.image(PresentationResourceKey.navigationQrCodeIcon.rawValue, { theme in
-            generateTintedImage(image: UIImage(bundleImageName: "Settings/QrIcon"), color: theme.rootController.navigationBar.accentTextColor)
+            generateTintedImage(image: UIImage(bundleImageName: "Settings/QrIcon"), color: .white)
         })
     }
     
     public static func navigationAddIcon(_ theme: PresentationTheme) -> UIImage? {
         return theme.image(PresentationResourceKey.navigationAddIcon.rawValue, { theme in
-            return generateTintedImage(image: UIImage(bundleImageName: "Chat List/AddIcon"), color: theme.rootController.navigationBar.accentTextColor)
+            return generateTintedImage(image: UIImage(bundleImageName: "Chat List/AddIcon"), color: theme.rootController.navigationBar.buttonColor)
         })
     }
     
@@ -125,12 +143,6 @@ public struct PresentationResourcesRootController {
                 context.addLine(to: CGPoint(x: 1.0, y: size.height - 1.0))
                 context.strokePath()
             })
-        })
-    }
-    
-    public static func navigationPlayerPlayIcon(_ theme: PresentationTheme) -> UIImage? {
-        return theme.image(PresentationResourceKey.navigationPlayerPlayIcon.rawValue, { theme in
-            return generateTintedImage(image: UIImage(bundleImageName: "GlobalMusicPlayer/MinimizedPlay"), color: theme.rootController.navigationBar.accentTextColor)
         })
     }
     
@@ -158,12 +170,6 @@ public struct PresentationResourcesRootController {
         })
     }
     
-    public static func navigationPlayerPauseIcon(_ theme: PresentationTheme) -> UIImage? {
-        return theme.image(PresentationResourceKey.navigationPlayerPauseIcon.rawValue, { theme in
-            return generateTintedImage(image: UIImage(bundleImageName: "GlobalMusicPlayer/MinimizedPause"), color: theme.rootController.navigationBar.accentTextColor)
-        })
-    }
-    
     public static func navigationLiveLocationIcon(_ theme: PresentationTheme) -> UIImage? {
         return theme.image(PresentationResourceKey.navigationLiveLocationIcon.rawValue, { theme in
             return generateTintedImage(image: UIImage(bundleImageName: "Chat List/LiveLocationPanelIcon"), color: theme.rootController.navigationBar.accentTextColor)
@@ -173,18 +179,44 @@ public struct PresentationResourcesRootController {
     public static func inAppNotificationBackground(_ theme: PresentationTheme) -> UIImage? {
         return theme.image(PresentationResourceKey.inAppNotificationBackground.rawValue, { theme in
             let inset: CGFloat = 16.0
-            return generateImage(CGSize(width: 30.0 + inset * 2.0, height: 30.0 + 8.0 * 2.0 + 20.0), rotatedContext: { size, context in
+            let cornerRadius: CGFloat = 26.0
+            let diameter = cornerRadius * 2.0
+            return generateImage(CGSize(width: diameter + inset * 2.0, height: diameter + 8.0 * 2.0 + 20.0), rotatedContext: { size, context in
                 context.clear(CGRect(origin: CGPoint(), size: size))
                 context.setShadow(offset: CGSize(width: 0.0, height: -4.0), blur: 40.0, color: UIColor(white: 0.0, alpha: 0.3).cgColor)
                 context.setFillColor(theme.inAppNotification.fillColor.cgColor)
-                context.fillEllipse(in: CGRect(origin: CGPoint(x: inset, y: 8.0 * 2.0), size: CGSize(width: 30.0, height: 30.0)))
-            })?.stretchableImage(withLeftCapWidth: Int(inset) + 15, topCapHeight: 8 * 2 + 15)
+                context.fillEllipse(in: CGRect(origin: CGPoint(x: inset, y: 8.0 * 2.0), size: CGSize(width: diameter, height: diameter)))
+            })?.stretchableImage(withLeftCapWidth: Int(inset + cornerRadius), topCapHeight: 8 * 2 + Int(cornerRadius))
         })
     }
     
-    public static func inAppNotificationSecretChatIcon(_ theme: PresentationTheme) -> UIImage? {
-        return theme.image(PresentationResourceKey.inAppNotificationSecretChatIcon.rawValue, { theme in
-            return generateTintedImage(image: UIImage(bundleImageName: "Notification/SecretLock"), color: theme.inAppNotification.primaryTextColor)
+    public static func navigationPostStoryIcon(_ theme: PresentationTheme) -> UIImage? {
+        return theme.image(PresentationResourceKey.navigationPostStoryIcon.rawValue, { theme in
+            return generateTintedImage(image: UIImage(bundleImageName: "Chat List/AddStoryIcon"), color: .white)
+        })
+    }
+    
+    public static func navigationSortIcon(_ theme: PresentationTheme) -> UIImage? {
+        return theme.image(PresentationResourceKey.navigationSortIcon.rawValue, { theme in
+            return generateTintedImage(image: UIImage(bundleImageName: "Peer Info/SortIcon"), color: .white)
+        })
+    }
+    
+    public static func navigationBackIcon(_ theme: PresentationTheme) -> UIImage? {
+        return theme.image(PresentationResourceKey.navigationBackIcon.rawValue, { theme in
+            return generateTintedImage(image: UIImage(bundleImageName: "Navigation/Back"), color: .white)
+        })
+    }
+    
+    public static func navigationCloseIcon(_ theme: PresentationTheme) -> UIImage? {
+        return theme.image(PresentationResourceKey.navigationCloseIcon.rawValue, { theme in
+            return generateTintedImage(image: UIImage(bundleImageName: "Navigation/Close"), color: .white)
+        })
+    }
+    
+    public static func callListCallIcon(_ theme: PresentationTheme) -> UIImage? {
+        return theme.image(PresentationResourceKey.callListCallIcon.rawValue, { theme in
+            return generateTintedImage(image: UIImage(bundleImageName: "Call List/NewCallListIcon"), color: theme.rootController.navigationBar.accentTextColor)
         })
     }
 }

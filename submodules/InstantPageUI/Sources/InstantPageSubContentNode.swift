@@ -2,23 +2,22 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import Display
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import TelegramPresentationData
 import TelegramUIPreferences
 import AccountContext
 
-final class InstantPageSubContentNode : ASDisplayNode {
+final class InstantPageSubContentNode : ASDisplayNode, InstantPageExternalMediaDimensionsNode {
     private let context: AccountContext
     private let strings: PresentationStrings
     private let nameDisplayOrder: PresentationPersonNameOrder
-    private let sourcePeerType: MediaAutoDownloadPeerType
+    private let sourceLocation: InstantPageSourceLocation
     private let theme: InstantPageTheme
     
     private let openMedia: (InstantPageMedia) -> Void
     private let longPressMedia: (InstantPageMedia) -> Void
-    private let openPeer: (PeerId) -> Void
+    private let openPeer: (EnginePeer) -> Void
     private let openUrl: (InstantPageUrlItem) -> Void
     
     var currentLayoutTiles: [InstantPageTile] = []
@@ -33,6 +32,13 @@ final class InstantPageSubContentNode : ASDisplayNode {
     var currentDetailsItems: [InstantPageDetailsItem] = []
     
     var requestLayoutUpdate: ((Bool) -> Void)?
+    var updateExternalMediaDimensions: ((EngineMedia.Id, PixelDimensions) -> Void)? {
+        didSet {
+            for (_, itemNode) in self.visibleItemsWithNodes {
+                self.applyExternalMediaDimensionsUpdater(to: itemNode)
+            }
+        }
+    }
     
     var currentLayout: InstantPageLayout
     let contentSize: CGSize
@@ -40,11 +46,11 @@ final class InstantPageSubContentNode : ASDisplayNode {
     
     private var previousVisibleBounds: CGRect?
     
-    init(context: AccountContext, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, sourcePeerType: MediaAutoDownloadPeerType, theme: InstantPageTheme, items: [InstantPageItem], contentSize: CGSize, inOverlayPanel: Bool = false, openMedia: @escaping (InstantPageMedia) -> Void, longPressMedia: @escaping (InstantPageMedia) -> Void, openPeer: @escaping (PeerId) -> Void, openUrl: @escaping (InstantPageUrlItem) -> Void) {
+    init(context: AccountContext, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, sourceLocation: InstantPageSourceLocation, theme: InstantPageTheme, items: [InstantPageItem], contentSize: CGSize, inOverlayPanel: Bool = false, openMedia: @escaping (InstantPageMedia) -> Void, longPressMedia: @escaping (InstantPageMedia) -> Void, openPeer: @escaping (EnginePeer) -> Void, openUrl: @escaping (InstantPageUrlItem) -> Void) {
         self.context = context
         self.strings = strings
         self.nameDisplayOrder = nameDisplayOrder
-        self.sourcePeerType = sourcePeerType
+        self.sourceLocation = sourceLocation
         self.theme = theme
         
         self.openMedia = openMedia
@@ -188,7 +194,7 @@ final class InstantPageSubContentNode : ASDisplayNode {
                 if itemNode == nil {
                     let itemIndex = itemIndex
                     let detailsIndex = detailsIndex
-                    if let newNode = item.node(context: self.context, strings: self.strings, nameDisplayOrder: self.nameDisplayOrder, theme: theme, sourcePeerType: self.sourcePeerType, openMedia: { [weak self] media in
+                    if let newNode = item.node(context: self.context, strings: self.strings, nameDisplayOrder: self.nameDisplayOrder, theme: theme, sourceLocation: self.sourceLocation, openMedia: { [weak self] media in
                         self?.openMedia(media)
                         }, longPressMedia: { [weak self] media in
                             self?.longPressMedia(media)
@@ -199,7 +205,7 @@ final class InstantPageSubContentNode : ASDisplayNode {
                         }, updateWebEmbedHeight: { _ in
                         }, updateDetailsExpanded: { [weak self] expanded in
                             self?.updateDetailsExpanded(detailsIndex, expanded)
-                        }, currentExpandedDetails: self.currentExpandedDetails) {
+                        }, currentExpandedDetails: self.currentExpandedDetails, getPreloadedResource: { _ in return nil }) {
                         newNode.frame = itemFrame
                         newNode.updateLayout(size: itemFrame.size, transition: transition)
                         if let topNode = topNode {
@@ -210,6 +216,7 @@ final class InstantPageSubContentNode : ASDisplayNode {
                         topNode = newNode
                         self.visibleItemsWithNodes[itemIndex] = newNode
                         itemNode = newNode
+                        self.applyExternalMediaDimensionsUpdater(to: newNode)
                         
                         if let itemNode = itemNode as? InstantPageDetailsNode {
                             itemNode.requestLayoutUpdate = { [weak self] animated in
@@ -287,6 +294,16 @@ final class InstantPageSubContentNode : ASDisplayNode {
         }
         for index in removeItemIndices {
             self.visibleItemsWithNodes.removeValue(forKey: index)
+        }
+    }
+    
+    private func applyExternalMediaDimensionsUpdater(to itemNode: InstantPageNode) {
+        if let itemNode = itemNode as? InstantPageImageNode {
+            itemNode.updateExternalMediaDimensions = self.updateExternalMediaDimensions
+        } else if let itemNode = itemNode as? InstantPageDetailsNode {
+            itemNode.contentNode.updateExternalMediaDimensions = self.updateExternalMediaDimensions
+        } else if let itemNode = itemNode as? InstantPageSlideshowNode {
+            itemNode.updateExternalMediaDimensions = self.updateExternalMediaDimensions
         }
     }
     

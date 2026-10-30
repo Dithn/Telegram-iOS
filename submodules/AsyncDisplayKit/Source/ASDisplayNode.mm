@@ -549,9 +549,12 @@ ASSynthesizeLockingMethodsWithMutex(__instanceLock__);
     }
       
     // CAEAGLLayer
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     if([[view.layer class] isSubclassOfClass:[CAEAGLLayer class]]){
       _flags.canClearContentsOfLayer = NO;
     }
+#pragma clang diagnostic pop
   }
 
   return view;
@@ -1539,41 +1542,6 @@ void recursivelyTriggerDisplayForLayer(CALayer *layer, BOOL shouldBlock)
   }
 }
 
-- (void)_updateClipCornerLayerContentsWithRadius:(CGFloat)radius backgroundColor:(UIColor *)backgroundColor
-{
-  ASPerformBlockOnMainThread(^{
-    for (int idx = 0; idx < NUM_CLIP_CORNER_LAYERS; idx++) {
-      // Layers are, in order: Top Left, Top Right, Bottom Right, Bottom Left.
-      // anchorPoint is Bottom Left at 0,0 and Top Right at 1,1.
-      BOOL isTop   = (idx == 0 || idx == 1);
-      BOOL isRight = (idx == 1 || idx == 2);
-      
-      CGSize size = CGSizeMake(radius + 1, radius + 1);
-      ASGraphicsBeginImageContextWithOptions(size, NO, self.contentsScaleForDisplay);
-      
-      CGContextRef ctx = UIGraphicsGetCurrentContext();
-      if (isRight == YES) {
-        CGContextTranslateCTM(ctx, -radius + 1, 0);
-      }
-      if (isTop == YES) {
-        CGContextTranslateCTM(ctx, 0, -radius + 1);
-      }
-      UIBezierPath *roundedRect = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, radius * 2, radius * 2) cornerRadius:radius];
-      [roundedRect setUsesEvenOddFillRule:YES];
-      [roundedRect appendPath:[UIBezierPath bezierPathWithRect:CGRectMake(-1, -1, radius * 2 + 1, radius * 2 + 1)]];
-      [backgroundColor setFill];
-      [roundedRect fill];
-      
-      // No lock needed, as _clipCornerLayers is only modified on the main thread.
-      CALayer *clipCornerLayer = _clipCornerLayers[idx];
-      clipCornerLayer.contents = (id)(ASGraphicsGetImageAndEndCurrentContext().CGImage);
-      clipCornerLayer.bounds = CGRectMake(0.0, 0.0, size.width, size.height);
-      clipCornerLayer.anchorPoint = CGPointMake(isRight ? 1.0 : 0.0, isTop ? 1.0 : 0.0);
-    }
-    [self _layoutClipCornersIfNeeded];
-  });
-}
-
 - (void)_setClipCornerLayersVisible:(BOOL)visible
 {
 }
@@ -1634,7 +1602,6 @@ void recursivelyTriggerDisplayForLayer(CALayer *layer, BOOL shouldBlock)
         }
         else if (newRoundingType == ASCornerRoundingTypeClipping) {
           // Clip corners already exist, but the radius has changed.
-          [self _updateClipCornerLayerContentsWithRadius:newCornerRadius backgroundColor:self.backgroundColor];
         }
       }
     }
@@ -2827,7 +2794,7 @@ ASDISPLAYNODE_INLINE BOOL subtreeIsRasterized(ASDisplayNode *node) {
   ASDisplayNodeAssertMainThread();
   ASDisplayNodeAssert(!_flags.isEnteringHierarchy, @"You should never call -didEnterHierarchy directly. Appearance is automatically managed by ASDisplayNode");
   ASDisplayNodeAssert(!_flags.isExitingHierarchy, @"ASDisplayNode inconsistency. __enterHierarchy and __exitHierarchy are mutually exclusive");
-  ASDisplayNodeAssert(_flags.isInHierarchy, @"ASDisplayNode inconsistency. __enterHierarchy and __exitHierarchy are mutually exclusive");
+  //ASDisplayNodeAssert(_flags.isInHierarchy, @"ASDisplayNode inconsistency. __enterHierarchy and __exitHierarchy are mutually exclusive");
   ASAssertUnlocked(__instanceLock__);
 }
 
@@ -3034,7 +3001,7 @@ ASDISPLAYNODE_INLINE BOOL subtreeIsRasterized(ASDisplayNode *node) {
         if ([self _implementsDisplay]) {
           if (nowDisplay) {
             [ASDisplayNode scheduleNodeForRecursiveDisplay:self];
-          } else {
+          } else if (!self.disableClearContentsOnHide) {
             [[self asyncLayer] cancelAsyncDisplay];
             //schedule clear contents on next runloop
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -3483,7 +3450,7 @@ ASDISPLAYNODE_INLINE BOOL subtreeIsRasterized(ASDisplayNode *node) {
 - (ASDisplayNodePerformanceMeasurements)performanceMeasurements
 {
   MutexLocker l(__instanceLock__);
-  ASDisplayNodePerformanceMeasurements measurements = { .layoutSpecNumberOfPasses = -1, .layoutSpecTotalTime = NAN, .layoutComputationNumberOfPasses = -1, .layoutComputationTotalTime = NAN };
+  ASDisplayNodePerformanceMeasurements measurements = { .layoutSpecTotalTime = NAN, .layoutSpecNumberOfPasses = -1, .layoutComputationTotalTime = NAN, .layoutComputationNumberOfPasses = -1 };
   if (_measurementOptions & ASDisplayNodePerformanceMeasurementOptionLayoutSpec) {
     measurements.layoutSpecNumberOfPasses = _layoutSpecNumberOfPasses;
     measurements.layoutSpecTotalTime = _layoutSpecTotalTime;

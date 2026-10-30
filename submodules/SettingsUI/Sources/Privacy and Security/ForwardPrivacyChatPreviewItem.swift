@@ -4,7 +4,6 @@ import Display
 import AsyncDisplayKit
 import SwiftSignalKit
 import TelegramCore
-import Postbox
 import TelegramPresentationData
 import TelegramUIPreferences
 import ItemListUI
@@ -16,6 +15,7 @@ class ForwardPrivacyChatPreviewItem: ListViewItem, ItemListItem {
     let context: AccountContext
     let theme: PresentationTheme
     let strings: PresentationStrings
+    let systemStyle: ItemListSystemStyle
     let sectionId: ItemListSectionId
     let fontSize: PresentationFontSize
     let chatBubbleCorners: PresentationChatBubbleCorners
@@ -26,10 +26,11 @@ class ForwardPrivacyChatPreviewItem: ListViewItem, ItemListItem {
     let linkEnabled: Bool
     let tooltipText: String
     
-    init(context: AccountContext, theme: PresentationTheme, strings: PresentationStrings, sectionId: ItemListSectionId, fontSize: PresentationFontSize, chatBubbleCorners: PresentationChatBubbleCorners, wallpaper: TelegramWallpaper, dateTimeFormat: PresentationDateTimeFormat, nameDisplayOrder: PresentationPersonNameOrder, peerName: String, linkEnabled: Bool, tooltipText: String) {
+    init(context: AccountContext, theme: PresentationTheme, strings: PresentationStrings, systemStyle: ItemListSystemStyle = .legacy, sectionId: ItemListSectionId, fontSize: PresentationFontSize, chatBubbleCorners: PresentationChatBubbleCorners, wallpaper: TelegramWallpaper, dateTimeFormat: PresentationDateTimeFormat, nameDisplayOrder: PresentationPersonNameOrder, peerName: String, linkEnabled: Bool, tooltipText: String) {
         self.context = context
         self.theme = theme
         self.strings = strings
+        self.systemStyle = systemStyle
         self.sectionId = sectionId
         self.fontSize = fontSize
         self.chatBubbleCorners = chatBubbleCorners
@@ -41,35 +42,29 @@ class ForwardPrivacyChatPreviewItem: ListViewItem, ItemListItem {
         self.tooltipText = tooltipText
     }
     
-    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
-        async {
+    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+        Queue.mainQueue().async {
             let node = ForwardPrivacyChatPreviewItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
             
-            Queue.mainQueue().async {
-                completion(node, {
-                    return (nil, { _ in apply() })
-                })
-            }
+            completion(node, {
+                return (nil, { _ in apply() })
+            })
         }
     }
     
-    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? ForwardPrivacyChatPreviewItemNode {
                 let makeLayout = nodeValue.asyncLayout()
                 
-                async {
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
-                    Queue.mainQueue().async {
-                        completion(layout, { _ in
-                            apply()
-                        })
-                    }
-                }
+                let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
+                completion(layout, { _ in
+                    apply()
+                })
             }
         }
     }
@@ -103,8 +98,8 @@ class ForwardPrivacyChatPreviewItemNode: ListViewItemNode {
         self.containerNode = ASDisplayNode()
         self.containerNode.subnodeTransform = CATransform3DMakeRotation(CGFloat.pi, 0.0, 0.0, 1.0)
         
-        self.tooltipContainerNode = ContextMenuContainerNode()
-        self.tooltipContainerNode.backgroundColor = UIColor(white: 0.0, alpha: 0.8)
+        self.tooltipContainerNode = ContextMenuContainerNode(isBlurred: false, isDark: true)
+        self.tooltipContainerNode.containerNode.backgroundColor = UIColor(white: 0.0, alpha: 0.8)
         
         self.textNode = ImmediateTextNode()
         self.textNode.isUserInteractionEnabled = false
@@ -113,13 +108,13 @@ class ForwardPrivacyChatPreviewItemNode: ListViewItemNode {
         
         self.measureTextNode = TextNode()
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
         
         self.clipsToBounds = true
         
         self.addSubnode(self.containerNode)
         
-        self.tooltipContainerNode.addSubnode(self.textNode)
+        self.tooltipContainerNode.containerNode.addSubnode(self.textNode)
         
         self.addSubnode(self.tooltipContainerNode)
     }
@@ -130,43 +125,43 @@ class ForwardPrivacyChatPreviewItemNode: ListViewItemNode {
 
         var currentBackgroundNode = self.backgroundNode
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             if currentBackgroundNode == nil {
                 currentBackgroundNode = createWallpaperBackgroundNode(context: item.context, forChatDisplay: false)
+                currentBackgroundNode?.update(wallpaper: item.wallpaper, animated: false)
+                currentBackgroundNode?.updateBubbleTheme(bubbleTheme: item.theme, bubbleCorners: item.chatBubbleCorners)
             }
-            currentBackgroundNode?.update(wallpaper: item.wallpaper)
-            currentBackgroundNode?.updateBubbleTheme(bubbleTheme: item.theme, bubbleCorners: item.chatBubbleCorners)
             
             let insets: UIEdgeInsets
             let separatorHeight = UIScreenPixel
             
-            let peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(1))
+            let peerId = EnginePeer.Id(namespace: Namespaces.Peer.CloudUser, id: EnginePeer.Id.Id._internalFromInt64Value(1))
+
+            var peers = EngineSimpleDictionary<EnginePeer.Id, EngineRawPeer>()
+            let messages = EngineSimpleDictionary<EngineMessage.Id, EngineRawMessage>()
             
-            var peers = SimpleDictionary<PeerId, Peer>()
-            let messages = SimpleDictionary<MessageId, Message>()
+            peers[peerId] = TelegramUser(id: peerId, accessHash: nil, firstName: item.peerName, lastName: "", username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: [], storiesHidden: nil, nameColor: .preset(.blue), backgroundEmojiId: nil, profileColor: nil, profileBackgroundEmojiId: nil, subscriberCount: nil, verificationIconFileId: nil)
             
-            peers[peerId] = TelegramUser(id: peerId, accessHash: nil, firstName: item.peerName, lastName: "", username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [])
-            
-            let forwardInfo = MessageForwardInfo(author: item.linkEnabled ? peers[peerId] : nil, source: nil, sourceMessageId: nil, date: 0, authorSignature: item.linkEnabled ? nil : item.peerName, psaType: nil, flags: [])
-            
-            let messageItem = item.context.sharedContext.makeChatMessagePreviewItem(context: item.context, messages: [Message(stableId: 1, stableVersion: 0, id: MessageId(peerId: peerId, namespace: 0, id: 1), globallyUniqueId: nil, groupingKey: nil, groupInfo: nil, threadId: nil, timestamp: 66000, flags: [.Incoming], tags: [], globalTags: [], localTags: [], forwardInfo: forwardInfo, author: nil, text: item.strings.Privacy_Forwards_PreviewMessageText, attributes: [], media: [], peers: peers, associatedMessages: messages, associatedMessageIds: [])], theme: item.theme, strings: item.strings, wallpaper: item.wallpaper, fontSize: item.fontSize, chatBubbleCorners: item.chatBubbleCorners, dateTimeFormat: item.dateTimeFormat, nameOrder: item.nameDisplayOrder, forcedResourceStatus: nil, tapMessage: nil, clickThroughMessage: nil, backgroundNode: currentBackgroundNode, availableReactions: nil, isCentered: false)
+            let forwardInfo = EngineMessage.ForwardInfo(author: item.linkEnabled ? peers[peerId] : nil, source: nil, sourceMessageId: nil, date: 0, authorSignature: item.linkEnabled ? nil : item.peerName, psaType: nil, flags: [])
+
+            let messageItem = item.context.sharedContext.makeChatMessagePreviewItem(context: item.context, messages: [EngineMessage(EngineRawMessage(stableId: 1, stableVersion: 0, id: EngineMessage.Id(peerId: peerId, namespace: 0, id: 1), globallyUniqueId: nil, groupingKey: nil, groupInfo: nil, threadId: nil, timestamp: 66000, flags: [.Incoming], tags: [], globalTags: [], localTags: [], customTags: [], forwardInfo: forwardInfo, author: nil, text: item.strings.Privacy_Forwards_PreviewMessageText, attributes: [], media: [], peers: peers, associatedMessages: messages, associatedMessageIds: [], associatedMedia: [:], associatedThreadInfo: nil, associatedStories: [:]))], theme: item.theme, strings: item.strings, wallpaper: item.wallpaper, fontSize: item.fontSize, chatBubbleCorners: item.chatBubbleCorners, dateTimeFormat: item.dateTimeFormat, nameOrder: item.nameDisplayOrder, forcedResourceStatus: nil, tapMessage: nil, clickThroughMessage: nil, backgroundNode: currentBackgroundNode, availableReactions: nil, accountPeer: nil, isCentered: false, isPreview: true, isStandalone: false, rank: nil, rankRole: nil, isGiftMessageComposerPreview: false, activateGiftMessageInput: nil)
             
             var node: ListViewItemNode?
             if let current = currentNode {
                 node = current
-                messageItem.updateNode(async: { $0() }, node: { return current }, params: params, previousItem: nil, nextItem: nil, animation: .None, completion: { (layout, apply) in
+                messageItem.updateNode(async: { $0() }, node: { return current }, params: params, neighbors: .none, animation: .None, completion: { (layout, apply) in
                     let nodeFrame = CGRect(origin: current.frame.origin, size: CGSize(width: layout.size.width, height: layout.size.height))
                     
                     current.contentSize = layout.contentSize
                     current.insets = layout.insets
                     current.frame = nodeFrame
                     
-                    apply(ListViewItemApply(isOnScreen: true))
+                    apply(ListViewItemApply())
                 })
             } else {
-                messageItem.nodeConfiguredForParams(async: { $0() }, params: params, synchronousLoads: false, previousItem: nil, nextItem: nil, completion: { messageNode, apply in
+                messageItem.nodeConfiguredForParams(async: { $0() }, params: params, synchronousLoads: false, neighbors: .none, completion: { messageNode, apply in
                     node = messageNode
-                    apply().1(ListViewItemApply(isOnScreen: true))
+                    apply().1(ListViewItemApply())
                 })
             }
             
@@ -179,33 +174,20 @@ class ForwardPrivacyChatPreviewItemNode: ListViewItemNode {
             let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
             let layoutSize = layout.size
             
-            var authorNameCenter: CGFloat?
+            let attributedMeasureText = NSAttributedString(string: item.peerName, font: Font.regular(13.0), textColor: .black)
+            let (authorNameLayout, _) = makeTextLayout(TextNodeLayoutArguments(attributedString: attributedMeasureText, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, lineSpacing: 0.0, cutout: nil, insets: UIEdgeInsets()))
             
-            let forwardedString = item.strings.Message_ForwardedMessageShort("").string
-            var fromString: String?
-            if let newlineRange = forwardedString.range(of: "\n") {
-                let from = forwardedString[newlineRange.upperBound...]
-                if !from.isEmpty {
-                    fromString = String(from)
-                }
-            }
-            let authorString = item.peerName
-            
-            if let fromString = fromString {
-                var attributedMeasureText = NSAttributedString(string: fromString, font: Font.regular(13.0), textColor: .black)
-                let (fromTextLayout, _) = makeTextLayout(TextNodeLayoutArguments(attributedString: attributedMeasureText, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, lineSpacing: 0.0, cutout: nil, insets: UIEdgeInsets()))
-                
-                let fromWidth = fromTextLayout.size.width
-                attributedMeasureText = NSAttributedString(string: authorString, font: Font.regular(13.0), textColor: .black)
-                let (authorNameLayout, _) = makeTextLayout(TextNodeLayoutArguments(attributedString: attributedMeasureText, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, lineSpacing: 0.0, cutout: nil, insets: UIEdgeInsets()))
-                
-                let authorNameWidth = authorNameLayout.size.width
-                authorNameCenter = fromWidth + authorNameWidth / 2.0 + 3.0
-            }
+            let authorNameWidth = authorNameLayout.size.width
+            let authorNameCenter = authorNameWidth / 2.0 + 3.0
             
             return (layout, { [weak self] in
                 if let strongSelf = self {
                     strongSelf.item = item
+                    
+                    if let currentBackgroundNode {
+                        currentBackgroundNode.update(wallpaper: item.wallpaper, animated: false)
+                        currentBackgroundNode.updateBubbleTheme(bubbleTheme: item.theme, bubbleCorners: item.chatBubbleCorners)
+                    }
                     
                     strongSelf.containerNode.frame = CGRect(origin: CGPoint(), size: contentSize)
                     
@@ -260,18 +242,33 @@ class ForwardPrivacyChatPreviewItemNode: ListViewItemNode {
                             strongSelf.bottomStripeNode.isHidden = hasCorners
                     }
                     
-                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                     
                     let backgroundFrame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
 
+                    let displayMode: WallpaperDisplayMode
+                    if abs(params.availableHeight - params.width) < 100.0, params.availableHeight > 700.0 {
+                        displayMode = .halfAspectFill
+                    } else {
+                        if backgroundFrame.width > backgroundFrame.height * 4.0 {
+                            if params.availableHeight < 700.0 {
+                                displayMode = .halfAspectFill
+                            } else {
+                                displayMode = .aspectFill
+                            }
+                        } else {
+                            displayMode = .aspectFill
+                        }
+                    }
+                    
                     if let backgroundNode = strongSelf.backgroundNode {
                         backgroundNode.frame = backgroundFrame.insetBy(dx: 0.0, dy: -100.0)
-                        backgroundNode.update(wallpaper: item.wallpaper)
+                        backgroundNode.update(wallpaper: item.wallpaper, animated: false)
                         backgroundNode.updateBubbleTheme(bubbleTheme: item.theme, bubbleCorners: item.chatBubbleCorners)
-                        backgroundNode.updateLayout(size: backgroundNode.bounds.size, transition: .immediate)
+                        backgroundNode.updateLayout(size: backgroundNode.bounds.size, displayMode: displayMode, transition: .immediate)
                     }
 
-                    strongSelf.maskNode.frame = backgroundFrame.insetBy(dx: params.leftInset, dy: 0.0)
+                    strongSelf.maskNode.frame = backgroundFrame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                     strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight))
                     strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: layoutSize.width - bottomStripeInset, height: separatorHeight))
                     
@@ -285,10 +282,8 @@ class ForwardPrivacyChatPreviewItemNode: ListViewItemNode {
                     var sourceRect: CGRect
                     if let messageNode = strongSelf.messageNode as? ChatMessagePreviewItemNode, let forwardInfoNode = messageNode.forwardInfoReferenceNode {
                         sourceRect = forwardInfoNode.convert(forwardInfoNode.bounds, to: strongSelf)
-                        if let authorNameCenter = authorNameCenter {
-                            sourceRect.origin = CGPoint(x: sourceRect.minX + authorNameCenter, y: sourceRect.minY)
-                            sourceRect.size.width = 0.0
-                        }
+                        sourceRect.origin = CGPoint(x: sourceRect.minX + authorNameCenter, y: sourceRect.minY)
+                        sourceRect.size.width = 0.0
                     } else {
                         sourceRect = CGRect(origin: CGPoint(x: layout.size.width / 2.0, y: layout.size.height / 2.0), size: CGSize())
                     }
@@ -302,7 +297,7 @@ class ForwardPrivacyChatPreviewItemNode: ListViewItemNode {
                         arrowOnBottom = false
                     }
                     
-                    let horizontalOrigin: CGFloat = floor(min(max(params.leftInset + 8.0, sourceRect.midX - contentSize.width / 2.0), layout.size.width - contentSize.width - 8.0))
+                    let horizontalOrigin: CGFloat = floor(min(max(params.leftInset + 8.0, sourceRect.midX - contentSize.width / 2.0), layout.size.width - contentSize.width - 8.0 - max(0.0, params.rightInset - params.leftInset)))
                     
                     strongSelf.tooltipContainerNode.frame = CGRect(origin: CGPoint(x: horizontalOrigin, y: verticalOrigin), size: contentSize)
                     strongSelf.tooltipContainerNode.relativeArrowPosition = (sourceRect.midX - horizontalOrigin, arrowOnBottom)
@@ -316,7 +311,7 @@ class ForwardPrivacyChatPreviewItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     

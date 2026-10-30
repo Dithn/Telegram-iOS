@@ -62,10 +62,10 @@ public final class GridMessageSelectionNode: ASDisplayNode {
 
 public final class GridMessageSelectionLayer: CALayer {
     private var selected = false
-    private let checkLayer: CheckLayer
+    public let checkLayer: CheckLayer
 
     public init(theme: CheckNodeTheme) {
-        self.checkLayer = CheckLayer(theme: theme, content: .check)
+        self.checkLayer = CheckLayer(theme: theme, content: .check(isRectangle: false))
 
         super.init()
 

@@ -3,7 +3,6 @@ import UIKit
 import SwiftSignalKit
 import AsyncDisplayKit
 import Display
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import AccountContext
@@ -445,7 +444,7 @@ func tipEditController(sharedContext: SharedAccountContext, account: Account, fo
         controller?.theme = AlertControllerTheme(presentationData: presentationData)
         contentNode?.inputFieldNode.updateTheme(presentationData.theme)
     })
-    controller.dismissed = {
+    controller.dismissed = { _ in
         presentationDataDisposable.dispose()
     }
     dismissImpl = { [weak controller] animated in

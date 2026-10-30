@@ -1,5 +1,4 @@
 import Foundation
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import Display
@@ -8,7 +7,7 @@ import SearchUI
 import TelegramUIPreferences
 
 struct ChatListNodeView {
-    let originalView: ChatListView
+    let originalList: EngineChatList
     let filteredEntries: [ChatListNodeEntry]
     let isLoading: Bool
     let filter: ChatListFilter?
@@ -47,13 +46,13 @@ struct ChatListNodeViewTransition {
     let animateCrossfade: Bool
 }
 
-enum ChatListNodeViewScrollPosition {
-    case index(index: ChatListIndex, position: ListViewScrollPosition, directionHint: ListViewScrollToItemDirectionHint, animated: Bool)
+public enum ChatListNodeViewScrollPosition {
+    case index(index: EngineChatListIndex, position: ListViewScrollPosition, directionHint: ListViewScrollToItemDirectionHint, animated: Bool)
 }
 
-func preparedChatListNodeViewTransition(from fromView: ChatListNodeView?, to toView: ChatListNodeView, reason: ChatListNodeViewTransitionReason, previewing: Bool, disableAnimations: Bool, account: Account, scrollPosition: ChatListNodeViewScrollPosition?, searchMode: Bool) -> Signal<ChatListNodeViewTransition, NoError> {
-    return Signal { subscriber in
-        let (deleteIndices, indicesAndItems, updateIndices) = mergeListsStableWithUpdates(leftList: fromView?.filteredEntries ?? [], rightList: toView.filteredEntries)
+func preparedChatListNodeViewTransition(from fromView: ChatListNodeView?, to toView: ChatListNodeView, reason: ChatListNodeViewTransitionReason, previewing: Bool, disableAnimations: Bool, scrollPosition: ChatListNodeViewScrollPosition?, searchMode: Bool, forceAllUpdated: Bool) -> Signal<ChatListNodeViewTransition, NoError> {
+    return Signal<ChatListNodeViewTransition, NoError> { subscriber in
+        let (deleteIndices, indicesAndItems, updateIndices) = mergeListsStableWithUpdates(leftList: fromView?.filteredEntries ?? [], rightList: toView.filteredEntries, allUpdated: forceAllUpdated)
         
         var adjustedDeleteIndices: [ListViewDeleteItem] = []
         let previousCount: Int
@@ -74,44 +73,40 @@ func preparedChatListNodeViewTransition(from fromView: ChatListNodeView?, to toV
         var scrollToItem: ListViewScrollToItem?
         
         switch reason {
-            case .initial:
-                let _ = options.insert(.LowLatency)
-                let _ = options.insert(.Synchronous)
-            case .interactiveChanges:                
-                for (index, _, _) in indicesAndItems.sorted(by: { $0.0 > $1.0 }) {
-                    let adjustedIndex = updatedCount - 1 - index
-                    if adjustedIndex == maxAnimatedInsertionIndex + 1 {
-                        maxAnimatedInsertionIndex += 1
-                    }
+        case .initial:
+            let _ = options.insert(.LowLatency)
+            let _ = options.insert(.Synchronous)
+        case .interactiveChanges:
+            for (index, _, _) in indicesAndItems.sorted(by: { $0.0 > $1.0 }) {
+                let adjustedIndex = updatedCount - 1 - index
+                if adjustedIndex == maxAnimatedInsertionIndex + 1 {
+                    maxAnimatedInsertionIndex += 1
                 }
+            }
             
-                var minTimestamp: Int32?
-                var maxTimestamp: Int32?
-                for (_, item, _) in indicesAndItems {
-                    if case .PeerEntry = item, case let .index(index) = item.sortIndex, index.pinningIndex == nil {
-                        let timestamp = index.messageIndex.timestamp
-                        
-                        if minTimestamp == nil || timestamp < minTimestamp! {
-                            minTimestamp = timestamp
-                        }
-                        if maxTimestamp == nil || timestamp > maxTimestamp! {
-                            maxTimestamp = timestamp
-                        }
+            var minTimestamp: Int32?
+            var maxTimestamp: Int32?
+            for (_, item, _) in indicesAndItems {
+                if case .PeerEntry = item, case let .index(index) = item.sortIndex, case let .chatList(chatListIndex) = index, chatListIndex.pinningIndex == nil {
+                    let timestamp = chatListIndex.messageIndex.timestamp
+                    
+                    if minTimestamp == nil || timestamp < minTimestamp! {
+                        minTimestamp = timestamp
+                    }
+                    if maxTimestamp == nil || timestamp > maxTimestamp! {
+                        maxTimestamp = timestamp
                     }
                 }
+            }
             
-                if false, let minTimestamp = minTimestamp, let maxTimestamp = maxTimestamp, abs(maxTimestamp - minTimestamp) > 60 * 60 {
-                    let _ = options.insert(.AnimateCrossfade)
-                } else {
-                    let _ = options.insert(.AnimateAlpha)
-                    if !disableAnimations {
-                        let _ = options.insert(.AnimateInsertion)
-                    }
-                }
-            case .reload:
-                break
-            case .holeChanges:
-                break
+            let _ = options.insert(.AnimateAlpha)
+            if !disableAnimations {
+                let _ = options.insert(.AnimateInsertion)
+            }
+        case .reload:
+            break
+        case .holeChanges:
+            break
         }
         
         for (index, entry, previousIndex) in indicesAndItems {
@@ -142,31 +137,33 @@ func preparedChatListNodeViewTransition(from fromView: ChatListNodeView?, to toV
         
         if let scrollPosition = scrollPosition {
             switch scrollPosition {
-                case let .index(scrollIndex, position, directionHint, animated):
-                    var index = toView.filteredEntries.count - 1
-                    for entry in toView.filteredEntries {
-                        if entry.sortIndex >= .index(scrollIndex) {
+            case let .index(scrollIndex, position, directionHint, animated):
+                var index = toView.filteredEntries.count - 1
+                for entry in toView.filteredEntries {
+                    if entry.sortIndex >= .index(.chatList(scrollIndex)) {
+                        scrollToItem = ListViewScrollToItem(index: index, position: position, animated: animated, curve: .Default(duration: nil), directionHint: directionHint)
+                        break
+                    }
+                    index -= 1
+                }
+                
+                if scrollToItem == nil {
+                    var index = 0
+                    for entry in toView.filteredEntries.reversed() {
+                        if entry.sortIndex < .index(.chatList(scrollIndex)) {
                             scrollToItem = ListViewScrollToItem(index: index, position: position, animated: animated, curve: .Default(duration: nil), directionHint: directionHint)
                             break
                         }
-                        index -= 1
+                        index += 1
                     }
-                    
-                    if scrollToItem == nil {
-                        var index = 0
-                        for entry in toView.filteredEntries.reversed() {
-                            if entry.sortIndex < .index(scrollIndex) {
-                                scrollToItem = ListViewScrollToItem(index: index, position: position, animated: animated, curve: .Default(duration: nil), directionHint: directionHint)
-                                break
-                            }
-                            index += 1
-                        }
-                    }
+                }
             }
         }
         
-        var fromEmptyView = false
-        var animateCrossfade = false
+        var fromEmptyView: Bool
+        fromEmptyView = false
+        var animateCrossfade: Bool
+        animateCrossfade = false
         if let fromView = fromView {
             var wasSingleHeader = false
             if fromView.filteredEntries.count == 1, case .HeaderEntry = fromView.filteredEntries[0] {
@@ -188,9 +185,7 @@ func preparedChatListNodeViewTransition(from fromView: ChatListNodeView?, to toV
                 }
             } else if fromView.filteredEntries.isEmpty || fromView.filter != toView.filter {
                 var updateEmpty = true
-                if !fromView.filteredEntries.isEmpty, let fromFilter = fromView.filter, let toFilter = toView.filter, fromFilter.data.includePeers.pinnedPeers != toFilter.data.includePeers.pinnedPeers {
-                    var fromData = fromFilter.data
-                    let toData = toFilter.data
+                if !fromView.filteredEntries.isEmpty, let fromFilter = fromView.filter, let toFilter = toView.filter, case var .filter(_, _, _, fromData) = fromFilter, case let .filter(_, _, _, toData) = toFilter, fromData.includePeers.pinnedPeers != toData.includePeers.pinnedPeers {
                     fromData.includePeers = toData.includePeers
                     if fromData == toData {
                         options.insert(.AnimateInsertion)
@@ -206,6 +201,11 @@ func preparedChatListNodeViewTransition(from fromView: ChatListNodeView?, to toV
             }
         } else {
             fromEmptyView = true
+        }
+        
+        if let fromView = fromView, !fromView.isLoading, toView.isLoading {
+            options.remove(.AnimateInsertion)
+            options.remove(.AnimateAlpha)
         }
         
         var adjustScrollToFirstItem = false

@@ -7,11 +7,15 @@ import TelegramPresentationData
 import TelegramCore
 import AccountContext
 import ContextUI
+import AnimationCache
+import MultiAnimationRenderer
+import TelegramNotices
 
 protocol ChatListSearchPaneNode: ASDisplayNode {
     var isReady: Signal<Bool, NoError> { get }
+    var isCurrent: Bool { get set }
     
-    func update(size: CGSize, sideInset: CGFloat, bottomInset: CGFloat, visibleHeight: CGFloat, presentationData: PresentationData, synchronous: Bool, transition: ContainedViewLayoutTransition)
+    func update(size: CGSize, sideInsets: UIEdgeInsets, topInset: CGFloat, bottomInset: CGFloat, visibleHeight: CGFloat, presentationData: PresentationData, synchronous: Bool, transition: ContainedViewLayoutTransition)
     func scrollToTop() -> Bool
     func cancelPreviewGestures()
     func transitionNodeForGallery(messageId: EngineMessage.Id, media: EngineMedia) -> (ASDisplayNode, CGRect, () -> (UIView?, UIView?))?
@@ -20,6 +24,7 @@ protocol ChatListSearchPaneNode: ASDisplayNode {
     func updateSelectedMessages(animated: Bool)
     func previewViewAndActionAtLocation(_ location: CGPoint) -> (UIView, CGRect, Any)?
     func didBecomeFocused()
+    func removeAds()
     var searchCurrentMessages: [EngineMessage]? { get }
 }
 
@@ -27,32 +32,38 @@ final class ChatListSearchPaneWrapper {
     let key: ChatListSearchPaneKey
     let node: ChatListSearchPaneNode
     var isAnimatingOut: Bool = false
-    private var appliedParams: (CGSize, CGFloat, CGFloat, CGFloat, PresentationData)?
+    private var appliedParams: (CGSize, UIEdgeInsets, CGFloat, CGFloat, CGFloat, PresentationData)?
     
     init(key: ChatListSearchPaneKey, node: ChatListSearchPaneNode) {
         self.key = key
         self.node = node
     }
     
-    func update(size: CGSize, sideInset: CGFloat, bottomInset: CGFloat, visibleHeight: CGFloat, presentationData: PresentationData, synchronous: Bool, transition: ContainedViewLayoutTransition) {
-        if let (currentSize, currentSideInset, currentBottomInset, _, currentPresentationData) = self.appliedParams {
-            if currentSize == size && currentSideInset == sideInset && currentBottomInset == bottomInset && currentPresentationData === presentationData {
+    func update(size: CGSize, sideInsets: UIEdgeInsets, topInset: CGFloat, bottomInset: CGFloat, visibleHeight: CGFloat, presentationData: PresentationData, synchronous: Bool, transition: ContainedViewLayoutTransition) {
+        if let (currentSize, currentSideInsets, currentTopInset, currentBottomInset, _, currentPresentationData) = self.appliedParams {
+            if currentSize == size && currentSideInsets == sideInsets && currentTopInset == topInset && currentBottomInset == bottomInset && currentPresentationData === presentationData {
                 return
             }
         }
-        self.appliedParams = (size, sideInset, bottomInset, visibleHeight, presentationData)
-        self.node.update(size: size, sideInset: sideInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, synchronous: synchronous, transition: transition)
+        self.appliedParams = (size, sideInsets, topInset, bottomInset, visibleHeight, presentationData)
+        self.node.update(size: size, sideInsets: sideInsets, topInset: topInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, synchronous: synchronous, transition: transition)
     }
 }
 
 public enum ChatListSearchPaneKey {
     case chats
+    case topics
+    case publicPosts
+    case channels
+    case apps
+    case globalPosts
     case media
     case downloads
     case links
     case files
     case music
     case voice
+    case instantVideo
 }
 
 extension ChatListSearchPaneKey {
@@ -60,6 +71,16 @@ extension ChatListSearchPaneKey {
         switch self {
         case .chats:
             return .chats
+        case .topics:
+            return .topics
+        case .publicPosts:
+            return .publicPosts
+        case .channels:
+            return .channels
+        case .apps:
+            return .apps
+        case .globalPosts:
+            return .globalPosts
         case .media:
             return .media
         case .downloads:
@@ -72,13 +93,29 @@ extension ChatListSearchPaneKey {
             return .music
         case .voice:
             return .voice
+        case .instantVideo:
+            return .instantVideo
         }
     }
 }
 
-func defaultAvailableSearchPanes(hasDownloads: Bool) -> [ChatListSearchPaneKey] {
-    var result: [ChatListSearchPaneKey] = [.chats, .media, .downloads, .links, .files, .music, .voice]
-    
+func defaultAvailableSearchPanes(isForum: Bool, hasDownloads: Bool, hasPublicPosts: Bool) -> [ChatListSearchPaneKey] {
+    var result: [ChatListSearchPaneKey] = []
+    if isForum {
+        result.append(.topics)
+    } else {
+        result.append(.chats)
+    }
+    if hasPublicPosts {
+        result.append(.publicPosts)
+    }
+    result.append(.channels)
+    result.append(.apps)
+    if !isForum {
+        result.append(.globalPosts)
+    }
+    result.append(contentsOf: [.media, .downloads, .links, .files, .music, .voice])
+        
     if !hasDownloads {
         result.removeAll(where: { $0 == .downloads })
     }
@@ -102,25 +139,32 @@ private final class ChatListSearchPendingPane {
     
     init(
         context: AccountContext,
+        animationCache: AnimationCache,
+        animationRenderer: MultiAnimationRenderer,
         updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)?,
         interaction: ChatListSearchInteraction,
         navigationController: NavigationController?,
+        parentController: ViewController?,
         peersFilter: ChatListNodePeersFilter,
-        groupId: EngineChatList.Group,
+        requestPeerType: [ReplyMarkupButtonRequestPeerType]?,
+        excludedPeerIds: Set<EnginePeer.Id>,
+        location: ChatListControllerLocation,
+        communityId: EnginePeer.Id?,
         searchQuery: Signal<String?, NoError>,
         searchOptions: Signal<ChatListSearchOptions?, NoError>,
+        globalPeerSearchContext: GlobalPeerSearchContext?,
         key: ChatListSearchPaneKey,
         hasBecomeReady: @escaping (ChatListSearchPaneKey) -> Void
     ) {
-        let paneNode = ChatListSearchListPaneNode(context: context, updatedPresentationData: updatedPresentationData, interaction: interaction, key: key, peersFilter: key == .chats ? peersFilter : [], groupId: groupId, searchQuery: searchQuery, searchOptions: searchOptions, navigationController: navigationController)
+        let paneNode = ChatListSearchListPaneNode(context: context, animationCache: animationCache, animationRenderer: animationRenderer, updatedPresentationData: updatedPresentationData, interaction: interaction, key: key, peersFilter: (key == .chats || key == .topics) ? peersFilter : [], requestPeerType: requestPeerType, excludedPeerIds: excludedPeerIds, location: location, communityId: communityId, searchQuery: searchQuery, searchOptions: searchOptions, navigationController: navigationController, parentController: parentController, globalPeerSearchContext: globalPeerSearchContext)
         
         self.pane = ChatListSearchPaneWrapper(key: key, node: paneNode)
         self.disposable = (paneNode.isReady
         |> take(1)
-        |> deliverOnMainQueue).start(next: { [weak self] _ in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] _ in
             self?.isReady = true
             hasBecomeReady(key)
-        })
+        }).strict()
     }
     
     deinit {
@@ -128,14 +172,21 @@ private final class ChatListSearchPendingPane {
     }
 }
 
-final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
+final class ChatListSearchPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegate {
     private let context: AccountContext
+    private let animationCache: AnimationCache
+    private let animationRenderer: MultiAnimationRenderer
     private let updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)?
     private let peersFilter: ChatListNodePeersFilter
-    private let groupId: EngineChatList.Group
+    private let requestPeerType: [ReplyMarkupButtonRequestPeerType]?
+    private let excludedPeerIds: Set<EnginePeer.Id>
+    var location: ChatListControllerLocation
+    private let communityId: EnginePeer.Id?
     private let searchQuery: Signal<String?, NoError>
     private let searchOptions: Signal<ChatListSearchOptions?, NoError>
+    private let globalPeerSearchContext: GlobalPeerSearchContext
     private let navigationController: NavigationController?
+    private weak var parentController: ViewController?
     var interaction: ChatListSearchInteraction?
         
     let isReady = Promise<Bool>()
@@ -143,7 +194,7 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
     
     var isAdjacentLoadingEnabled = false
     
-    private var currentParams: (size: CGSize, sideInset: CGFloat, bottomInset: CGFloat, visibleHeight: CGFloat, presentationData: PresentationData, [ChatListSearchPaneKey])?
+    private var currentParams: (size: CGSize, sideInsets: UIEdgeInsets, topInset: CGFloat, bottomInset: CGFloat, visibleHeight: CGFloat, presentationData: PresentationData, [ChatListSearchPaneKey])?
     
     private(set) var currentPaneKey: ChatListSearchPaneKey?
     var pendingSwitchToPaneKey: ChatListSearchPaneKey?
@@ -163,18 +214,26 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
             
     var currentPaneUpdated: ((ChatListSearchPaneKey?, CGFloat, ContainedViewLayoutTransition) -> Void)?
     var requestExpandTabs: (() -> Bool)?
+    var requesDismissInput: (() -> Void)?
     
     private var currentAvailablePanes: [ChatListSearchPaneKey]?
     
-    init(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, peersFilter: ChatListNodePeersFilter, groupId: EngineChatList.Group, searchQuery: Signal<String?, NoError>, searchOptions: Signal<ChatListSearchOptions?, NoError>, navigationController: NavigationController?) {
+    init(context: AccountContext, animationCache: AnimationCache, animationRenderer: MultiAnimationRenderer, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, peersFilter: ChatListNodePeersFilter, requestPeerType: [ReplyMarkupButtonRequestPeerType]?, excludedPeerIds: Set<EnginePeer.Id>, location: ChatListControllerLocation, communityId: EnginePeer.Id? = nil, searchQuery: Signal<String?, NoError>, searchOptions: Signal<ChatListSearchOptions?, NoError>, navigationController: NavigationController?, parentController: ViewController?) {
         self.context = context
+        self.animationCache = animationCache
+        self.animationRenderer = animationRenderer
         self.updatedPresentationData = updatedPresentationData
         self.peersFilter = peersFilter
-        self.groupId = groupId
+        self.requestPeerType = requestPeerType
+        self.excludedPeerIds = excludedPeerIds
+        self.location = location
+        self.communityId = communityId
         self.searchQuery = searchQuery
         self.searchOptions = searchOptions
         self.navigationController = navigationController
-        
+        self.parentController = parentController
+        self.globalPeerSearchContext = GlobalPeerSearchContext()
+                
         super.init()
     }
     
@@ -186,18 +245,34 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
             }
             return
         }
+        
+        if key == .globalPosts {
+            let _ = ApplicationSpecificNotice.incrementGlobalPostsSearch(accountManager: self.context.sharedContext.accountManager).startStandalone()
+        }
+        
+        #if DEBUG
+        #else
         self.isAdjacentLoadingEnabled = true
+        #endif
         if self.currentPanes[key] != nil {
             self.currentPaneKey = key
 
-            if let (size, sideInset, bottomInset, visibleHeight, presentationData, availablePanes) = self.currentParams {
-                self.update(size: size, sideInset: sideInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, availablePanes: availablePanes, transition: .animated(duration: 0.4, curve: .spring))
+            if let (size, sideInsets, topInset, bottomInset, visibleHeight, presentationData, availablePanes) = self.currentParams {
+                self.update(size: size, sideInsets: sideInsets, topInset: topInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, availablePanes: availablePanes, transition: .animated(duration: 0.4, curve: .spring))
+            }
+            
+            if case .apps = key {
+                self.requesDismissInput?()
             }
         } else if self.pendingSwitchToPaneKey != key {
             self.pendingSwitchToPaneKey = key
 
-            if let (size, sideInset, bottomInset, visibleHeight, presentationData, availablePanes) = self.currentParams {
-                self.update(size: size, sideInset: sideInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, availablePanes: availablePanes, transition: .animated(duration: 0.4, curve: .spring))
+            if let (size, sideInsets, topInset, bottomInset, visibleHeight, presentationData, availablePanes) = self.currentParams {
+                self.update(size: size, sideInsets: sideInsets, topInset: topInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, availablePanes: availablePanes, transition: .animated(duration: 0.4, curve: .spring))
+            }
+            
+            if case .apps = key {
+                self.requesDismissInput?()
             }
         }
     }
@@ -206,7 +281,7 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
         super.didLoad()
         
         let panRecognizer = InteractiveTransitionGestureRecognizer(target: self, action: #selector(self.panGesture(_:)), allowedDirections: { [weak self] point in
-            guard let strongSelf = self, let (_, _, _, _, _, availablePanes) = strongSelf.currentParams, let currentPaneKey = strongSelf.currentPaneKey, let index = availablePanes.firstIndex(of: currentPaneKey) else {
+            guard let strongSelf = self, let (_, _, _, _, _, _, availablePanes) = strongSelf.currentParams, let currentPaneKey = strongSelf.currentPaneKey, let index = availablePanes.firstIndex(of: currentPaneKey) else {
                 return []
             }
             if index == 0 {
@@ -214,7 +289,7 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
             }
             return [.left, .right]
         })
-        panRecognizer.delegate = self
+        panRecognizer.delegate = self.wrappedGestureRecognizerDelegate
         panRecognizer.delaysTouchesBegan = false
         panRecognizer.cancelsTouchesInView = true
         self.view.addGestureRecognizer(panRecognizer)
@@ -252,7 +327,7 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
             
             cancelContextGestures(view: self.view)
         case .changed:
-            if let (size, sideInset, bottomInset, visibleHeight, presentationData, availablePanes) = self.currentParams, let currentPaneKey = self.currentPaneKey, let currentIndex = availablePanes.firstIndex(of: currentPaneKey) {
+            if let (size, sideInsets, topInset, bottomInset, visibleHeight, presentationData, availablePanes) = self.currentParams, let currentPaneKey = self.currentPaneKey, let currentIndex = availablePanes.firstIndex(of: currentPaneKey) {
                 self.isAdjacentLoadingEnabled = true
                 let translation = recognizer.translation(in: self.view)
                 var transitionFraction = translation.x / size.width
@@ -263,10 +338,10 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
                     transitionFraction = max(0.0, transitionFraction)
                 }
                 self.transitionFraction = transitionFraction
-                self.update(size: size, sideInset: sideInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, availablePanes: availablePanes, transition: .immediate)
+                self.update(size: size, sideInsets: sideInsets, topInset: topInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, availablePanes: availablePanes, transition: .immediate)
             }
         case .cancelled, .ended:
-            if let (size, sideInset, bottomInset, visibleHeight, presentationData, availablePanes) = self.currentParams, let currentPaneKey = self.currentPaneKey, let currentIndex = availablePanes.firstIndex(of: currentPaneKey) {
+            if let (size, sideInsets, topInset, bottomInset, visibleHeight, presentationData, availablePanes) = self.currentParams, let currentPaneKey = self.currentPaneKey, let currentIndex = availablePanes.firstIndex(of: currentPaneKey) {
                 let translation = recognizer.translation(in: self.view)
                 let velocity = recognizer.velocity(in: self.view)
                 var directionIsToRight: Bool?
@@ -288,10 +363,14 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
                     let switchToKey = availablePanes[updatedIndex]
                     if switchToKey != self.currentPaneKey && self.currentPanes[switchToKey] != nil{
                         self.currentPaneKey = switchToKey
+                        
+                        if case .apps = switchToKey {
+                            self.requesDismissInput?()
+                        }
                     }
                 }
                 self.transitionFraction = 0.0
-                self.update(size: size, sideInset: sideInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, availablePanes: availablePanes, transition: .animated(duration: 0.35, curve: .spring))
+                self.update(size: size, sideInsets: sideInsets, topInset: topInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, availablePanes: availablePanes, transition: .animated(duration: 0.35, curve: .spring))
             }
         default:
             break
@@ -322,8 +401,8 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
             pane.pane.node.updateSelectedMessages(animated: animated)
         }
     }
-    
-    func update(size: CGSize, sideInset: CGFloat, bottomInset: CGFloat, visibleHeight: CGFloat, presentationData: PresentationData, availablePanes: [ChatListSearchPaneKey], transition: ContainedViewLayoutTransition) {
+        
+    func update(size: CGSize, sideInsets: UIEdgeInsets, topInset: CGFloat, bottomInset: CGFloat, visibleHeight: CGFloat, presentationData: PresentationData, availablePanes: [ChatListSearchPaneKey], transition: ContainedViewLayoutTransition) {
         let previousAvailablePanes = self.currentAvailablePanes ?? []
         self.currentAvailablePanes = availablePanes
                 
@@ -357,10 +436,14 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
             currentIndex = nil
         }
         
-        self.currentParams = (size, sideInset, bottomInset, visibleHeight, presentationData, availablePanes)
+        self.currentParams = (size, sideInsets, topInset, bottomInset, visibleHeight, presentationData, availablePanes)
                 
-        self.backgroundColor = presentationData.theme.list.itemBlocksBackgroundColor
-        
+        switch self.location {
+        case .forum, .savedMessagesChats:
+            self.backgroundColor = .clear
+        default:
+            self.backgroundColor = presentationData.theme.list.itemBlocksBackgroundColor
+        }
         let paneFrame = CGRect(origin: CGPoint(), size: CGSize(width: size.width, height: size.height))
         
         var visiblePaneIndices: [Int] = []
@@ -394,25 +477,32 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
                 var leftScope = false
                 let pane = ChatListSearchPendingPane(
                     context: self.context,
+                    animationCache: self.animationCache,
+                    animationRenderer: self.animationRenderer,
                     updatedPresentationData: self.updatedPresentationData,
                     interaction: self.interaction!,
                     navigationController: self.navigationController,
+                    parentController: self.parentController,
                     peersFilter: self.peersFilter,
-                    groupId: self.groupId,
+                    requestPeerType: self.requestPeerType,
+                    excludedPeerIds: self.excludedPeerIds,
+                    location: self.location,
+                    communityId: self.communityId,
                     searchQuery: self.searchQuery,
                     searchOptions: self.searchOptions,
+                    globalPeerSearchContext: self.globalPeerSearchContext,
                     key: key,
                     hasBecomeReady: { [weak self] key in
                         let apply: () -> Void = {
                             guard let strongSelf = self else {
                                 return
                             }
-                            if let (size, sideInset, bottomInset, visibleHeight, presentationData, availablePanes) = strongSelf.currentParams {
+                            if let (size, sideInsets, topInset, bottomInset, visibleHeight, presentationData, availablePanes) = strongSelf.currentParams {
                                 var transition: ContainedViewLayoutTransition = .immediate
                                 if strongSelf.pendingSwitchToPaneKey == key && strongSelf.currentPaneKey != nil {
                                     transition = .animated(duration: 0.4, curve: .spring)
                                 }
-                                strongSelf.update(size: size, sideInset: sideInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, availablePanes: availablePanes, transition: transition)
+                                strongSelf.update(size: size, sideInsets: sideInsets, topInset: topInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, availablePanes: availablePanes, transition: transition)
                             }
                         }
                         if leftScope {
@@ -422,14 +512,14 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
                 )
                 self.pendingPanes[key] = pane
                 pane.pane.node.frame = paneFrame
-                pane.pane.update(size: paneFrame.size, sideInset: sideInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, synchronous: true, transition: .immediate)
+                pane.pane.update(size: paneFrame.size, sideInsets: sideInsets, topInset: topInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, synchronous: true, transition: .immediate)
                 leftScope = true
             }
         }
                 
         for (key, pane) in self.pendingPanes {
             pane.pane.node.frame = paneFrame
-            pane.pane.update(size: paneFrame.size, sideInset: sideInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, synchronous: self.currentPaneKey == nil, transition: .immediate)
+            pane.pane.update(size: paneFrame.size, sideInsets: sideInsets, topInset: topInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, synchronous: self.currentPaneKey == nil, transition: .immediate)
             
             if pane.isReady {
                 self.pendingPanes.removeValue(forKey: key)
@@ -505,7 +595,8 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
                         paneCompletion()
                     })
                 }
-                pane.update(size: paneFrame.size, sideInset: sideInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, synchronous: paneWasAdded, transition: paneTransition)
+                pane.update(size: paneFrame.size, sideInsets: sideInsets, topInset: topInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, synchronous: paneWasAdded, transition: paneTransition)
+                pane.node.isCurrent = key == self.currentPaneKey
                 if paneWasAdded && key == self.currentPaneKey {
                     pane.node.didBecomeFocused()
                 }
@@ -515,7 +606,7 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, UIGestureRecognizerD
         for (_, pane) in self.pendingPanes {
             let paneTransition: ContainedViewLayoutTransition = .immediate
             paneTransition.updateFrame(node: pane.pane.node, frame: paneFrame)
-            pane.pane.update(size: paneFrame.size, sideInset: sideInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, synchronous: true, transition: paneTransition)
+            pane.pane.update(size: paneFrame.size, sideInsets: sideInsets, topInset: topInset, bottomInset: bottomInset, visibleHeight: visibleHeight, presentationData: presentationData, synchronous: true, transition: paneTransition)
         }
         if !self.didSetIsReady {
             if let currentPaneKey = self.currentPaneKey, let currentPane = self.currentPanes[currentPaneKey] {

@@ -11,12 +11,24 @@ enum RootNavigationLayout {
 struct ModalContainerLayout {
     var controllers: [ViewController]
     var isFlat: Bool
+    var flatReceivesModalTransition: Bool
     var isStandalone: Bool
 }
 
 struct NavigationLayout {
     var root: RootNavigationLayout
     var modal: [ModalContainerLayout]
+}
+
+/// Whether a `.modalInLargeLayout` controller opens as a sheet: only in a regular-width layout whose
+/// shorter side is at least 700pt. A smaller regular layout (iPhone Duo unfolded in landscape is 669pt
+/// tall) pushes it as a compact one does, since a phone-sized sheet on a short screen is cramped. The
+/// smallest iPad (744pt) keeps the sheet.
+func presentsModalInLargeLayout(_ layout: ContainerViewLayout) -> Bool {
+    guard case .regular = layout.metrics.widthClass else {
+        return false
+    }
+    return min(layout.size.width, layout.size.height) >= 700.0
 }
 
 func makeNavigationLayout(mode: NavigationControllerMode, layout: ContainerViewLayout, controllers: [ViewController]) -> NavigationLayout {
@@ -26,6 +38,7 @@ func makeNavigationLayout(mode: NavigationControllerMode, layout: ContainerViewL
         let requiresModal: Bool
         var beginsModal: Bool = false
         var isFlat: Bool = false
+        var flatReceivesModalTransition: Bool = false
         var isStandalone: Bool = false
         switch controller.navigationPresentation {
         case .default:
@@ -39,29 +52,42 @@ func makeNavigationLayout(mode: NavigationControllerMode, layout: ContainerViewL
             requiresModal = true
             beginsModal = true
             isFlat = true
+            flatReceivesModalTransition = controller.flatReceivesModalTransition
         case .standaloneModal:
             requiresModal = true
             beginsModal = true
             isStandalone = true
+        case .standaloneFlatModal:
+            requiresModal = true
+            beginsModal = true
+            isStandalone = true
+            isFlat = true
         case .modalInLargeLayout:
+            requiresModal = presentsModalInLargeLayout(layout)
+        case .modalInCompactLayout:
             switch layout.metrics.widthClass {
             case .compact:
-                requiresModal = false
+                requiresModal = true
             case .regular:
                 requiresModal = true
+                beginsModal = true
+                isFlat = true
             }
         }
         if requiresModal {
             controller._presentedInModal = true
             if beginsModal || modalStack.isEmpty || modalStack[modalStack.count - 1].isStandalone {
-                modalStack.append(ModalContainerLayout(controllers: [controller], isFlat: isFlat, isStandalone: isStandalone))
+                modalStack.append(ModalContainerLayout(controllers: [controller], isFlat: isFlat, flatReceivesModalTransition: flatReceivesModalTransition, isStandalone: isStandalone))
             } else {
                 modalStack[modalStack.count - 1].controllers.append(controller)
             }
         } else if !modalStack.isEmpty {
-            controller._presentedInModal = true
+            if modalStack[modalStack.count - 1].isFlat {
+            } else {
+                controller._presentedInModal = true
+            }
             if modalStack[modalStack.count - 1].isStandalone {
-                modalStack.append(ModalContainerLayout(controllers: [controller], isFlat: isFlat, isStandalone: isStandalone))
+                modalStack.append(ModalContainerLayout(controllers: [controller], isFlat: isFlat, flatReceivesModalTransition: flatReceivesModalTransition, isStandalone: isStandalone))
             } else {
                 modalStack[modalStack.count - 1].controllers.append(controller)
             }
@@ -70,6 +96,7 @@ func makeNavigationLayout(mode: NavigationControllerMode, layout: ContainerViewL
             rootControllers.append(controller)
         }
     }
+    
     let rootLayout: RootNavigationLayout
     switch mode {
     case .single:

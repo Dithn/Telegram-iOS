@@ -1,5 +1,6 @@
 import Foundation
 import SwiftSignalKit
+import UIKit
 import AsyncDisplayKit
 
 public enum AnimationRendererFrameType {
@@ -49,7 +50,9 @@ final class AnimationRendererPool {
 }
 
 protocol AnimationRenderer: ASDisplayNode {
-    func render(queue: Queue, width: Int, height: Int, bytesPerRow: Int, data: Data, type: AnimationRendererFrameType, mulAlpha: Bool, completion: @escaping () -> Void)
+    var currentFrameImage: UIImage? { get }
+    
+    func render(queue: Queue, width: Int, height: Int, bytesPerRow: Int, data: Data, type: AnimationRendererFrameType, mulAlpha: Bool, completion: @escaping () -> Void, averageColor: ((UIColor) -> Void)?)
     
     func setOverlayColor(_ color: UIColor?, replace: Bool, animated: Bool)
 }

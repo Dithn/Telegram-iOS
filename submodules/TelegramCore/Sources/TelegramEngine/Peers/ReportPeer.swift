@@ -1,15 +1,15 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 
-func _internal_reportPeer(account: Account, peerId: PeerId) -> Signal<Void, NoError> {
+func _internal_reportPeer(account: Account, peerId: PeerId, sourceMessageId: MessageId? = nil) -> Signal<Void, NoError> {
     return account.postbox.transaction { transaction -> Signal<Void, NoError> in
         if let peer = transaction.getPeer(peerId) {
             if let peer = peer as? TelegramSecretChat {
-                return account.network.request(Api.functions.messages.reportEncryptedSpam(peer: Api.InputEncryptedChat.inputEncryptedChat(chatId: Int32(peer.id.id._internalGetInt64Value()), accessHash: peer.accessHash)))
+                return account.network.request(Api.functions.messages.reportEncryptedSpam(peer: Api.InputEncryptedChat.inputEncryptedChat(.init(chatId: Int32(peer.id.id._internalGetInt64Value()), accessHash: peer.accessHash))))
                 |> map(Optional.init)
                 |> `catch` { _ -> Signal<Api.Bool?, NoError> in
                     return .single(nil)
@@ -37,7 +37,7 @@ func _internal_reportPeer(account: Account, peerId: PeerId) -> Signal<Void, NoEr
                         }
                     }
                 }
-            } else if let inputPeer = apiInputPeer(peer) {
+            } else if let inputPeer = apiInputPeer(peer, sourceMessageId: sourceMessageId, transaction: transaction) {
                 return account.network.request(Api.functions.messages.reportSpam(peer: inputPeer))
                 |> map(Optional.init)
                 |> `catch` { _ -> Signal<Api.Bool?, NoError> in
@@ -115,9 +115,9 @@ private extension ReportReason {
     }
 }
 
-func _internal_reportPeer(account: Account, peerId: PeerId, reason: ReportReason, message: String) -> Signal<Void, NoError> {
+func _internal_reportPeer(account: Account, peerId: PeerId, reason: ReportReason, message: String, sourceMessageId: MessageId? = nil) -> Signal<Void, NoError> {
     return account.postbox.transaction { transaction -> Signal<Void, NoError> in
-        if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
+        if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer, sourceMessageId: sourceMessageId, transaction: transaction) {
             return account.network.request(Api.functions.account.reportPeer(peer: inputPeer, reason: reason.apiReason, message: message))
             |> `catch` { _ -> Signal<Api.Bool, NoError> in
                 return .single(.boolFalse)
@@ -131,9 +131,9 @@ func _internal_reportPeer(account: Account, peerId: PeerId, reason: ReportReason
     } |> switchToLatest
 }
 
-func _internal_reportPeerPhoto(account: Account, peerId: PeerId, reason: ReportReason, message: String) -> Signal<Void, NoError> {
+func _internal_reportPeerPhoto(account: Account, peerId: PeerId, reason: ReportReason, message: String, sourceMessageId: MessageId? = nil) -> Signal<Void, NoError> {
     return account.postbox.transaction { transaction -> Signal<Void, NoError> in
-        if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
+        if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer, sourceMessageId: sourceMessageId, transaction: transaction) {
             return account.network.request(Api.functions.account.reportProfilePhoto(peer: inputPeer, photoId: .inputPhotoEmpty, reason: reason.apiReason, message: message))
             |> `catch` { _ -> Signal<Api.Bool, NoError> in
                 return .single(.boolFalse)
@@ -148,26 +148,66 @@ func _internal_reportPeerPhoto(account: Account, peerId: PeerId, reason: ReportR
 }
 
 func _internal_reportPeerMessages(account: Account, messageIds: [MessageId], reason: ReportReason, message: String) -> Signal<Void, NoError> {
-    return account.postbox.transaction { transaction -> Signal<Void, NoError> in
-        let groupedIds = messagesIdsGroupedByPeerId(messageIds)
-        let signals = groupedIds.values.compactMap { ids -> Signal<Void, NoError>? in
-            guard let peerId = ids.first?.peerId, let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) else {
-                return nil
-            }
-            return account.network.request(Api.functions.messages.report(peer: inputPeer, id: ids.map { $0.id }, reason: reason.apiReason, message: message))
-            |> `catch` { _ -> Signal<Api.Bool, NoError> in
-                return .single(.boolFalse)
-            }
-            |> mapToSignal { _ -> Signal<Void, NoError> in
-                return .complete()
-            }
+    return .complete()
+//    return account.postbox.transaction { transaction -> Signal<Void, NoError> in
+//        let groupedIds = messagesIdsGroupedByPeerId(messageIds)
+//        let signals = groupedIds.values.compactMap { ids -> Signal<Void, NoError>? in
+//            guard let peerId = ids.first?.peerId, let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) else {
+//                return nil
+//            }
+//            return account.network.request(Api.functions.messages.report(peer: inputPeer, id: ids.map { $0.id }, reason: reason.apiReason, message: message))
+//            |> `catch` { _ -> Signal<Api.Bool, NoError> in
+//                return .single(.boolFalse)
+//            }
+//            |> mapToSignal { _ -> Signal<Void, NoError> in
+//                return .complete()
+//            }
+//        }
+//        
+//        return combineLatest(signals)
+//        |> mapToSignal { _ -> Signal<Void, NoError> in
+//            return .complete()
+//        }
+//    } |> switchToLatest
+}
+
+func _internal_reportPeerStory(account: Account, peerId: PeerId, storyId: Int32, reason: ReportReason, message: String) -> Signal<Void, NoError> {
+    return .complete()
+//    return account.postbox.transaction { transaction -> Signal<Void, NoError> in
+//        if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
+//            return account.network.request(Api.functions.stories.report(peer: inputPeer, id: [storyId], reason: reason.apiReason, message: message))
+//            |> `catch` { _ -> Signal<Api.Bool, NoError> in
+//                return .single(.boolFalse)
+//            }
+//            |> mapToSignal { _ -> Signal<Void, NoError> in
+//                return .complete()
+//            }
+//        } else {
+//            return .complete()
+//        }
+//    } |> switchToLatest
+}
+
+func _internal_reportPeerReaction(account: Account, authorId: PeerId, messageId: MessageId) -> Signal<Never, NoError> {
+    return account.postbox.transaction { transaction -> (Api.InputPeer, Api.InputPeer)? in
+        guard let peer = transaction.getPeer(messageId.peerId).flatMap(apiInputPeer) else {
+            return nil
         }
-        
-        return combineLatest(signals)
-        |> mapToSignal { _ -> Signal<Void, NoError> in
+        guard let authorPeer = transaction.getPeer(authorId), let author = apiInputPeer(authorPeer, sourceMessageId: messageId, transaction: transaction) else {
+            return nil
+        }
+        return (peer, author)
+    }
+    |> mapToSignal { inputData -> Signal<Never, NoError> in
+        guard let (inputPeer, authorPeer) = inputData else {
             return .complete()
         }
-    } |> switchToLatest
+        return account.network.request(Api.functions.messages.reportReaction(peer: inputPeer, id: messageId.id, reactionPeer: authorPeer))
+        |> `catch` { _ -> Signal<Api.Bool, NoError> in
+            return .single(.boolFalse)
+        }
+        |> ignoreValues
+    }
 }
 
 func _internal_dismissPeerStatusOptions(account: Account, peerId: PeerId) -> Signal<Void, NoError> {
@@ -176,7 +216,7 @@ func _internal_dismissPeerStatusOptions(account: Account, peerId: PeerId) -> Sig
             if let current = current as? CachedUserData {
                 var peerStatusSettings = current.peerStatusSettings ?? PeerStatusSettings()
                 peerStatusSettings.flags = []
-                return current.withUpdatedPeerStatusSettings(PeerStatusSettings(flags: []))
+                return current.withUpdatedPeerStatusSettings(peerStatusSettings)
             } else if let current = current as? CachedGroupData {
                 var peerStatusSettings = current.peerStatusSettings ?? PeerStatusSettings()
                 peerStatusSettings.flags = []

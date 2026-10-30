@@ -1,11 +1,11 @@
 #import <MtProtoKit/MTDisposable.h>
 
-#import <libkern/OSAtomic.h>
+#import <pthread/pthread.h>
 #import <objc/runtime.h>
 
-@interface MTBlockDisposable ()
-{
-    void *_block;
+@interface MTBlockDisposable () {
+    void (^_action)();
+    pthread_mutex_t _lock;
 }
 
 @end
@@ -17,41 +17,35 @@
     self = [super init];
     if (self != nil)
     {
-        _block = (__bridge_retained void *)[block copy];
+        _action = [block copy];
+        pthread_mutex_init(&_lock, nil);
     }
     return self;
 }
 
-- (void)dealloc
-{
-    void *block = _block;
-    if (block != NULL)
-    {
-        if (OSAtomicCompareAndSwapPtr(block, 0, &_block))
-        {
-            if (block != nil)
-            {
-                __unused __strong id strongBlock = (__bridge_transfer id)block;
-                strongBlock = nil;
-            }
-        }
+- (void)dealloc {
+    void (^freeAction)() = nil;
+    pthread_mutex_lock(&_lock);
+    freeAction = _action;
+    _action = nil;
+    pthread_mutex_unlock(&_lock);
+    
+    if (freeAction) {
     }
+    
+    pthread_mutex_destroy(&_lock);
 }
 
-- (void)dispose
-{
-    void *block = _block;
-    if (block != NULL)
-    {
-        if (OSAtomicCompareAndSwapPtr(block, 0, &_block))
-        {
-            if (block != nil)
-            {
-                __strong id strongBlock = (__bridge_transfer id)block;
-                ((dispatch_block_t)strongBlock)();
-                strongBlock = nil;
-            }
-        }
+- (void)dispose {
+    void (^disposeAction)() = nil;
+    
+    pthread_mutex_lock(&_lock);
+    disposeAction = _action;
+    _action = nil;
+    pthread_mutex_unlock(&_lock);
+    
+    if (disposeAction) {
+        disposeAction();
     }
 }
 
@@ -59,7 +53,7 @@
 
 @interface MTMetaDisposable ()
 {
-    OSSpinLock _lock;
+    pthread_mutex_t _lock;
     bool _disposed;
     id<MTDisposable> _disposable;
 }
@@ -68,128 +62,139 @@
 
 @implementation MTMetaDisposable
 
-- (void)setDisposable:(id<MTDisposable>)disposable
-{
-    id<MTDisposable> previousDisposable = nil;
-    bool dispose = false;
+- (instancetype)init {
+    self = [super init];
+    if (self != nil) {
+        pthread_mutex_init(&_lock, nil);
+    }
+    return self;
+}
+
+- (void)dealloc {
+    id<MTDisposable> freeDisposable = nil;
+    pthread_mutex_lock(&_lock);
+    if (_disposable) {
+        freeDisposable = _disposable;
+        _disposable = nil;
+    }
+    pthread_mutex_unlock(&_lock);
     
-    OSSpinLockLock(&_lock);
-    dispose = _disposed;
-    if (!dispose)
-    {
+    if (freeDisposable) {
+    }
+    
+    pthread_mutex_destroy(&_lock);
+}
+
+- (void)setDisposable:(id<MTDisposable>)disposable {
+    id<MTDisposable> previousDisposable = nil;
+    bool disposeImmediately = false;
+    
+    pthread_mutex_lock(&_lock);
+    disposeImmediately = _disposed;
+    if (!disposeImmediately) {
         previousDisposable = _disposable;
         _disposable = disposable;
     }
-    OSSpinLockUnlock(&_lock);
+    pthread_mutex_unlock(&_lock);
     
-    if (previousDisposable != nil)
+    if (previousDisposable) {
         [previousDisposable dispose];
+    }
     
-    if (dispose)
+    if (disposeImmediately) {
         [disposable dispose];
+    }
 }
 
-- (void)dispose
-{
+- (void)dispose {
     id<MTDisposable> disposable = nil;
     
-    OSSpinLockLock(&_lock);
-    if (!_disposed)
-    {
-        disposable = _disposable;
+    pthread_mutex_lock(&_lock);
+    if (!_disposed) {
         _disposed = true;
+        disposable = _disposable;
+        _disposable = nil;
     }
-    OSSpinLockUnlock(&_lock);
+    pthread_mutex_unlock(&_lock);
     
-    if (disposable != nil)
+    if (disposable) {
         [disposable dispose];
+    }
 }
 
 @end
 
 @interface MTDisposableSet ()
 {
-    OSSpinLock _lock;
+    pthread_mutex_t _lock;
     bool _disposed;
-    id<MTDisposable> _singleDisposable;
-    NSArray *_multipleDisposables;
+    NSMutableArray<id<MTDisposable>> *_disposables;
 }
 
 @end
 
 @implementation MTDisposableSet
 
-- (void)add:(id<MTDisposable>)disposable
-{
-    if (disposable == nil)
-        return;
-    
-    bool dispose = false;
-    
-    OSSpinLockLock(&_lock);
-    dispose = _disposed;
-    if (!dispose)
-    {
-        if (_multipleDisposables != nil)
-        {
-            NSMutableArray *multipleDisposables = [[NSMutableArray alloc] initWithArray:_multipleDisposables];
-            [multipleDisposables addObject:disposable];
-            _multipleDisposables = multipleDisposables;
-        }
-        else if (_singleDisposable != nil)
-        {
-            NSMutableArray *multipleDisposables = [[NSMutableArray alloc] initWithObjects:_singleDisposable, disposable, nil];
-            _multipleDisposables = multipleDisposables;
-            _singleDisposable = nil;
-        }
-        else
-        {
-            _singleDisposable = disposable;
-        }
+- (instancetype)init {
+    self = [super init];
+    if (self != nil) {
+        pthread_mutex_init(&_lock, nil);
+        _disposables = [[NSMutableArray alloc] init];
     }
-    OSSpinLockUnlock(&_lock);
+    return self;
+}
+
+- (void)dealloc {
+    NSArray<id<MTDisposable>> *disposables = nil;
+    pthread_mutex_lock(&_lock);
+    disposables = _disposables;
+    _disposables = nil;
+    pthread_mutex_unlock(&_lock);
     
-    if (dispose)
+    if (disposables) {
+    }
+    pthread_mutex_destroy(&_lock);
+}
+
+- (void)add:(id<MTDisposable>)disposable {
+    bool disposeImmediately = false;
+    
+    pthread_mutex_lock(&_lock);
+    if (_disposed) {
+        disposeImmediately = true;
+    } else {
+        [_disposables addObject:disposable];
+    }
+    pthread_mutex_unlock(&_lock);
+    
+    if (disposeImmediately) {
         [disposable dispose];
+    }
 }
 
 - (void)remove:(id<MTDisposable>)disposable {
-    OSSpinLockLock(&_lock);
-    if (_multipleDisposables != nil)
-    {
-        NSMutableArray *multipleDisposables = [[NSMutableArray alloc] initWithArray:_multipleDisposables];
-        [multipleDisposables removeObject:disposable];
-        _multipleDisposables = multipleDisposables;
+    pthread_mutex_lock(&_lock);
+    for (NSInteger i = 0; i < _disposables.count; i++) {
+        if (_disposables[i] == disposable) {
+            [_disposables removeObjectAtIndex:i];
+            break;
+        }
     }
-    else if (_singleDisposable == disposable)
-    {
-        _singleDisposable = nil;
-    }
-    OSSpinLockUnlock(&_lock);
+    pthread_mutex_unlock(&_lock);
 }
 
-- (void)dispose
-{
-    id<MTDisposable> singleDisposable = nil;
-    NSArray *multipleDisposables = nil;
-    
-    OSSpinLockLock(&_lock);
-    if (!_disposed)
-    {
+- (void)dispose {
+    NSArray<id<MTDisposable>> *disposables = nil;
+    pthread_mutex_lock(&_lock);
+    if (!_disposed) {
         _disposed = true;
-        singleDisposable = _singleDisposable;
-        multipleDisposables = _multipleDisposables;
-        _singleDisposable = nil;
-        _multipleDisposables = nil;
+        disposables = _disposables;
+        _disposables = nil;
     }
-    OSSpinLockUnlock(&_lock);
+    pthread_mutex_unlock(&_lock);
     
-    if (singleDisposable != nil)
-        [singleDisposable dispose];
-    if (multipleDisposables != nil)
-    {
-        for (id<MTDisposable> disposable in multipleDisposables)
-        {
+    if (disposables) {
+        for (id<MTDisposable> disposable in disposables) {
             [disposable dispose];
         }
     }

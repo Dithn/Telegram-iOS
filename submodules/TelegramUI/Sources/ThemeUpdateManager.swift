@@ -1,6 +1,5 @@
 import Foundation
 import UIKit
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import TelegramPresentationData
@@ -42,7 +41,7 @@ final class ThemeUpdateManagerImpl: ThemeUpdateManager {
         |> map { sharedData -> PresentationThemeSettings in
             return sharedData.entries[ApplicationSpecificSharedDataKeys.presentationThemeSettings]?.get(PresentationThemeSettings.self) ?? PresentationThemeSettings.defaultSettings
         }
-        |> deliverOn(queue)).start(next: { [weak self] themeSettings in
+        |> deliverOn(queue)).startStrict(next: { [weak self] themeSettings in
             self?.presentationThemeSettingsUpdated(themeSettings)
         })
     }
@@ -91,7 +90,7 @@ final class ThemeUpdateManagerImpl: ThemeUpdateManager {
                             
                             let resolvedWallpaper: Signal<TelegramWallpaper?, NoError>
                             if case let .file(file) = presentationTheme.chat.defaultWallpaper, file.id == 0 {
-                                resolvedWallpaper = cachedWallpaper(account: account, slug: file.slug, settings: file.settings)
+                                resolvedWallpaper = cachedWallpaper(engine: TelegramEngine(account: account), network: account.network, slug: file.slug, settings: file.settings)
                                 |> map { wallpaper in
                                     return wallpaper?.wallpaper
                                 }
@@ -103,13 +102,13 @@ final class ThemeUpdateManagerImpl: ThemeUpdateManager {
                             |> mapToSignal { wallpaper -> Signal<(PresentationThemeReference, PresentationTheme?), NoError> in
                                 if let wallpaper = wallpaper, case let .file(file) = wallpaper {
                                     var convertedRepresentations: [ImageRepresentationWithReference] = []
-                                    convertedRepresentations.append(ImageRepresentationWithReference(representation: TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 100, height: 100), resource: file.file.resource, progressiveSizes: [], immediateThumbnailData: nil), reference: .wallpaper(wallpaper: .slug(file.slug), resource: file.file.resource)))
+                                    convertedRepresentations.append(ImageRepresentationWithReference(representation: TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 100, height: 100), resource: file.file.resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false), reference: .wallpaper(wallpaper: .slug(file.slug), resource: file.file.resource)))
                                     return wallpaperDatas(account: account, accountManager: accountManager, fileReference: .standalone(media: file.file), representations: convertedRepresentations, alwaysShowThumbnailFirst: false, thumbnail: false, onlyFullSize: true, autoFetchFullSize: true, synchronousLoad: false)
                                     |> mapToSignal { _, fullSizeData, complete -> Signal<(PresentationThemeReference, PresentationTheme?), NoError> in
                                         guard complete, let fullSizeData = fullSizeData else {
                                             return .complete()
                                         }
-                                        accountManager.mediaBox.storeResourceData(file.file.resource.id, data: fullSizeData, synchronous: true)
+                                        accountManager.resources.storeResourceData(id: EngineMediaResource.Id(file.file.resource.id), data: fullSizeData, synchronous: true)
                                         return .single((.cloud(PresentationCloudTheme(theme: theme, resolvedWallpaper: wallpaper, creatorAccountId: theme.isCreator ? account.id : nil)), presentationTheme))
                                     }
                                 } else {
@@ -138,7 +137,7 @@ final class ThemeUpdateManagerImpl: ThemeUpdateManager {
                                         theme = updatedTheme
                                     }
                                     
-                                    return PreferencesEntry(PresentationThemeSettings(theme: theme, themePreferredBaseTheme: current.themePreferredBaseTheme, themeSpecificAccentColors: current.themeSpecificAccentColors, themeSpecificChatWallpapers: current.themeSpecificChatWallpapers, useSystemFont: current.useSystemFont, fontSize: current.fontSize, listsFontSize: current.listsFontSize, chatBubbleSettings: current.chatBubbleSettings, automaticThemeSwitchSetting: automaticThemeSwitchSetting, largeEmoji: current.largeEmoji, reduceMotion: current.reduceMotion))
+                                    return EnginePreferencesEntry(PresentationThemeSettings(theme: theme, themePreferredBaseTheme: current.themePreferredBaseTheme, themeSpecificAccentColors: current.themeSpecificAccentColors, themeSpecificChatWallpapers: current.themeSpecificChatWallpapers, useSystemFont: current.useSystemFont, fontSize: current.fontSize, listsFontSize: current.listsFontSize, chatBubbleSettings: current.chatBubbleSettings, automaticThemeSwitchSetting: automaticThemeSwitchSetting, largeEmoji: current.largeEmoji, reduceMotion: current.reduceMotion))
                                 })
                             }).start()
                         }

@@ -1,20 +1,60 @@
-import AVFoundation
+import Foundation
+import UIKit
+
+public enum VideoCaptureResult: Equatable {
+    public struct Result {
+        public let path: String
+        public let thumbnail: UIImage
+        public let isMirrored: Bool
+        public let dimensions: CGSize
+
+        public init(path: String, thumbnail: UIImage, isMirrored: Bool, dimensions: CGSize) {
+            self.path = path
+            self.thumbnail = thumbnail
+            self.isMirrored = isMirrored
+            self.dimensions = dimensions
+        }
+    }
+
+    case finished(main: Result, additional: Result?, duration: Double, positionChangeTimestamps: [(Bool, Double)], captureTimestamp: Double)
+    case failed
+
+    public static func == (lhs: VideoCaptureResult, rhs: VideoCaptureResult) -> Bool {
+        switch lhs {
+        case .failed:
+            if case .failed = rhs {
+                return true
+            } else {
+                return false
+            }
+        case let .finished(_, _, lhsDuration, lhsChangeTimestamps, lhsTimestamp):
+            if case let .finished(_, _, rhsDuration, rhsChangeTimestamps, rhsTimestamp) = rhs, lhsDuration == rhsDuration, lhsTimestamp == rhsTimestamp {
+                if lhsChangeTimestamps.count != rhsChangeTimestamps.count {
+                    return false
+                }
+                return true
+            } else {
+                return false
+            }
+        }
+    }
+}
 
 public struct CameraCode: Equatable {
     public enum CodeType {
         case qr
     }
-    
+
     public let type: CodeType
     public let message: String
     public let corners: [CGPoint]
-    
+
     public init(type: CameraCode.CodeType, message: String, corners: [CGPoint]) {
         self.type = type
         self.message = message
         self.corners = corners
     }
-    
+
     public var boundingBox: CGRect {
         let x = self.corners.map { $0.x }
         let y = self.corners.map { $0.y }
@@ -23,7 +63,21 @@ public struct CameraCode: Equatable {
         }
         return CGRect.null
     }
-    
+
+    public var rotation: CGFloat {
+        guard self.corners.count == 4 else {
+            return 0.0
+        }
+
+        let topLeft = self.corners[1]
+        let topRight = self.corners[2]
+
+        let dx = topRight.x - topLeft.x
+        let dy = topRight.y - topLeft.y
+
+        return atan2(dy, dx) - .pi / 2.0
+    }
+
     public static func == (lhs: CameraCode, rhs: CameraCode) -> Bool {
         if lhs.type != rhs.type {
             return false
@@ -35,86 +89,5 @@ public struct CameraCode: Equatable {
             return false
         }
         return true
-    }
-}
-
-final class CameraOutput: NSObject {
-    //private let photoOutput = CameraPhotoOutput()
-    private let videoOutput = AVCaptureVideoDataOutput()
-    private let audioOutput = AVCaptureAudioDataOutput()
-    private let metadataOutput = AVCaptureMetadataOutput()
-    
-    private let queue = DispatchQueue(label: "")
-    private let metadataQueue = DispatchQueue(label: "")
-    
-    var processSampleBuffer: ((CMSampleBuffer, AVCaptureConnection) -> Void)?
-    var processCodes: (([CameraCode]) -> Void)?
-    
-    override init() {
-        super.init()
-        
-        self.videoOutput.alwaysDiscardsLateVideoFrames = true;
-        self.videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange] as [String : Any]
-    }
-    
-    deinit {
-        self.videoOutput.setSampleBufferDelegate(nil, queue: nil)
-        self.audioOutput.setSampleBufferDelegate(nil, queue: nil)
-    }
-    
-    func configure(for session: AVCaptureSession) {
-        if session.canAddOutput(self.videoOutput) {
-            session.addOutput(self.videoOutput)
-            self.videoOutput.setSampleBufferDelegate(self, queue: self.queue)
-        }
-        if session.canAddOutput(self.audioOutput) {
-            session.addOutput(self.audioOutput)
-            self.audioOutput.setSampleBufferDelegate(self, queue: self.queue)
-        }
-        if session.canAddOutput(self.metadataOutput) {
-            session.addOutput(self.metadataOutput)
-            
-            self.metadataOutput.setMetadataObjectsDelegate(self, queue: self.metadataQueue)
-            if self.metadataOutput.availableMetadataObjectTypes.contains(.qr) {
-                self.metadataOutput.metadataObjectTypes = [.qr]
-            }
-        }
-    }
-    
-    func invalidate(for session: AVCaptureSession) {
-        for output in session.outputs {
-            session.removeOutput(output)
-        }
-    }
-}
-
-extension CameraOutput: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
-    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard CMSampleBufferDataIsReady(sampleBuffer) else {
-            return
-        }
-        
-        self.processSampleBuffer?(sampleBuffer, connection)
-    }
-    
-    func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        
-    }
-}
-
-extension CameraOutput: AVCaptureMetadataOutputObjectsDelegate {
-    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
-        let codes: [CameraCode] = metadataObjects.filter { $0.type == .qr }.compactMap { object in
-            if let object = object as? AVMetadataMachineReadableCodeObject, let stringValue = object.stringValue, !stringValue.isEmpty {
-                #if targetEnvironment(simulator)
-                return CameraCode(type: .qr, message: stringValue, corners: [CGPoint(), CGPoint(), CGPoint(), CGPoint()])
-                #else
-                return CameraCode(type: .qr, message: stringValue, corners: object.corners)
-                #endif
-            } else {
-                return nil
-            }
-        }
-        self.processCodes?(codes)
     }
 }

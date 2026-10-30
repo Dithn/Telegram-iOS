@@ -1,33 +1,29 @@
 build --action_env=ZERO_AR_DATE=1
 
-build --apple_platform_type=ios
+build --enable_platform_specific_config
 
-build --cxxopt='-std=c++14'
-build --per_file_copt="third-party/webrtc/.*\.cpp$","@-std=c++14"
-build --per_file_copt="third-party/webrtc/.*\.cc$","@-std=c++14"
-build --per_file_copt="third-party/webrtc/.*\.mm$","@-std=c++14"
-build --per_file_copt="submodules/LottieMeshSwift/LottieMeshBinding/Sources/.*\.mm$","@-std=c++14"
+# Download dependencies directly if the remote downloader configured by --cacheHost fails.
+build --experimental_remote_downloader_local_fallback
 
-build --swiftcopt=-whole-module-optimization
+# Keeps $(TARGET_CPU) as "ios_sim_arm64" rather than "aarch64". Removing this does not
+# fail the build: the third-party genrules silently pick the wrong build directory.
+build --noincompatible_target_cpu_from_platform
 
-# Uncomment for address sanitizer
-#build --swiftcopt=-sanitize=address
-#build --copt=-fsanitize=address
-#build --cxxopt=-fsanitize=address
-#build --features=asan
-#build --copt='-D_FORTIFY_SOURCE=0'
-#build --copt='-D_FORTIFY_SOURCE=0'
-#build --copt="-Wno-macro-redefined"
-#build --cxxopt="-Wno-macro-redefined"
-#build --linkopt="-fsanitize=address"
+# macOS-specific settings (auto-applied on macOS via --enable_platform_specific_config)
+build:macos --features=debug_prefix_map_pwd_is_dot
+build:macos --features=swift.cacheable_swiftmodules
+build:macos --features=swift.debug_prefix_map
+build:macos --features=swift.enable_vfsoverlays
+build:dbg --features=swift.emit_swiftsourceinfo
 
-build --features=debug_prefix_map_pwd_is_dot
-build --features=swift.cacheable_swiftmodules
-build --features=swift.debug_prefix_map
-build --features=swift.enable_vfsoverlays
+# Linux-specific settings (auto-applied on Linux via --enable_platform_specific_config)
+build:linux --action_env=CC
+build:linux --action_env=CXX
 
 build --strategy=Genrule=standalone
 build --spawn_strategy=standalone
 
-build --strategy=SwiftCompile=standalone
-build --define RULES_SWIFT_BUILD_DUMMY_WORKER=1
+build:macos --strategy=SwiftCompile=worker
+
+common:macos --features=swift.use_global_module_cache
+common:macos --features=oso_prefix_is_pwd

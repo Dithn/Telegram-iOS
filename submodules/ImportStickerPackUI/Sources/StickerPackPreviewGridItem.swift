@@ -1,10 +1,10 @@
 import Foundation
+import LottieSettings
 import UIKit
 import Display
 import TelegramCore
 import SwiftSignalKit
 import AsyncDisplayKit
-import Postbox
 import StickerResources
 import AccountContext
 import AnimatedStickerNode
@@ -27,10 +27,12 @@ final class StickerPackPreviewGridItem: GridItem {
     let interaction: StickerPackPreviewInteraction
     let theme: PresentationTheme
     let isVerified: Bool
+    let lottieSettings: LottieRenderingSettings
     
     let section: GridSection? = nil
     
-    init(account: Account, stickerItem: ImportStickerPack.Sticker, interaction: StickerPackPreviewInteraction, theme: PresentationTheme, isVerified: Bool) {
+    init(account: Account, stickerItem: ImportStickerPack.Sticker, interaction: StickerPackPreviewInteraction, theme: PresentationTheme, isVerified: Bool, lottieSettings: LottieRenderingSettings) {
+        self.lottieSettings = lottieSettings
         self.account = account
         self.stickerItem = stickerItem
         self.interaction = interaction
@@ -40,7 +42,7 @@ final class StickerPackPreviewGridItem: GridItem {
     
     func node(layout: GridNodeLayout, synchronousLoad: Bool) -> GridItemNode {
         let node = StickerPackPreviewGridItemNode()
-        node.setup(account: self.account, stickerItem: self.stickerItem, interaction: self.interaction, theme: self.theme, isVerified: self.isVerified)
+        node.setup(account: self.account, stickerItem: self.stickerItem, interaction: self.interaction, theme: self.theme, isVerified: self.isVerified, lottieSettings: self.lottieSettings)
         return node
     }
     
@@ -49,7 +51,7 @@ final class StickerPackPreviewGridItem: GridItem {
             assertionFailure()
             return
         }
-        node.setup(account: self.account, stickerItem: self.stickerItem, interaction: self.interaction, theme: self.theme, isVerified: self.isVerified)
+        node.setup(account: self.account, stickerItem: self.stickerItem, interaction: self.interaction, theme: self.theme, isVerified: self.isVerified, lottieSettings: self.lottieSettings)
     }
 }
 
@@ -100,7 +102,7 @@ final class StickerPackPreviewGridItemNode: GridItemNode {
         self.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.imageNodeTap(_:))))
     }
     
-    func setup(account: Account, stickerItem: ImportStickerPack.Sticker?, interaction: StickerPackPreviewInteraction, theme: PresentationTheme, isVerified: Bool) {
+    func setup(account: Account, stickerItem: ImportStickerPack.Sticker?, interaction: StickerPackPreviewInteraction, theme: PresentationTheme, isVerified: Bool, lottieSettings: LottieRenderingSettings) {
         self.interaction = interaction
         self.theme = theme
         
@@ -123,7 +125,7 @@ final class StickerPackPreviewGridItemNode: GridItemNode {
                         self.imageNode.isHidden = true
                         
                         if isVerified {
-                            let animationNode = AnimatedStickerNode()
+                            let animationNode = DefaultAnimatedStickerNodeImpl(lottieSettings: lottieSettings)
                             self.animationNode = animationNode
                             
                             if let placeholderNode = self.placeholderNode {
@@ -142,7 +144,7 @@ final class StickerPackPreviewGridItemNode: GridItemNode {
                                 if case .video = stickerItem.content {
                                     isVideo = true
                                 }
-                                animationNode.setup(source: AnimatedStickerResourceSource(account: account, resource: resource, isVideo: isVideo), width: Int(fittedDimensions.width), height: Int(fittedDimensions.height), mode: .direct(cachePathPrefix: nil))
+                                animationNode.setup(source: AnimatedStickerResourceSource(account: account, resource: resource._asResource(), isVideo: isVideo), width: Int(fittedDimensions.width), height: Int(fittedDimensions.height), mode: .direct(cachePathPrefix: nil))
                             }
                             animationNode.visibility = self.isVisibleInGrid && self.interaction?.playAnimatedStickers ?? true
                         } else {

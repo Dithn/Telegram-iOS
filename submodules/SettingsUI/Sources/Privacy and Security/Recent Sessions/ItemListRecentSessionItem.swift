@@ -3,7 +3,6 @@ import UIKit
 import Display
 import AsyncDisplayKit
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
@@ -35,8 +34,9 @@ enum ItemListRecentSessionItemText {
     case none
 }
 
-final class ItemListRecentSessionItem: ListViewItem, ItemListItem {
+final class ItemListRecentSessionItem: ListViewItem, ItemListItem, ItemListRevealOptionsStatefulItem {
     let presentationData: ItemListPresentationData
+    let systemStyle: ItemListSystemStyle
     let dateTimeFormat: PresentationDateTimeFormat
     let session: RecentAccountSession
     let enabled: Bool
@@ -47,9 +47,14 @@ final class ItemListRecentSessionItem: ListViewItem, ItemListItem {
     let setSessionIdWithRevealedOptions: (Int64?, Int64?) -> Void
     let removeSession: (Int64) -> Void
     let action: (() -> Void)?
+
+    var hasActiveRevealOptions: Bool {
+        return self.revealed
+    }
     
-    init(presentationData: ItemListPresentationData, dateTimeFormat: PresentationDateTimeFormat, session: RecentAccountSession, enabled: Bool, editable: Bool, editing: Bool, revealed: Bool, sectionId: ItemListSectionId, setSessionIdWithRevealedOptions: @escaping (Int64?, Int64?) -> Void, removeSession: @escaping (Int64) -> Void, action: (() -> Void)?) {
+    init(presentationData: ItemListPresentationData, systemStyle: ItemListSystemStyle, dateTimeFormat: PresentationDateTimeFormat, session: RecentAccountSession, enabled: Bool, editable: Bool, editing: Bool, revealed: Bool, sectionId: ItemListSectionId, setSessionIdWithRevealedOptions: @escaping (Int64?, Int64?) -> Void, removeSession: @escaping (Int64) -> Void, action: (() -> Void)?) {
         self.presentationData = presentationData
+        self.systemStyle = systemStyle
         self.dateTimeFormat = dateTimeFormat
         self.session = session
         self.enabled = enabled
@@ -62,10 +67,10 @@ final class ItemListRecentSessionItem: ListViewItem, ItemListItem {
         self.action = action
     }
     
-    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = ItemListRecentSessionItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -78,7 +83,7 @@ final class ItemListRecentSessionItem: ListViewItem, ItemListItem {
         }
     }
     
-    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? ItemListRecentSessionItemNode {
                 let makeLayout = nodeValue.asyncLayout()
@@ -89,7 +94,7 @@ final class ItemListRecentSessionItem: ListViewItem, ItemListItem {
                 }
                 
                 async {
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply(animated)
@@ -119,7 +124,7 @@ func iconForSession(_ session: RecentAccountSession) -> (UIImage?, UIColor?, Str
         return (UIImage(bundleImageName: "Settings/Devices/Xbox"), UIColor(rgb: 0x35c759), nil, nil)
     }
     if device.contains("chrome") && !device.contains("chromebook") {
-        return (UIImage(bundleImageName: "Settings/Devices/Chrome"), UIColor(rgb: 0x35c759), "device_chrome", ["Vector 20.Vector 20.Обводка 1", "Ellipse 18.Ellipse 18.Обводка 1"])
+        return (PresentationResourcesDevices.chrome, UIColor(rgb: 0x35c759), "device_chrome", ["Vector 20.Vector 20.Обводка 1", "Ellipse 18.Ellipse 18.Обводка 1"])
     }
     if device.contains("brave") {
         return (UIImage(bundleImageName: "Settings/Devices/Brave"), UIColor(rgb: 0xff9500), nil, nil)
@@ -128,7 +133,7 @@ func iconForSession(_ session: RecentAccountSession) -> (UIImage?, UIColor?, Str
         return (UIImage(bundleImageName: "Settings/Devices/Vivaldi"), UIColor(rgb: 0xff3c30), nil, nil)
     }
     if device.contains("safari") {
-        return (UIImage(bundleImageName: "Settings/Devices/Safari"), UIColor(rgb: 0x0079ff), "device_safari", ["Com 2.Com 2.Заливка 1"])
+        return (PresentationResourcesDevices.safari, UIColor(rgb: 0x0079ff), "device_safari", ["Com 2.Com 2.Заливка 1"])
     }
     if device.contains("firefox") {
         return (UIImage(bundleImageName: "Settings/Devices/Firefox"), UIColor(rgb: 0xff9500), "device_firefox", nil)
@@ -137,28 +142,28 @@ func iconForSession(_ session: RecentAccountSession) -> (UIImage?, UIColor?, Str
         return (UIImage(bundleImageName: "Settings/Devices/Opera"), UIColor(rgb: 0xff3c30), nil, nil)
     }
     if platform.contains("android") {
-        return (UIImage(bundleImageName: "Settings/Devices/Android"), UIColor(rgb: 0x35c759), "device_android", ["Eye L.Eye L.Заливка 1", "Eye R.Eye R.Заливка 1"])
+        return (PresentationResourcesDevices.android, UIColor(rgb: 0x35c759), "device_android", ["Eye L.Eye L.Заливка 1", "Eye R.Eye R.Заливка 1"])
     }
     if device.contains("iphone") {
-        return (UIImage(bundleImageName: "Settings/Devices/iPhone"), UIColor(rgb: 0x0079ff), "device_iphone", ["apple.apple.Заливка 1"])
+        return (PresentationResourcesDevices.iPhone, UIColor(rgb: 0x0079ff), "device_iphone", ["apple.apple.Заливка 1"])
     }
     if device.contains("ipad") {
-        return (UIImage(bundleImageName: "Settings/Devices/iPad"), UIColor(rgb: 0x0079ff), "device_ipad", ["apple.apple.Заливка 1"])
+        return (PresentationResourcesDevices.iPad, UIColor(rgb: 0x0079ff), "device_ipad", ["apple.apple.Заливка 1"])
     }
     if (platform.contains("macos") || systemVersion.contains("macos")) && device.contains("mac") {
-        return (UIImage(bundleImageName: "Settings/Devices/Mac"), UIColor(rgb: 0x0079ff), "device_mac", nil)
+        return (PresentationResourcesDevices.macbook, UIColor(rgb: 0x0079ff), "device_mac", nil)
     }
     if platform.contains("ios") || platform.contains("macos") || systemVersion.contains("macos") {
-        return (UIImage(bundleImageName: "Settings/Devices/iOS"), UIColor(rgb: 0x0079ff), nil, nil)
+        return (PresentationResourcesDevices.iOS, UIColor(rgb: 0x0079ff), nil, nil)
     }
     if platform.contains("ubuntu") || systemVersion.contains("ubuntu") {
-        return (UIImage(bundleImageName: "Settings/Devices/Ubuntu"), UIColor(rgb: 0xff9500), "device_ubuntu", ["Ellipse 25.Ellipse 24.Обводка 1", "Ellipse 24.Ellipse 24.Обводка 1", "Union.Union.Заливка 1"])
+        return (PresentationResourcesDevices.ubuntu, UIColor(rgb: 0xff9500), "device_ubuntu", ["Ellipse 25.Ellipse 24.Обводка 1", "Ellipse 24.Ellipse 24.Обводка 1", "Union.Union.Заливка 1"])
     }
     if platform.contains("linux") || systemVersion.contains("linux") {
-        return (UIImage(bundleImageName: "Settings/Devices/Linux"), UIColor(rgb: 0x8e8e93), "device_linux", nil)
+        return (PresentationResourcesDevices.linux, UIColor(rgb: 0x8e8e93), "device_linux", nil)
     }
     if platform.contains("windows") || systemVersion.contains("windows") {
-        return (UIImage(bundleImageName: "Settings/Devices/Windows"), UIColor(rgb: 0x0079ff), "device_windows", ["Union.Union.Заливка 1"])
+        return (PresentationResourcesDevices.windows, UIColor(rgb: 0x0079ff), "device_windows", ["Union.Union.Заливка 1"])
     }
     return (UIImage(bundleImageName: "Settings/Devices/Generic"), UIColor(rgb: 0x8e8e93), nil, nil)
 }
@@ -192,6 +197,7 @@ class ItemListRecentSessionItemNode: ItemListRevealOptionsItemNode {
     private var layoutParams: (ItemListRecentSessionItem, ListViewItemLayoutParams, ItemListNeighbors)?
     
     private var editableControlNode: ItemListEditableControlNode?
+    private var isHighlighted = false
     
     override public var canBeSelected: Bool {
         if let item = self.layoutParams?.0, let _ = item.action {
@@ -240,7 +246,7 @@ class ItemListRecentSessionItemNode: ItemListRevealOptionsItemNode {
         
         self.activateArea = AccessibilityAreaNode()
         
-        super.init(layerBacked: false, dynamicBounce: false, rotated: false, seeThrough: false)
+        super.init(layerBacked: false, rotated: false, seeThrough: false)
         
         self.addSubnode(self.containerNode)
         self.containerNode.addSubnode(self.iconNode)
@@ -261,15 +267,15 @@ class ItemListRecentSessionItemNode: ItemListRevealOptionsItemNode {
         
         let currentItem = self.layoutParams?.0
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             var updatedTheme: PresentationTheme?
             
-            let titleFont = Font.medium(floor(item.presentationData.fontSize.itemListBaseFontSize * 16.0 / 17.0))
-            let textFont = Font.regular(floor(item.presentationData.fontSize.itemListBaseFontSize * 14.0 / 17.0))
+            let titleFont = Font.semibold(floor(item.presentationData.fontSize.itemListBaseFontSize * 17.0 / 17.0))
+            let textFont = Font.regular(floor(item.presentationData.fontSize.itemListBaseFontSize * 15.0 / 17.0))
             
-            let verticalInset: CGFloat = 10.0
+            let verticalInset: CGFloat = 11.0
             let titleSpacing: CGFloat = 1.0
-            let textSpacing: CGFloat = 3.0
+            let textSpacing: CGFloat = 2.0
             
             if currentItem?.presentationData.theme !== item.presentationData.theme {
                 updatedTheme = item.presentationData.theme
@@ -281,7 +287,7 @@ class ItemListRecentSessionItemNode: ItemListRevealOptionsItemNode {
             
             let peerRevealOptions: [ItemListRevealOption]
             if item.editable && item.enabled {
-                peerRevealOptions = [ItemListRevealOption(key: 0, title: item.presentationData.strings.AuthSessions_Terminate, icon: .none, color: item.presentationData.theme.list.itemDisclosureActions.destructive.fillColor, textColor: item.presentationData.theme.list.itemDisclosureActions.destructive.foregroundColor)]
+                peerRevealOptions = [ItemListRevealOption(key: 0, title: item.presentationData.strings.AuthSessions_Terminate, icon: .none, color: item.presentationData.theme.list.itemDisclosureActions.destructive.fillColor, iconColor: item.presentationData.theme.list.itemDisclosureActions.destructive.foregroundColor, textColor: item.presentationData.theme.list.itemSecondaryTextColor, isDestructive: true)]
             } else {
                 peerRevealOptions = []
             }
@@ -299,13 +305,6 @@ class ItemListRecentSessionItemNode: ItemListRevealOptionsItemNode {
                 deviceString = item.session.deviceModel
             }
             
-//            if !item.session.platform.isEmpty {
-//                if !deviceString.isEmpty {
-//                    deviceString += ", "
-//                }
-//                deviceString += item.session.platform
-//            }
-                        
             var updatedIcon: UIImage?
             if item.session != currentItem?.session {
                 updatedIcon = iconForSession(item.session).0
@@ -344,8 +343,9 @@ class ItemListRecentSessionItemNode: ItemListRevealOptionsItemNode {
             let (locationLayout, locationApply) = makeLocationLayout(TextNodeLayoutArguments(attributedString: locationAttributedString, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - 8.0 - editingOffset - rightInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
             let insets = itemListNeighborsGroupedInsets(neighbors, params)
-            let contentSize = CGSize(width: params.width, height: verticalInset * 2.0 + titleLayout.size.height + titleSpacing + appLayout.size.height + textSpacing + locationLayout.size.height)
+            let contentSize = CGSize(width: params.width, height: verticalInset * 2.0 + titleLayout.size.height + titleSpacing + appLayout.size.height + textSpacing + locationLayout.size.height - 4.0)
             let separatorHeight = UIScreenPixel
+            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
             
             let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
             let layoutSize = layout.size
@@ -478,41 +478,44 @@ class ItemListRecentSessionItemNode: ItemListRevealOptionsItemNode {
                     let hasCorners = itemListHasRoundedBlockLayout(params)
                     var hasTopCorners = false
                     var hasBottomCorners = false
+                    let topStripeIsHidden: Bool
                     switch neighbors.top {
                         case .sameSection(false):
-                            strongSelf.topStripeNode.isHidden = true
+                            topStripeIsHidden = true
                         default:
                             hasTopCorners = true
-                            strongSelf.topStripeNode.isHidden = hasCorners
+                            topStripeIsHidden = hasCorners
                     }
                     let bottomStripeInset: CGFloat
                     let bottomStripeOffset: CGFloat
+                    let bottomStripeIsHidden: Bool
                     switch neighbors.bottom {
                         case .sameSection(false):
                             bottomStripeInset = leftInset + editingOffset
                             bottomStripeOffset = -separatorHeight
-                            strongSelf.bottomStripeNode.isHidden = false
+                            bottomStripeIsHidden = false
                         default:
                             bottomStripeInset = 0.0
                             bottomStripeOffset = 0.0
                             hasBottomCorners = true
-                            strongSelf.bottomStripeNode.isHidden = hasCorners
+                            bottomStripeIsHidden = hasCorners
                     }
+                    strongSelf.updateRevealOptionsSeparatorNodes(top: strongSelf.topStripeNode, bottom: strongSelf.bottomStripeNode, topIsHidden: topStripeIsHidden, bottomIsHidden: bottomStripeIsHidden, topHiddenByPreviousRevealOptions: neighbors.topHasActiveRevealOptions, bottomHiddenByNextRevealOptions: neighbors.bottomHasActiveRevealOptions)
                     
-                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                     
                     strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
                     strongSelf.containerNode.frame = CGRect(origin: CGPoint(), size: strongSelf.backgroundNode.frame.size)
-                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                     transition.updateFrame(node: strongSelf.topStripeNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight)))
-                    transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: layoutSize.width - bottomStripeInset, height: separatorHeight)))
+                    transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: layoutSize.width - bottomStripeInset - params.rightInset - separatorRightInset, height: separatorHeight)))
                     
-                    transition.updateFrame(node: strongSelf.iconNode, frame: CGRect(origin: CGPoint(x: params.leftInset + revealOffset + editingOffset + 16.0, y: 12.0), size: CGSize(width: 30.0, height: 30.0)))
-                    transition.updateFrame(node: strongSelf.titleNode, frame: CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: verticalInset), size: titleLayout.size))
+                    transition.updateFrame(node: strongSelf.iconNode, frame: CGRect(origin: CGPoint(x: params.leftInset + revealOffset + editingOffset + 16.0, y: 15.0), size: CGSize(width: 30.0, height: 30.0)))
+                    transition.updateFrame(node: strongSelf.titleNode, frame: CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: verticalInset - 2.0), size: titleLayout.size))
                     transition.updateFrame(node: strongSelf.appNode, frame: CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: strongSelf.titleNode.frame.maxY + titleSpacing), size: appLayout.size))
                     transition.updateFrame(node: strongSelf.locationNode, frame: CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: strongSelf.appNode.frame.maxY + textSpacing), size: locationLayout.size))
                     
-                    strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
+                    strongSelf.updateRevealOptionsHighlightedBackgroundFrame(strongSelf.highlightedBackgroundNode, frame: CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight))), transition: transition, aboveNodes: [strongSelf.bottomStripeNode, strongSelf.topStripeNode, strongSelf.backgroundNode])
                     
                     strongSelf.updateLayout(size: layout.contentSize, leftInset: params.leftInset, rightInset: params.rightInset)
                     
@@ -526,42 +529,11 @@ class ItemListRecentSessionItemNode: ItemListRevealOptionsItemNode {
     override public func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) {
         super.setHighlighted(highlighted, at: point, animated: animated)
         
-        if highlighted && (self.layoutParams?.0.enabled ?? false) {
-            self.highlightedBackgroundNode.alpha = 1.0
-            if self.highlightedBackgroundNode.supernode == nil {
-                var anchorNode: ASDisplayNode?
-                if self.bottomStripeNode.supernode != nil {
-                    anchorNode = self.bottomStripeNode
-                } else if self.topStripeNode.supernode != nil {
-                    anchorNode = self.topStripeNode
-                } else if self.backgroundNode.supernode != nil {
-                    anchorNode = self.backgroundNode
-                }
-                if let anchorNode = anchorNode {
-                    self.insertSubnode(self.highlightedBackgroundNode, aboveSubnode: anchorNode)
-                } else {
-                    self.addSubnode(self.highlightedBackgroundNode)
-                }
-            }
-        } else {
-            if self.highlightedBackgroundNode.supernode != nil {
-                if animated {
-                    self.highlightedBackgroundNode.layer.animateAlpha(from: self.highlightedBackgroundNode.alpha, to: 0.0, duration: 0.4, completion: { [weak self] completed in
-                        if let strongSelf = self {
-                            if completed {
-                                strongSelf.highlightedBackgroundNode.removeFromSupernode()
-                            }
-                        }
-                        })
-                    self.highlightedBackgroundNode.alpha = 0.0
-                } else {
-                    self.highlightedBackgroundNode.removeFromSupernode()
-                }
-            }
-        }
+        self.isHighlighted = highlighted && (self.layoutParams?.0.enabled ?? false)
+        self.updateRevealOptionsHighlightedBackgroundNode(self.highlightedBackgroundNode, isHighlighted: self.isHighlighted, transition: (animated && !highlighted) ? .animated(duration: 0.3, curve: .easeInOut) : .immediate, aboveNodes: [self.bottomStripeNode, self.topStripeNode, self.backgroundNode])
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
@@ -592,6 +564,12 @@ class ItemListRecentSessionItemNode: ItemListRevealOptionsItemNode {
         transition.updateFrame(node: self.titleNode, frame: CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: self.titleNode.frame.minY), size: self.titleNode.bounds.size))
         transition.updateFrame(node: self.appNode, frame: CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: self.appNode.frame.minY), size: self.appNode.bounds.size))
         transition.updateFrame(node: self.locationNode, frame: CGRect(origin: CGPoint(x: leftInset + revealOffset + editingOffset, y: self.locationNode.frame.minY), size: self.locationNode.bounds.size))
+    }
+
+    override func revealOptionsActiveStateUpdated(isActive: Bool, transition: ContainedViewLayoutTransition) {
+        super.revealOptionsActiveStateUpdated(isActive: isActive, transition: transition)
+
+        self.updateRevealOptionsHighlightedBackgroundNode(self.highlightedBackgroundNode, isHighlighted: self.isHighlighted, transition: transition, aboveNodes: [self.bottomStripeNode, self.topStripeNode, self.backgroundNode])
     }
     
     override func revealOptionsInteractivelyOpened() {

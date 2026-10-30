@@ -1,4 +1,6 @@
 
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
 objc_library(
     name = "PKCS",
     enable_modules = True,
@@ -6,7 +8,7 @@ objc_library(
     srcs = glob([
         "Sources/**/*.m",
         "Sources/**/*.h",
-    ]),
+    ], allow_empty=True),
     hdrs = glob([
         "PublicHeaders/**/*.h",
     ]),

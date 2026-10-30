@@ -1,19 +1,19 @@
-#import "TGMenuSheetController.h"
+#import <LegacyComponents/TGMenuSheetController.h>
 
 #import "LegacyComponentsInternal.h"
-#import "LegacyComponentsGlobals.h"
-#import "TGNavigationController.h"
-#import "TGOverlayController.h"
-#import "TGOverlayControllerWindow.h"
-#import "TGImageUtils.h"
-#import "TGHacks.h"
+#import <LegacyComponents/LegacyComponentsGlobals.h>
+#import <LegacyComponents/TGNavigationController.h>
+#import <LegacyComponents/TGOverlayController.h>
+#import <LegacyComponents/TGOverlayControllerWindow.h>
+#import <LegacyComponents/TGImageUtils.h>
+#import <LegacyComponents/TGHacks.h>
 
 #import <SSignalKit/SSignalKit.h>
 
-#import "TGMenuSheetView.h"
+#import <LegacyComponents/TGMenuSheetView.h>
 #import "TGMenuSheetDimView.h"
-#import "TGMenuSheetItemView.h"
-#import "TGMenuSheetCollectionView.h"
+#import <LegacyComponents/TGMenuSheetItemView.h>
+#import <LegacyComponents/TGMenuSheetCollectionView.h>
 
 #import <LegacyComponents/TGObserverProxy.h>
 #import <UIKit/UIGestureRecognizerSubclass.h>
@@ -73,9 +73,6 @@ typedef enum
     CGFloat _keyboardOffset;
     id _keyboardWillChangeFrameProxy;
     
-    bool _checked3dTouch;
-    NSDictionary *_3dTouchHandlers;
-
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     UIPopoverController *_popoverController;
@@ -140,7 +137,7 @@ typedef enum
     
     __weak TGMenuSheetController *weakSelf = self;
     _sizeClassDisposable = [[SMetaDisposable alloc] init];
-    [_sizeClassDisposable setDisposable:[[_context sizeClassSignal] startWithNext:^(NSNumber *next)
+    [_sizeClassDisposable setDisposable:[[_context sizeClassSignal] startStrictWithNext:^(NSNumber *next)
     {
         __strong TGMenuSheetController *strongSelf = weakSelf;
         if (strongSelf == nil)
@@ -148,7 +145,7 @@ typedef enum
         
         UIUserInterfaceSizeClass sizeClass = next.integerValue;
         [strongSelf updateTraitsWithSizeClass:sizeClass];
-    }]];
+    } file:__FILE_NAME__ line:__LINE__]];
     
     _containerView = [[TGMenuSheetContainerView alloc] initWithFrame:CGRectZero];
     [self.view addSubview:_containerView];
@@ -549,8 +546,6 @@ typedef enum
         [_sheetView menuDidAppearAnimated:false];
         _presented = true;
     }
-    
-    [self setup3DTouch];
 }
 
 - (void)dismissAnimated:(bool)animated
@@ -1114,20 +1109,6 @@ typedef enum
         _customRemoveFromParentViewController();
     }
     [super removeFromParentViewController];
-}
-
-#pragma mark - 
-
-- (void)setup3DTouch
-{
-    if (iosMajorVersion() >= 9 && self.traitCollection.forceTouchCapability == UIForceTouchCapabilityAvailable)
-    {
-        for (TGMenuSheetItemView *itemView in _sheetView.itemViews)
-        {
-            if (itemView.previewSourceView != nil)
-                [self registerForPreviewingWithDelegate:itemView sourceView:itemView.previewSourceView];
-        }
-    }
 }
 
 - (void)popoverPresentationControllerDidDismissPopover:(UIPopoverPresentationController *)__unused popoverPresentationController {

@@ -4,33 +4,36 @@ import AsyncDisplayKit
 import Display
 import TelegramCore
 import SwiftSignalKit
-import Postbox
 import TelegramPresentationData
 import RadialStatusNode
 import PhotoResources
 import StickerResources
 
 final class VerticalListContextResultsChatInputPanelItem: ListViewItem {
-    fileprivate let account: Account
+    var neighborDescriptor: AnyEquatable {
+        return AnyEquatable.noNeighborInfluence
+    }
+
+    fileprivate let engine: TelegramEngine
     fileprivate let theme: PresentationTheme
     fileprivate let result: ChatContextResult
     fileprivate let resultSelected: (ChatContextResult, ASDisplayNode, CGRect) -> Bool
-    
+
     let selectable: Bool = true
-    
-    public init(account: Account, theme: PresentationTheme, result: ChatContextResult, resultSelected: @escaping (ChatContextResult, ASDisplayNode, CGRect) -> Bool) {
-        self.account = account
+
+    public init(engine: TelegramEngine, theme: PresentationTheme, result: ChatContextResult, resultSelected: @escaping (ChatContextResult, ASDisplayNode, CGRect) -> Bool) {
+        self.engine = engine
         self.theme = theme
         self.result = result
         self.resultSelected = resultSelected
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         let configure = { () -> Void in
             let node = VerticalListContextResultsChatInputPanelItemNode()
             
             let nodeLayout = node.asyncLayout()
-            let (top, bottom) = (previousItem != nil, nextItem != nil)
+            let (top, bottom) = (neighbors.previous != nil, neighbors.next != nil)
             let (layout, apply) = nodeLayout(self, params, top, bottom)
             
             node.contentSize = layout.contentSize
@@ -51,13 +54,13 @@ final class VerticalListContextResultsChatInputPanelItem: ListViewItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? VerticalListContextResultsChatInputPanelItemNode {
                 let nodeLayout = nodeValue.asyncLayout()
                 
                 async {
-                    let (top, bottom) = (previousItem != nil, nextItem != nil)
+                    let (top, bottom) = (neighbors.previous != nil, neighbors.next != nil)
                     
                     let (layout, apply) = nodeLayout(self, params, top, bottom)
                     Queue.mainQueue().async {
@@ -86,12 +89,11 @@ final class VerticalListContextResultsChatInputPanelItemNode: ListViewItemNode {
     private let iconImageNode: TransformImageNode
     private let titleNode: TextNode
     private let textNode: TextNode
-    private let topSeparatorNode: ASDisplayNode
     private let separatorNode: ASDisplayNode
     private let highlightedBackgroundNode: ASDisplayNode
     private var statusDisposable = MetaDisposable()
     private let statusNode: RadialStatusNode = RadialStatusNode(backgroundNodeColor: UIColor(white: 0.0, alpha: 0.5))
-    private var resourceStatus: MediaResourceStatus?
+    private var resourceStatus: EngineMediaResource.FetchStatus?
 
     private var currentIconImageResource: TelegramMediaResource?
     
@@ -100,9 +102,6 @@ final class VerticalListContextResultsChatInputPanelItemNode: ListViewItemNode {
     init() {
         self.titleNode = TextNode()
         self.textNode = TextNode()
-        
-        self.topSeparatorNode = ASDisplayNode()
-        self.topSeparatorNode.isLayerBacked = true
         
         self.separatorNode = ASDisplayNode()
         self.separatorNode.isLayerBacked = true
@@ -123,9 +122,8 @@ final class VerticalListContextResultsChatInputPanelItemNode: ListViewItemNode {
         self.iconImageNode.isLayerBacked = !smartInvertColorsEnabled()
         self.iconImageNode.displaysAsynchronously = false
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
         
-        self.addSubnode(self.topSeparatorNode)
         self.addSubnode(self.separatorNode)
         
         self.addSubnode(self.iconImageNode)
@@ -138,10 +136,10 @@ final class VerticalListContextResultsChatInputPanelItemNode: ListViewItemNode {
         statusDisposable.dispose()
     }
     
-    override public func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, previousItem: ListViewItem?, nextItem: ListViewItem?) {
+    override public func layoutForParams(_ params: ListViewItemLayoutParams, item: ListViewItem, neighbors: ListViewItemNeighbors) {
         if let item = item as? VerticalListContextResultsChatInputPanelItem {
             let doLayout = self.asyncLayout()
-            let merged = (top: previousItem != nil, bottom: nextItem != nil)
+            let merged = (top: neighbors.previous != nil, bottom: neighbors.next != nil)
             let (layout, apply) = doLayout(item, params, merged.top, merged.bottom)
             self.contentSize = layout.contentSize
             self.insets = layout.insets
@@ -167,7 +165,7 @@ final class VerticalListContextResultsChatInputPanelItemNode: ListViewItemNode {
             var iconText: NSAttributedString?
             
             var updateIconImageSignal: Signal<(TransformImageArguments) -> DrawingContext?, NoError>?
-            var updatedStatusSignal: Signal<MediaResourceStatus, NoError>?
+            var updatedStatusSignal: Signal<EngineMediaResource.FetchStatus, NoError>?
 
             if let title = item.result.title {
                 titleString = NSAttributedString(string: title, font: titleFont, textColor: item.theme.list.itemPrimaryTextColor)
@@ -232,8 +230,7 @@ final class VerticalListContextResultsChatInputPanelItemNode: ListViewItemNode {
                 let arguments = TransformImageArguments(corners: imageCorners, imageSize: iconSize, boundingSize: boundingSize, intrinsicInsets: UIEdgeInsets())
                 iconImageApply = iconImageLayout(arguments)
                 
-                updatedStatusSignal = item.account.postbox.mediaBox.resourceStatus(imageResource)
-
+                updatedStatusSignal = item.engine.resources.status(resource: EngineMediaResource(imageResource))
             }
             
             var updatedIconImageResource = false
@@ -248,11 +245,11 @@ final class VerticalListContextResultsChatInputPanelItemNode: ListViewItemNode {
             if updatedIconImageResource {
                 if let imageResource = imageResource {
                     if let stickerFile = stickerFile {
-                        updateIconImageSignal = chatMessageSticker(account: item.account, file: stickerFile, small: false, fetched: true)
+                        updateIconImageSignal = chatMessageSticker(account: item.engine.account, userLocation: .other, file: stickerFile, small: false, fetched: true)
                     } else {
-                        let tmpRepresentation = TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 55, height: 55), resource: imageResource, progressiveSizes: [], immediateThumbnailData: nil)
-                        let tmpImage = TelegramMediaImage(imageId: MediaId(namespace: 0, id: 0), representations: [tmpRepresentation], immediateThumbnailData: nil, reference: nil, partialReference: nil, flags: [])
-                        updateIconImageSignal = chatWebpageSnippetPhoto(account: item.account, photoReference: .standalone(media: tmpImage))
+                        let tmpRepresentation = TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 55, height: 55), resource: imageResource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false)
+                        let tmpImage = TelegramMediaImage(imageId: EngineMedia.Id(namespace: 0, id: 0), representations: [tmpRepresentation], immediateThumbnailData: nil, reference: nil, partialReference: nil, flags: [])
+                        updateIconImageSignal = chatWebpageSnippetPhoto(account: item.engine.account, userLocation: .other, photoReference: .standalone(media: tmpImage))
                     }
                 } else {
                     updateIconImageSignal = .complete()
@@ -281,13 +278,11 @@ final class VerticalListContextResultsChatInputPanelItemNode: ListViewItemNode {
             
             let nodeLayout = ListViewItemNodeLayout(contentSize: CGSize(width: params.width, height: VerticalListContextResultsChatInputPanelItemNode.itemHeight), insets: UIEdgeInsets())
             
-            return (nodeLayout, { _ in
+            return (nodeLayout, { animation in
                 if let strongSelf = self {
                     strongSelf.item = item
                     
                     strongSelf.separatorNode.backgroundColor = item.theme.list.itemPlainSeparatorColor
-                    strongSelf.topSeparatorNode.backgroundColor = item.theme.list.itemPlainSeparatorColor
-                    strongSelf.backgroundColor = item.theme.list.plainBackgroundColor
                     strongSelf.highlightedBackgroundNode.backgroundColor = item.theme.list.itemHighlightedBackgroundColor
                     
                     let _ = titleApply()
@@ -339,11 +334,9 @@ final class VerticalListContextResultsChatInputPanelItemNode: ListViewItemNode {
                         }
                     }
                     
-                    strongSelf.topSeparatorNode.isHidden = mergedTop
                     strongSelf.separatorNode.isHidden = !mergedBottom
                     
-                    strongSelf.topSeparatorNode.frame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: params.width, height: UIScreenPixel))
-                    strongSelf.separatorNode.frame = CGRect(origin: CGPoint(x: leftInset, y: nodeLayout.contentSize.height - UIScreenPixel), size: CGSize(width: params.width - leftInset, height: UIScreenPixel))
+                    animation.animator.updateFrame(layer: strongSelf.separatorNode.layer, frame: CGRect(origin: CGPoint(x: leftInset, y: nodeLayout.contentSize.height - UIScreenPixel), size: CGSize(width: params.width - leftInset, height: UIScreenPixel)), completion: nil)
                     
                     strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: params.width, height: nodeLayout.size.height + UIScreenPixel))
                     
@@ -351,7 +344,7 @@ final class VerticalListContextResultsChatInputPanelItemNode: ListViewItemNode {
                     let progressFrame = CGRect(origin: CGPoint(x: iconFrame.minX + floorToScreenPixels((iconFrame.width - progressSize.width) / 2.0), y: iconFrame.minY + floorToScreenPixels((iconFrame.height - progressSize.height) / 2.0)), size: progressSize)
                     
                     if let updatedStatusSignal = updatedStatusSignal {
-                        strongSelf.statusDisposable.set((updatedStatusSignal |> deliverOnMainQueue).start(next: { [weak strongSelf] status in
+                        strongSelf.statusDisposable.set((updatedStatusSignal |> deliverOnMainQueue).startStrict(next: { [weak strongSelf] status in
                             displayLinkDispatcher.dispatch {
                                 if let strongSelf = strongSelf {
                                     strongSelf.resourceStatus = status
@@ -389,7 +382,7 @@ final class VerticalListContextResultsChatInputPanelItemNode: ListViewItemNode {
         if highlighted {
             self.highlightedBackgroundNode.alpha = 1.0
             if self.highlightedBackgroundNode.supernode == nil {
-                self.insertSubnode(self.highlightedBackgroundNode, aboveSubnode: self.separatorNode)
+                //self.insertSubnode(self.highlightedBackgroundNode, aboveSubnode: self.separatorNode)
             }
         } else {
             if self.highlightedBackgroundNode.supernode != nil {

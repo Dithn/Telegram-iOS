@@ -12,6 +12,24 @@ private let defaultOrientations: UIInterfaceOrientationMask = {
     }
 }()
 
+func getCurrentViewInterfaceOrientation(view: UIView) -> UIInterfaceOrientation {
+    var orientation: UIInterfaceOrientation = .portrait
+    if #available(iOS 13.0, *) {
+        if let window = view as? UIWindow {
+            if let windowScene = window.windowScene {
+                orientation = windowScene.interfaceOrientation
+            }
+        } else {
+            if let windowScene = view.window?.windowScene {
+                orientation = windowScene.interfaceOrientation
+            }
+        }
+    } else {
+        orientation = UIApplication.shared.statusBarOrientation
+    }
+    return orientation
+}
+
 public enum WindowUserInterfaceStyle {
     case light
     case dark
@@ -69,12 +87,13 @@ private final class WindowRootViewControllerView: UIView {
     }
 }
 
-private final class WindowRootViewController: UIViewController, UIViewControllerPreviewingDelegate {
+private final class WindowRootViewController: UIViewController {
     private var voiceOverStatusObserver: AnyObject?
     private var registeredForPreviewing = false
     
     var presentController: ((UIViewController, PresentationSurfaceLevel, Bool, (() -> Void)?) -> Void)?
-    var transitionToSize: ((CGSize, Double) -> Void)?
+    var transitionToSize: ((CGSize, Double, UIInterfaceOrientation) -> Void)?
+    var safeAreaInsetsChanged: (() -> Void)?
     
     private var _systemUserInterfaceStyle = ValuePromise<WindowUserInterfaceStyle>(ignoreRepeated: true)
     var systemUserInterfaceStyle: Signal<WindowUserInterfaceStyle, NoError> {
@@ -85,12 +104,20 @@ private final class WindowRootViewController: UIViewController, UIViewController
         didSet {
             if oldValue != self.orientations {
                 if self.orientations == .portrait {
-                    if UIDevice.current.orientation != .portrait {
+                    if #available(iOSApplicationExtension 16.0, iOS 16.0, *) {
+                        let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+                        windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait))
+                        self.setNeedsUpdateOfSupportedInterfaceOrientations()
+                    } else if UIDevice.current.orientation != .portrait {
                         let value = UIInterfaceOrientation.portrait.rawValue
                         UIDevice.current.setValue(value, forKey: "orientation")
                     }
                 } else {
-                    UIViewController.attemptRotationToDeviceOrientation()
+                    if #available(iOSApplicationExtension 16.0, iOS 16.0, *) {
+                        self.setNeedsUpdateOfSupportedInterfaceOrientations()
+                    } else {
+                        UIViewController.attemptRotationToDeviceOrientation()
+                    }
                 }
             }
         }
@@ -109,23 +136,44 @@ private final class WindowRootViewController: UIViewController, UIViewController
     var prefersOnScreenNavigationHidden: Bool = false {
         didSet {
             if oldValue != self.prefersOnScreenNavigationHidden {
-                if #available(iOSApplicationExtension 11.0, iOS 11.0, *) {
-                    self.setNeedsUpdateOfHomeIndicatorAutoHidden()
+                self.setNeedsUpdateOfHomeIndicatorAutoHidden()
+            }
+        }
+    }
+    
+    private var statusBarStyle: UIStatusBarStyle = .default
+    private var isStatusBarHidden: Bool = false
+    
+    func updateStatusBar(style: UIStatusBarStyle, isHidden: Bool, transition: ContainedViewLayoutTransition) {
+        if self.statusBarStyle != style || self.isStatusBarHidden != isHidden {
+            self.statusBarStyle = style
+            self.isStatusBarHidden = isHidden
+            
+            switch transition {
+            case .immediate:
+                self.setNeedsStatusBarAppearanceUpdate()
+            case .animated:
+                transition.animateView {
+                    self.setNeedsStatusBarAppearanceUpdate()
                 }
             }
         }
     }
     
     override var preferredStatusBarStyle: UIStatusBarStyle {
-        return .default
+        return self.statusBarStyle
     }
     
     override var prefersStatusBarHidden: Bool {
-        return false
+        return self.isStatusBarHidden
+    }
+    
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation {
+        return .fade
     }
     
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
-        return orientations
+        return self.orientations
     }
     
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -136,16 +184,11 @@ private final class WindowRootViewController: UIViewController, UIViewController
     
     init() {
         super.init(nibName: nil, bundle: nil)
-        
+                
         self.extendedLayoutIncludesOpaqueBars = true
         
-        if #available(iOSApplicationExtension 11.0, iOS 11.0, *) {
-            self.voiceOverStatusObserver = NotificationCenter.default.addObserver(forName: UIAccessibility.voiceOverStatusDidChangeNotification, object: nil, queue: OperationQueue.main, using: { [weak self] _ in
-                if let strongSelf = self {
-                    strongSelf.updatePreviewingRegistration()
-                }
-            })
-        }
+        self.voiceOverStatusObserver = NotificationCenter.default.addObserver(forName: UIAccessibility.voiceOverStatusDidChangeNotification, object: nil, queue: OperationQueue.main, using: { _ in
+        })
         
         if #available(iOS 13.0, *) {
             self._systemUserInterfaceStyle.set(WindowUserInterfaceStyle(style: self.traitCollection.userInterfaceStyle))
@@ -172,10 +215,18 @@ private final class WindowRootViewController: UIViewController, UIViewController
         return self.prefersOnScreenNavigationHidden
     }
     
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        
+        self.safeAreaInsetsChanged?()
+    }
+    
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
+        
+        let orientation = getCurrentViewInterfaceOrientation(view: self.view)
         UIView.performWithoutAnimation {
-            self.transitionToSize?(size, coordinator.transitionDuration)
+            self.transitionToSize?(size, coordinator.transitionDuration, orientation)
         }
     }
     
@@ -183,43 +234,6 @@ private final class WindowRootViewController: UIViewController, UIViewController
         self.view = WindowRootViewControllerView()
         self.view.isOpaque = false
         self.view.backgroundColor = nil
-        
-        self.updatePreviewingRegistration()
-    }
-    
-    private var previewingContext: AnyObject?
-    
-    private func updatePreviewingRegistration() {
-    }
-    
-    private weak var previousPreviewingHostView: (UIView & PreviewingHostView)?
-    
-    public func previewingContext(_ previewingContext: UIViewControllerPreviewing, viewControllerForLocation location: CGPoint) -> UIViewController? {
-        if UIAccessibility.isVoiceOverRunning {
-            return nil
-        }
-        if #available(iOSApplicationExtension 9.0, iOS 9.0, *) {
-            guard let result = self.view.hitTest(location, with: nil) else {
-                return nil
-            }
-            if let (result, resultPoint) = tracePreviewingHostView(view: result, point: self.view.convert(location, to: result)), let delegate = result.previewingDelegate {
-                self.previousPreviewingHostView = result
-                if let (controller, rect) = delegate.controllerForLocation(previewingContext.sourceView, resultPoint) {
-                    previewingContext.sourceRect = rect
-                    return controller
-                }
-            }
-        }
-        return nil
-    }
-    
-    public func previewingContext(_ previewingContext: UIViewControllerPreviewing, commit viewControllerToCommit: UIViewController) {
-        if #available(iOSApplicationExtension 9.0, iOS 9.0, *) {
-            if let previousPreviewingHostView = self.previousPreviewingHostView, let delegate = previousPreviewingHostView.previewingDelegate {
-                delegate.commitController(viewControllerToCommit)
-            }
-            self.previousPreviewingHostView = nil
-        }
     }
     
     override public func present(_ viewControllerToPresent: UIViewController, animated flag: Bool, completion: (() -> Void)? = nil) {
@@ -237,10 +251,12 @@ private final class NativeWindow: UIWindow, WindowHost {
     var addGlobalPortalHostViewImpl: ((PortalSourceView) -> Void)?
     var hitTestImpl: ((CGPoint, UIEvent?) -> UIView?)?
     var presentNativeImpl: ((UIViewController) -> Void)?
+    var motionShakeImpl: (() -> Void)?
     var invalidateDeferScreenEdgeGestureImpl: (() -> Void)?
     var invalidatePrefersOnScreenNavigationHiddenImpl: (() -> Void)?
     var invalidateSupportedOrientationsImpl: (() -> Void)?
     var cancelInteractiveKeyboardGesturesImpl: (() -> Void)?
+    var dismissedKeyboardByCurrentGestureImpl: (() -> Bool)?
     var forEachControllerImpl: (((ContainableController) -> Void) -> Void)?
     var getAccessibilityElementsImpl: (() -> [Any]?)?
     
@@ -301,10 +317,18 @@ private final class NativeWindow: UIWindow, WindowHost {
     
     override func layoutSubviews() {
         super.layoutSubviews()
-        
+
         self.layoutSubviewsEvent?()
     }
-    
+
+    override func motionEnded(_ motion: UIEvent.EventSubtype, with event: UIEvent?) {
+        super.motionEnded(motion, with: event)
+
+        if motion == .motionShake {
+            self.motionShakeImpl?()
+        }
+    }
+
     override func _update(toInterfaceOrientation arg1: Int32, duration arg2: Double, force arg3: Bool) {
         self.updateIsUpdatingOrientationLayout?(true)
         super._update(toInterfaceOrientation: arg1, duration: arg2, force: arg3)
@@ -349,6 +373,10 @@ private final class NativeWindow: UIWindow, WindowHost {
     func cancelInteractiveKeyboardGestures() {
         self.cancelInteractiveKeyboardGesturesImpl?()
     }
+
+    var dismissedKeyboardByCurrentGesture: Bool {
+        return self.dismissedKeyboardByCurrentGestureImpl?() ?? false
+    }
     
     func forEachController(_ f: (ContainableController) -> Void) {
         self.forEachControllerImpl?(f)
@@ -357,6 +385,7 @@ private final class NativeWindow: UIWindow, WindowHost {
 
 public func nativeWindowHostView() -> (UIWindow & WindowHost, WindowHostView) {
     let window = NativeWindow(frame: UIScreen.main.bounds)
+    registerMainWindowForScreenBounds(window)
     
     let rootViewController = WindowRootViewController()
     window.rootViewController = rootViewController
@@ -364,18 +393,36 @@ public func nativeWindowHostView() -> (UIWindow & WindowHost, WindowHostView) {
     rootViewController.view.frame = CGRect(origin: CGPoint(), size: window.bounds.size)
     rootViewController.viewDidAppear(false)
     
-    let hostView = WindowHostView(containerView: rootViewController.view, eventView: window, isRotating: {
-        return window.isRotating()
-    }, systemUserInterfaceStyle: rootViewController.systemUserInterfaceStyle, updateSupportedInterfaceOrientations: { orientations in
-        rootViewController.orientations = orientations
-    }, updateDeferScreenEdgeGestures: { edges in
-        rootViewController.gestureEdges = edges
-    }, updatePrefersOnScreenNavigationHidden: { value in
-        rootViewController.prefersOnScreenNavigationHidden = value
-    })
+    let hostView = WindowHostView(
+        containerView: rootViewController.view,
+        eventView: window,
+        isRotating: {
+            return window.isRotating()
+        },
+        systemUserInterfaceStyle: rootViewController.systemUserInterfaceStyle,
+        currentInterfaceOrientation: {
+            return getCurrentViewInterfaceOrientation(view: window)
+        },
+        updateSupportedInterfaceOrientations: { orientations in
+            rootViewController.orientations = orientations
+        },
+        updateDeferScreenEdgeGestures: { edges in
+            rootViewController.gestureEdges = edges
+        },
+        updatePrefersOnScreenNavigationHidden: { value in
+            rootViewController.prefersOnScreenNavigationHidden = value
+        },
+        updateStatusBar: { statusBarStyle, isStatusBarHidden, transition in
+            rootViewController.updateStatusBar(style: statusBarStyle, isHidden: isStatusBarHidden, transition: transition)
+        }
+    )
     
-    rootViewController.transitionToSize = { [weak hostView] size, duration in
-        hostView?.updateSize?(size, duration)
+    rootViewController.transitionToSize = { [weak hostView] size, duration, orientation in
+        hostView?.updateSize?(size, duration, orientation)
+    }
+    
+    rootViewController.safeAreaInsetsChanged = { [weak hostView] in
+        hostView?.updateSystemInsets?()
     }
     
     window.updateSize = { _ in
@@ -408,7 +455,11 @@ public func nativeWindowHostView() -> (UIWindow & WindowHost, WindowHostView) {
     window.presentNativeImpl = { [weak hostView] controller in
         hostView?.presentNative?(controller)
     }
-    
+
+    window.motionShakeImpl = { [weak hostView] in
+        hostView?.motionShake?()
+    }
+
     hostView.nativeController = { [weak rootViewController] in
         return rootViewController
     }
@@ -431,6 +482,10 @@ public func nativeWindowHostView() -> (UIWindow & WindowHost, WindowHostView) {
     
     window.cancelInteractiveKeyboardGesturesImpl = { [weak hostView] in
         hostView?.cancelInteractiveKeyboardGestures?()
+    }
+
+    window.dismissedKeyboardByCurrentGestureImpl = { [weak hostView] in
+        return hostView?.dismissedKeyboardByCurrentGesture?() ?? false
     }
     
     window.forEachControllerImpl = { [weak hostView] f in

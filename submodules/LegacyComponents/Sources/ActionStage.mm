@@ -1,12 +1,12 @@
-#import "ActionStage.h"
+#import <LegacyComponents/ActionStage.h>
 
 #import <SSignalKit/SSignalKit.h>
 
 #import "LegacyComponentsInternal.h"
 
-#import "ASActor.h"
+#import <LegacyComponents/ASActor.h>
 
-#import <libkern/OSAtomic.h>
+#import <os/lock.h>
 
 #include <vector>
 #include <unordered_map>
@@ -17,8 +17,8 @@ static dispatch_queue_t mainGraphQueue = nil;
 static dispatch_queue_t globalGraphQueue = nil;
 static dispatch_queue_t highPriorityGraphQueue = nil;
 
-static volatile OSSpinLock removeWatcherRequestsLock = OS_SPINLOCK_INIT;
-static volatile OSSpinLock removeWatcherFromPathRequestsLock = OS_SPINLOCK_INIT;
+static os_unfair_lock removeWatcherRequestsLock = OS_UNFAIR_LOCK_INIT;
+static os_unfair_lock removeWatcherFromPathRequestsLock = OS_UNFAIR_LOCK_INIT;
 
 @interface ActionStage ()
 {
@@ -244,7 +244,13 @@ ActionStage *ActionStageInstance()
         return @"";
     
     int length = (int)path.length;
+
+#pragma clang diagnostic push
+#if defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 180500
+#pragma clang diagnostic ignored "-Wvla-cxx-extension"
+#endif
     unichar newPath[path.length];
+#pragma clang diagnostic pop
     int newLength = 0;
     
     SEL sel = @selector(characterAtIndex:);
@@ -790,11 +796,11 @@ ActionStage *ActionStageInstance()
     }
     
     bool alreadyExecuting = false;
-    OSSpinLockLock(&removeWatcherRequestsLock);
+    os_unfair_lock_lock(&removeWatcherRequestsLock);
     if (!_removeWatcherRequests.empty())
         alreadyExecuting = true;
     _removeWatcherRequests.push_back(watcherGraphHandle);
-    OSSpinLockUnlock(&removeWatcherRequestsLock);
+    os_unfair_lock_unlock(&removeWatcherRequestsLock);
     
     if (alreadyExecuting && ![self isCurrentQueueStageQueue])
         return;
@@ -803,10 +809,10 @@ ActionStage *ActionStageInstance()
     {
         std::vector<ASHandle *> removeWatchers;
         
-        OSSpinLockLock(&removeWatcherRequestsLock);
+        os_unfair_lock_lock(&removeWatcherRequestsLock);
         removeWatchers.insert(removeWatchers.begin(), _removeWatcherRequests.begin(), _removeWatcherRequests.end());
         _removeWatcherRequests.clear();
-        OSSpinLockUnlock(&removeWatcherRequestsLock);
+        os_unfair_lock_unlock(&removeWatcherRequestsLock);
         
         for (std::vector<ASHandle *>::iterator it = removeWatchers.begin(); it != removeWatchers.end(); it++)
         {
@@ -894,11 +900,11 @@ ActionStage *ActionStageInstance()
     }
     
     bool alreadyExecuting = false;
-    OSSpinLockLock(&removeWatcherFromPathRequestsLock);
+    os_unfair_lock_lock(&removeWatcherFromPathRequestsLock);
     if (!_removeWatcherFromPathRequests.empty())
         alreadyExecuting = true;
     _removeWatcherFromPathRequests.push_back(std::pair<ASHandle *, NSString *>(watcherGraphHandle, watcherPath));
-    OSSpinLockUnlock(&removeWatcherFromPathRequestsLock);
+    os_unfair_lock_unlock(&removeWatcherFromPathRequestsLock);
     
     if (alreadyExecuting && ![self isCurrentQueueStageQueue])
         return;
@@ -907,10 +913,10 @@ ActionStage *ActionStageInstance()
     {
         std::vector<std::pair<ASHandle *, NSString *> > removeWatchersFromPath;
         
-        OSSpinLockLock(&removeWatcherFromPathRequestsLock);
+        os_unfair_lock_lock(&removeWatcherFromPathRequestsLock);
         removeWatchersFromPath.insert(removeWatchersFromPath.begin(), _removeWatcherFromPathRequests.begin(), _removeWatcherFromPathRequests.end());
         _removeWatcherFromPathRequests.clear();
-        OSSpinLockUnlock(&removeWatcherFromPathRequestsLock);
+        os_unfair_lock_unlock(&removeWatcherFromPathRequestsLock);
         
         if (removeWatchersFromPath.size() > 1)
         {
@@ -1189,8 +1195,7 @@ ActionStage *ActionStageInstance()
         {
             TGLegacyLog(@"Will cancel request to \"%@\" in %f s", path, cancelTimeout);
             NSDictionary *cancelDict = [NSDictionary dictionaryWithObjectsAndKeys:path, @"path", [NSNumber numberWithInt:0], @"type", nil];
-            STimer *timer = [[STimer alloc] initWithTimeout:cancelTimeout repeat:false completion:^
-            {
+            STimer *timer = [[STimer alloc] initWithTimeout:cancelTimeout repeat:false completion:^(__unused STimer *timer) {
                 [self performCancelRequest:cancelDict];
             } nativeQueue:[ActionStageInstance() globalStageDispatchQueue]];
             

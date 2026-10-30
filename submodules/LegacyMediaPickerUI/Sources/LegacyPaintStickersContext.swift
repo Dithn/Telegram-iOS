@@ -1,4 +1,5 @@
 import LegacyComponents
+import UIKit
 import Display
 import Postbox
 import SwiftSignalKit
@@ -8,6 +9,13 @@ import AnimatedStickerNode
 import TelegramAnimatedStickerNode
 import YuvConversion
 import StickerResources
+import SolidRoundedButtonNode
+import MediaEditor
+import DrawingUI
+import TelegramPresentationData
+import ContextUI
+import AnimatedCountLabelNode
+import CoreMedia
 
 protocol LegacyPaintEntity {
     var position: CGPoint { get }
@@ -19,7 +27,7 @@ protocol LegacyPaintEntity {
     func image(for time: CMTime, fps: Int, completion: @escaping (CIImage?) -> Void)
 }
 
-private func render(width: Int, height: Int, bytesPerRow: Int, data: Data, type: AnimationRendererFrameType) -> CIImage? {
+private func render(width: Int, height: Int, bytesPerRow: Int, data: Data, type: AnimationRendererFrameType, tintColor: UIColor?) -> CIImage? {
     let calculatedBytesPerRow = (4 * Int(width) + 31) & (~31)
     assert(bytesPerRow == calculatedBytesPerRow)
     
@@ -44,7 +52,10 @@ private func render(width: Int, height: Int, bytesPerRow: Int, data: Data, type:
         }
     })
 
-    if let image = image {
+    if var image = image {
+        if let tintColor, let tintedImage = generateTintedImage(image: image, color: tintColor) {
+            image = tintedImage
+        }
         return CIImage(image: image)
     } else {
         return nil
@@ -61,7 +72,7 @@ private class LegacyPaintStickerEntity: LegacyPaintEntity {
     }
     
     var angle: CGFloat {
-        return self.entity.angle
+        return self.entity.rotation
     }
     
     var baseSize: CGSize? {
@@ -72,9 +83,9 @@ private class LegacyPaintStickerEntity: LegacyPaintEntity {
         return self.entity.mirrored
     }
     
-    let account: Account
-    let file: TelegramMediaFile
-    let entity: TGPhotoPaintStickerEntity
+    let postbox: Postbox
+    let file: TelegramMediaFile?
+    let entity: DrawingStickerEntity
     let animated: Bool
     let durationPromise = Promise<Double>()
     
@@ -90,21 +101,22 @@ private class LegacyPaintStickerEntity: LegacyPaintEntity {
     
     let imagePromise = Promise<UIImage>()
     
-    init?(account: Account, entity: TGPhotoPaintStickerEntity) {
-        let decoder = PostboxDecoder(buffer: MemoryBuffer(data: entity.document))
-        if let file = decoder.decodeRootObject() as? TelegramMediaFile {
-            self.account = account
-            self.entity = entity
+    init(postbox: Postbox, entity: DrawingStickerEntity) {
+        self.postbox = postbox
+        self.entity = entity
+        self.animated = entity.isAnimated
+
+        switch entity.content {
+        case let .file(fileReference, _):
+            let file = fileReference.media
             self.file = file
-            self.animated = file.isAnimatedSticker || file.isVideoSticker
-            
-            if file.isAnimatedSticker || file.isVideoSticker {
-                self.source = AnimatedStickerResourceSource(account: account, resource: file.resource, isVideo: file.isVideoSticker)
+            if file.isAnimatedSticker || file.isVideoSticker || file.mimeType == "video/webm" {
+                self.source = AnimatedStickerResourceSource(postbox: postbox, resource: file.resource, isVideo: file.isVideoSticker || file.mimeType == "video/webm")
                 if let source = self.source {
-                    let dimensions = self.file.dimensions ?? PixelDimensions(width: 512, height: 512)
+                    let dimensions = file.dimensions ?? PixelDimensions(width: 512, height: 512)
                     let fittedDimensions = dimensions.cgSize.aspectFitted(CGSize(width: 384, height: 384))
                     self.disposables.add((source.cachedDataPath(width: Int(fittedDimensions.width), height: Int(fittedDimensions.height))
-                        |> deliverOn(self.queue)).start(next: { [weak self] path, complete in
+                    |> deliverOn(self.queue)).start(next: { [weak self] path, complete in
                         if let strongSelf = self, complete {
                             if let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: [.mappedRead]) {
                                 let queue = strongSelf.queue
@@ -126,7 +138,7 @@ private class LegacyPaintStickerEntity: LegacyPaintEntity {
                     }))
                 }
             } else {
-                self.disposables.add((chatMessageSticker(account: self.account, file: self.file, small: false, fetched: true, onlyFullSize: true, thumbnail: false, synchronousLoad: false)
+                self.disposables.add((chatMessageSticker(postbox: self.postbox, userLocation: .other, file: file, small: false, fetched: true, onlyFullSize: true, thumbnail: false, synchronousLoad: false)
                 |> deliverOn(self.queue)).start(next: { [weak self] generator in
                     if let strongSelf = self {
                         let context = generator(TransformImageArguments(corners: ImageCorners(), imageSize: entity.baseSize, boundingSize: entity.baseSize, intrinsicInsets: UIEdgeInsets()))
@@ -137,8 +149,11 @@ private class LegacyPaintStickerEntity: LegacyPaintEntity {
                     }
                 }))
             }
-        } else {
-            return nil
+        case let .image(image, _):
+            self.file = nil
+            self.imagePromise.set(.single(image))
+        case .animatedImage, .video, .dualVideoReference, .message, .gift:
+            self.file = nil
         }
     }
     
@@ -156,6 +171,11 @@ private class LegacyPaintStickerEntity: LegacyPaintEntity {
     func image(for time: CMTime, fps: Int, completion: @escaping (CIImage?) -> Void) {
         if self.animated {
             let currentTime = CMTimeGetSeconds(time)
+            
+            var tintColor: UIColor?
+            if let file = self.file, file.isCustomTemplateEmoji {
+                tintColor = .white
+            }
             
             self.disposables.add((self.frameQueue.get()
             |> take(1)
@@ -201,7 +221,7 @@ private class LegacyPaintStickerEntity: LegacyPaintEntity {
                         return frame
                     }
                     if let frame = maybeFrame {
-                        let image = render(width: frame.width, height: frame.height, bytesPerRow: frame.bytesPerRow, data: frame.data, type: frame.type)
+                        let image = render(width: frame.width, height: frame.height, bytesPerRow: frame.bytesPerRow, data: frame.data, type: frame.type, tintColor: tintColor)
                         completion(image)
                         strongSelf.cachedCIImage = image
                     } else {
@@ -215,7 +235,12 @@ private class LegacyPaintStickerEntity: LegacyPaintEntity {
                 }
             }))
         } else {
-            self.queue.async {
+            self.queue.async { [weak self] in
+                guard let self else {
+                    completion(nil)
+                    return
+                }
+
                 var image: CIImage?
                 if let cachedImage = self.cachedCIImage {
                     image = cachedImage
@@ -245,7 +270,7 @@ private class LegacyPaintTextEntity: LegacyPaintEntity {
     }
 
     var angle: CGFloat {
-        return self.entity.angle
+        return self.entity.rotation
     }
     
     var baseSize: CGSize? {
@@ -256,9 +281,129 @@ private class LegacyPaintTextEntity: LegacyPaintEntity {
         return false
     }
 
-    let entity: TGPhotoPaintTextEntity
+    let entity: DrawingTextEntity
 
-    init(entity: TGPhotoPaintTextEntity) {
+    init(entity: DrawingTextEntity) {
+        self.entity = entity
+    }
+
+    var cachedCIImage: CIImage?
+    func image(for time: CMTime, fps: Int, completion: @escaping (CIImage?) -> Void) {
+        var image: CIImage?
+        if let cachedImage = self.cachedCIImage {
+            image = cachedImage
+        } else if let renderImage = entity.renderImage {
+            image = CIImage(image: renderImage)
+            self.cachedCIImage = image
+        }
+        completion(image)
+    }
+}
+
+private class LegacyPaintSimpleShapeEntity: LegacyPaintEntity {
+    var position: CGPoint {
+        return self.entity.position
+    }
+
+    var scale: CGFloat {
+        return 1.0
+    }
+
+    var angle: CGFloat {
+        return self.entity.rotation
+    }
+    
+    var baseSize: CGSize? {
+        return self.entity.size
+    }
+    
+    var mirrored: Bool {
+        return false
+    }
+
+    let entity: DrawingSimpleShapeEntity
+
+    init(entity: DrawingSimpleShapeEntity) {
+        self.entity = entity
+    }
+
+    var cachedCIImage: CIImage?
+    func image(for time: CMTime, fps: Int, completion: @escaping (CIImage?) -> Void) {
+        var image: CIImage?
+        if let cachedImage = self.cachedCIImage {
+            image = cachedImage
+        } else if let renderImage = entity.renderImage {
+            image = CIImage(image: renderImage)
+            self.cachedCIImage = image
+        }
+        completion(image)
+    }
+}
+
+private class LegacyPaintBubbleEntity: LegacyPaintEntity {
+    var position: CGPoint {
+        return self.entity.position
+    }
+
+    var scale: CGFloat {
+        return 1.0
+    }
+
+    var angle: CGFloat {
+        return self.entity.rotation
+    }
+    
+    var baseSize: CGSize? {
+        return self.entity.size
+    }
+    
+    var mirrored: Bool {
+        return false
+    }
+
+    let entity: DrawingBubbleEntity
+
+    init(entity: DrawingBubbleEntity) {
+        self.entity = entity
+    }
+
+    var cachedCIImage: CIImage?
+    func image(for time: CMTime, fps: Int, completion: @escaping (CIImage?) -> Void) {
+        var image: CIImage?
+        if let cachedImage = self.cachedCIImage {
+            image = cachedImage
+        } else if let renderImage = entity.renderImage {
+            image = CIImage(image: renderImage)
+            self.cachedCIImage = image
+        }
+        completion(image)
+    }
+}
+
+private class LegacyPaintVectorEntity: LegacyPaintEntity {
+    var position: CGPoint {
+        return CGPoint(x: self.entity.drawingSize.width * 0.5, y: self.entity.drawingSize.height * 0.5)
+    }
+
+    var scale: CGFloat {
+        return 1.0
+    }
+
+    var angle: CGFloat {
+        return 0.0
+    }
+    
+    var baseSize: CGSize? {
+        return self.entity.drawingSize
+    }
+    
+    var mirrored: Bool {
+        return false
+    }
+
+    let entity: DrawingVectorEntity
+
+    init(entity: DrawingVectorEntity) {
         self.entity = entity
     }
 
@@ -276,31 +421,46 @@ private class LegacyPaintTextEntity: LegacyPaintEntity {
 }
 
 public final class LegacyPaintEntityRenderer: NSObject, TGPhotoPaintEntityRenderer {
-    private let account: Account?
+    private let postbox: Postbox?
     private let queue = Queue()
 
     private let entities: [LegacyPaintEntity]
     private let originalSize: CGSize
     private let cropRect: CGRect?
     
-    public init(account: Account?, adjustments: TGMediaEditAdjustments) {
-        self.account = account
+    private let isAvatar: Bool
+    
+    public init(postbox: Postbox?, adjustments: TGMediaEditAdjustments) {
+        self.postbox = postbox
         self.originalSize = adjustments.originalSize
         self.cropRect = adjustments.cropRect.isEmpty ? nil : adjustments.cropRect
+        self.isAvatar = ((adjustments as? TGVideoEditAdjustments)?.documentId ?? 0) != 0
         
-        var entities: [LegacyPaintEntity] = []
-        if let paintingData = adjustments.paintingData, let paintingEntities = paintingData.entities {
-            for paintingEntity in paintingEntities {
-                if let sticker = paintingEntity as? TGPhotoPaintStickerEntity {
-                    if let account = account, let entity = LegacyPaintStickerEntity(account: account, entity: sticker) {
-                        entities.append(entity)
+        var renderEntities: [LegacyPaintEntity] = []
+        if let paintingData = adjustments.paintingData, let entitiesData = paintingData.entitiesData {
+            let entities = decodeDrawingEntities(data: entitiesData)
+            for entity in entities {
+                if let sticker = entity as? DrawingStickerEntity, let postbox {
+                    renderEntities.append(LegacyPaintStickerEntity(postbox: postbox, entity: sticker))
+                } else if let text = entity as? DrawingTextEntity {
+                    renderEntities.append(LegacyPaintTextEntity(entity: text))
+                    if let renderSubEntities = text.renderSubEntities, let postbox {
+                        for entity in renderSubEntities {
+                            if let entity = entity as? DrawingStickerEntity {
+                                renderEntities.append(LegacyPaintStickerEntity(postbox: postbox, entity: entity))
+                            }
+                        }
                     }
-                } else if let text = paintingEntity as? TGPhotoPaintTextEntity {
-                    entities.append(LegacyPaintTextEntity(entity: text))
+                } else if let simpleShape = entity as? DrawingSimpleShapeEntity {
+                    renderEntities.append(LegacyPaintSimpleShapeEntity(entity: simpleShape))
+                } else if let bubble = entity as? DrawingBubbleEntity {
+                    renderEntities.append(LegacyPaintBubbleEntity(entity: bubble))
+                } else if let vector = entity as? DrawingVectorEntity {
+                    renderEntities.append(LegacyPaintVectorEntity(entity: vector))
                 }
             }
         }
-        self.entities = entities
+        self.entities = renderEntities
         
         super.init()
     }
@@ -317,7 +477,7 @@ public final class LegacyPaintEntityRenderer: NSObject, TGPhotoPaintEntityRender
             }
         }
         
-        func gcd(_ a: Int32, _ b: Int32) -> Int32 {
+        func gcd(_ a: Int64, _ b: Int64) -> Int64 {
             let remainder = a % b
             if remainder != 0 {
                 return gcd(b, remainder)
@@ -326,17 +486,19 @@ public final class LegacyPaintEntityRenderer: NSObject, TGPhotoPaintEntityRender
             }
         }
         
-        func lcm(_ x: Int32, _ y: Int32) -> Int32 {
+        func lcm(_ x: Int64, _ y: Int64) -> Int64 {
+            let x = max(x, 1)
+            let y = max(y, 1)
             return x / gcd(x, y) * y
         }
-        
+                
         return combineLatest(durations)
         |> map { durations in
             var result: Double
             let minDuration: Double = 3.0
             if durations.count > 1 {
                 let reduced = durations.reduce(1.0) { lhs, rhs -> Double in
-                    return Double(lcm(Int32(lhs * 10.0), Int32(rhs * 10.0)))
+                    return Double(lcm(Int64(lhs * 100.0), Int64(rhs * 100.0)))
                 }
                 result = min(6.0, Double(reduced) / 10.0)
             } else if let duration = durations.first {
@@ -344,7 +506,7 @@ public final class LegacyPaintEntityRenderer: NSObject, TGPhotoPaintEntityRender
             } else {
                 result = minDuration
             }
-            if result < minDuration {
+            if result < minDuration && !self.isAvatar {
                 if result > 0 {
                     result = result * ceil(minDuration / result)
                 } else {
@@ -355,14 +517,14 @@ public final class LegacyPaintEntityRenderer: NSObject, TGPhotoPaintEntityRender
         }
     }
     
-    public func entities(for time: CMTime, fps: Int, size: CGSize, completion: (([CIImage]?) -> Void)!) {
+    public func entities(for time: CMTime, fps: Int, size: CGSize, completion: @escaping ([CIImage]) -> Void) {
         let entities = self.entities
         let maxSide = max(size.width, size.height)
         let paintingScale = maxSide / 1920.0
         
         self.queue.async {
             if entities.isEmpty {
-                completion(nil)
+                completion([])
             } else {
                 let count = Atomic<Int>(value: 1)
                 let images = Atomic<[(CIImage, Int)]>(value: [])
@@ -392,7 +554,7 @@ public final class LegacyPaintEntityRenderer: NSObject, TGPhotoPaintEntityRender
                             }
                         
                             transform = CGAffineTransform(translationX: entity.position.x * paintingScale, y: size.height - entity.position.y * paintingScale)
-                            transform = transform.rotated(by: CGFloat.pi * 2 - entity.angle)
+                            transform = transform.rotated(by: CGFloat.pi * 2.0 - entity.angle)
                             transform = transform.scaledBy(x: scale, y: scale)
                             if entity.mirrored {
                                 transform = transform.scaledBy(x: -1.0, y: 1.0)
@@ -415,61 +577,274 @@ public final class LegacyPaintEntityRenderer: NSObject, TGPhotoPaintEntityRender
     }
 }
 
-public final class LegacyPaintStickersContext: NSObject, TGPhotoPaintStickersContext {
-    public var captionPanelView: (() -> TGCaptionPanelView?)!
-    public var presentStickersController: ((((Any?, Bool, UIView?, CGRect) -> Void)?) -> TGPhotoPaintStickersScreen?)!
-    
-    private let context: AccountContext
-    
-    public init(context: AccountContext) {
-        self.context = context
-    }
-    
-    public func documentId(forDocument document: Any!) -> Int64 {
-        if let data = document as? Data{
-            let decoder = PostboxDecoder(buffer: MemoryBuffer(data: data))
-            if let file = decoder.decodeRootObject() as? TelegramMediaFile {
-                return file.fileId.id
-            } else {
-                return 0
-            }
-        } else {
-            return 0
-        }
-    }
-    
-    public func maskDescription(forDocument document: Any!) -> TGStickerMaskDescription? {
-        if let data = document as? Data{
-            let decoder = PostboxDecoder(buffer: MemoryBuffer(data: data))
-            if let file = decoder.decodeRootObject() as? TelegramMediaFile {
-                for attribute in file.attributes {
-                    if case let .Sticker(_, _, maskData) = attribute {
-                        if let maskData = maskData {
-                            return TGStickerMaskDescription(n: maskData.n, point: CGPoint(x: maskData.x, y: maskData.y), zoom: CGFloat(maskData.zoom))
-                        } else {
-                            return nil
-                        }
-                    }
-                }
-                return nil
-            } else {
-                return nil
-            }
-        } else {
-            return nil
-        }
+public typealias LegacyMediaPickerSendActionMenuPresenter = (
+    UIView,
+    Bool,
+    Bool,
+    Bool,
+    Bool,
+    Bool,
+    @escaping () -> Void,
+    @escaping () -> Void,
+    @escaping () -> Void,
+    @escaping () -> Void
+) -> Bool
+
+private final class LegacyMediaPickerSendActionMenuReferenceContentSource: ContextReferenceContentSource {
+    private weak var sourceView: UIView?
+
+    init(sourceView: UIView) {
+        self.sourceView = sourceView
     }
 
-    public func stickerView(forDocument document: Any!) -> (UIView & TGPhotoPaintStickerRenderView)! {
-        if let data = document as? Data{
-            let decoder = PostboxDecoder(buffer: MemoryBuffer(data: data))
-            if let file = decoder.decodeRootObject() as? TelegramMediaFile {
-                return LegacyPaintStickerView(context: self.context, file: file)
-            } else {
-                return nil
-            }
-        } else {
+    func transitionInfo() -> ContextControllerReferenceViewInfo? {
+        guard let sourceView = self.sourceView else {
             return nil
         }
+        return ContextControllerReferenceViewInfo(referenceView: sourceView, contentAreaInScreenSpace: mainWindowScreenBounds, actionsPosition: .top)
     }
 }
+
+public func makeLegacyMediaPickerSendActionMenuPresenter(
+    context: AccountContext,
+    presentationData: PresentationData? = nil,
+    presentInGlobalOverlay: ((ViewController) -> Void)? = nil
+) -> LegacyMediaPickerSendActionMenuPresenter {
+    return { sourceView, canSendSilently, canSendWhenOnline, canSchedule, reminder, hasTimer, sendSilently, sendWhenOnline, schedule, sendWithTimer in
+        guard sourceView.window != nil else {
+            return false
+        }
+
+        let presentationData = (presentationData ?? context.sharedContext.currentPresentationData.with { $0 }).withUpdated(theme: defaultDarkPresentationTheme)
+        var items: [ContextMenuItem] = []
+
+        if canSendSilently {
+            items.append(.action(ContextMenuActionItem(text: presentationData.strings.Conversation_SendMessage_SendSilently, icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Menu/SilentIcon"), color: theme.contextMenu.primaryColor)
+            }, action: { _, f in
+                f(.default)
+                sendSilently()
+            })))
+        }
+
+        if canSendWhenOnline {
+            items.append(.action(ContextMenuActionItem(text: presentationData.strings.Conversation_SendMessage_SendWhenOnline, icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Menu/WhenOnlineIcon"), color: theme.contextMenu.primaryColor)
+            }, action: { _, f in
+                f(.default)
+                sendWhenOnline()
+            })))
+        }
+
+        if canSchedule {
+            items.append(.action(ContextMenuActionItem(text: reminder ? presentationData.strings.Conversation_SendMessage_SetReminder : presentationData.strings.Conversation_SendMessage_ScheduleMessage, icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Menu/ScheduleIcon"), color: theme.contextMenu.primaryColor)
+            }, action: { _, f in
+                f(.default)
+                schedule()
+            })))
+        }
+
+        if hasTimer {
+            items.append(.action(ContextMenuActionItem(text: presentationData.strings.Conversation_Timer_Send, icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Timer"), color: theme.contextMenu.primaryColor)
+            }, action: { _, f in
+                f(.default)
+                sendWithTimer()
+            })))
+        }
+
+        guard !items.isEmpty else {
+            return false
+        }
+
+        let contextController = makeContextController(
+            presentationData: presentationData,
+            source: .reference(LegacyMediaPickerSendActionMenuReferenceContentSource(sourceView: sourceView)),
+            items: .single(ContextController.Items(content: .list(items))),
+            gesture: nil
+        )
+        if let presentInGlobalOverlay {
+            presentInGlobalOverlay(contextController)
+        } else if let mainWindow = context.sharedContext.mainWindow {
+            mainWindow.presentInGlobalOverlay(contextController)
+        } else {
+            context.sharedContext.presentGlobalController(contextController, nil)
+        }
+        return true
+    }
+}
+
+public final class LegacyPaintStickersContext: NSObject, TGPhotoPaintStickersContext {
+    public var captionPanelView: (() -> TGCaptionPanelView?)?
+    public var livePhotoButton: (() -> TGLivePhotoButton?)?
+    public var photoToolbarView: ((TGPhotoEditorBackButton, TGPhotoEditorDoneButton, Bool, Bool) -> (UIView & TGPhotoToolbarViewProtocol)?)?
+    public var presentMediaPickerSendActionMenu: LegacyMediaPickerSendActionMenuPresenter?
+    public var editCover: ((CGSize, @escaping (UIImage) -> Void) -> Void)?
+
+    private let context: AccountContext
+
+    public init(context: AccountContext) {
+        self.context = context
+        super.init()
+
+        self.presentMediaPickerSendActionMenu = makeLegacyMediaPickerSendActionMenuPresenter(context: context)
+    }
+    
+    class LegacyDrawingAdapter: NSObject, TGPhotoDrawingAdapter {
+        let drawingView: TGPhotoDrawingView
+        let drawingEntitiesView: TGPhotoDrawingEntitiesView
+        let selectionContainerView: UIView
+        let contentWrapperView: UIView
+        let interfaceController: TGPhotoDrawingInterfaceController
+        
+        init(context: AccountContext, size: CGSize, originalSize: CGSize, isVideo: Bool, isAvatar: Bool, entitiesView: (UIView & TGPhotoDrawingEntitiesView)?) {
+            let interfaceController = DrawingScreen(context: context, size: size, originalSize: originalSize, isVideo: isVideo, isAvatar: isAvatar, drawingView: nil, entitiesView: entitiesView, selectionContainerView: nil)
+            self.interfaceController = interfaceController
+            self.drawingView = interfaceController.drawingView
+            self.drawingEntitiesView = interfaceController.entitiesView
+            self.selectionContainerView = interfaceController.selectionContainerView
+            self.contentWrapperView = interfaceController.contentWrapperView
+            
+            super.init()
+        }
+    }
+    
+    public func drawingAdapter(_ size: CGSize, originalSize: CGSize, isVideo: Bool, isAvatar: Bool, entitiesView: (UIView & TGPhotoDrawingEntitiesView)?) -> TGPhotoDrawingAdapter {
+        return LegacyDrawingAdapter(context: self.context, size: size, originalSize: originalSize, isVideo: isVideo, isAvatar: isAvatar, entitiesView: entitiesView)
+    }
+    
+    public func solidRoundedButton(_ title: String, action: @escaping () -> Void) -> UIView & TGPhotoSolidRoundedButtonView {
+        let theme = SolidRoundedButtonTheme(theme: self.context.sharedContext.currentPresentationData.with { $0 }.theme)
+        let button = SolidRoundedButtonView(title: title, theme: theme, height: 50.0, cornerRadius: 10.0)
+        button.pressed = action
+        return button
+    }
+    
+    public func sendStarsButtonAction(_ action: @escaping () -> Void) -> any UIView & TGPhotoSendStarsButtonView {
+        let button = SendStarsButtonView()
+        button.pressed = action
+        return button
+    }
+    
+    public func drawingEntitiesView(with size: CGSize) -> UIView & TGPhotoDrawingEntitiesView {
+        let view = DrawingEntitiesView(context: self.context, size: size)
+        return view
+    }
+}
+
+private class SendStarsButtonView: HighlightTrackingButton, TGPhotoSendStarsButtonView {
+    private let backgroundView: UIView
+    private let textNode: ImmediateAnimatedCountLabelNode
+    
+    fileprivate var pressed: (() -> Void)?
+    
+    override init(frame: CGRect) {
+        self.backgroundView = UIView()
+        self.backgroundView.isUserInteractionEnabled = false
+        
+        self.textNode = ImmediateAnimatedCountLabelNode()
+        self.textNode.isUserInteractionEnabled = false
+        
+        super.init(frame: frame)
+        
+        self.addSubview(self.backgroundView)
+        self.addSubview(self.textNode.view)
+        
+        self.highligthedChanged = { [weak self] highlighted in
+            guard let self else {
+                return
+            }
+            if highlighted {
+                self.backgroundView.layer.removeAnimation(forKey: "opacity")
+                self.backgroundView.alpha = 0.4
+                self.textNode.layer.removeAnimation(forKey: "opacity")
+                self.textNode.alpha = 0.4
+            } else {
+                self.backgroundView.alpha = 1.0
+                self.backgroundView.layer.animateAlpha(from: 0.4, to: 1.0, duration: 0.2)
+                self.textNode.alpha = 1.0
+                self.textNode.layer.animateAlpha(from: 0.4, to: 1.0, duration: 0.2)
+            }
+        }
+        
+        self.addTarget(self, action: #selector(self.buttonPressed), for: .touchUpInside)
+    }
+    
+    required init?(coder: NSCoder) {
+        preconditionFailure()
+    }
+    
+    deinit {
+        print()
+    }
+    
+    @objc private func buttonPressed() {
+        self.pressed?()
+    }
+    
+    func updateFrame(_ frame: CGRect) {
+        let transition: ContainedViewLayoutTransition
+        if self.frame.width.isZero {
+            transition = .immediate
+        } else {
+            transition = .animated(duration: 0.4, curve: .spring)
+        }
+        transition.updateFrame(view: self, frame: frame)
+    }
+    
+    func updateCount(_ count: Int64) -> CGSize {
+        let text = "\(count)"
+        let transition: ContainedViewLayoutTransition
+        if self.backgroundView.frame.width.isZero {
+            transition = .immediate
+        } else {
+            transition = .animated(duration: 0.4, curve: .spring)
+        }
+        
+        var segments: [AnimatedCountLabelNode.Segment] = []
+        let font = Font.with(size: 17.0, design: .round, weight: .semibold, traits: .monospacedNumbers)
+        let badgeString = NSMutableAttributedString(string: "⭐️ ", font: font, textColor: .white)
+        if let range = badgeString.string.range(of: "⭐️") {
+            badgeString.addAttribute(.attachment, value: PresentationResourcesChat.chatPlaceholderStarIcon(defaultDarkPresentationTheme)!, range: NSRange(range, in: badgeString.string))
+            badgeString.addAttribute(.baselineOffset, value: 1.0, range: NSRange(range, in: badgeString.string))
+        }
+        segments.append(.text(0, badgeString))
+        for char in text {
+            if let intValue = Int(String(char)) {
+                segments.append(.number(intValue, NSAttributedString(string: String(char), font: font, textColor: .white)))
+            }
+        }
+        
+        self.textNode.segments = segments
+        
+        let buttonInset: CGFloat = 14.0
+        let textSize = self.textNode.updateLayout(size: CGSize(width: 100.0, height: 100.0), animated: transition.isAnimated)
+        let width = textSize.width + buttonInset * 2.0
+        let buttonSize = CGSize(width: width, height: 45.0)
+        let titleOffset: CGFloat = 0.0
+        
+        transition.updateFrame(node: self.textNode, frame: CGRect(origin: CGPoint(x: floorToScreenPixels((width - textSize.width) / 2.0) + titleOffset, y: floorToScreenPixels((buttonSize.height - textSize.height) / 2.0)), size: textSize))
+        
+        let backgroundSize = CGSize(width: width - 11.0, height: 33.0)
+        transition.updateFrame(view: self.backgroundView, frame: CGRect(origin: CGPoint(x: floorToScreenPixels((width - backgroundSize.width) / 2.0), y: floorToScreenPixels((buttonSize.height - backgroundSize.height) / 2.0)), size: backgroundSize))
+        self.backgroundView.layer.cornerRadius = backgroundSize.height / 2.0
+        self.backgroundView.backgroundColor = UIColor(rgb: 0x0088ff)
+        
+        return buttonSize;
+    }
+}
+
+#if SWIFT_PACKAGE
+extension SolidRoundedButtonView: TGPhotoSolidRoundedButtonView {
+    public func updateWidth(_ width: CGFloat) {
+        let _ = self.updateLayout(width: width, transition: .immediate)
+    }
+}
+#else
+extension SolidRoundedButtonView: @retroactive TGPhotoSolidRoundedButtonView {
+    public func updateWidth(_ width: CGFloat) {
+        let _ = self.updateLayout(width: width, transition: .immediate)
+    }
+}
+#endif

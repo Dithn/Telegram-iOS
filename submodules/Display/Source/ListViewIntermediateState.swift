@@ -2,9 +2,33 @@ import Foundation
 import UIKit
 import SwiftSignalKit
 
-public enum ListViewCenterScrollPositionOverflow {
+public enum ListViewCenterScrollPositionOverflow: Equatable {
     case top
     case bottom
+    case custom((ListViewItemNode) -> CGFloat)
+    
+    public static func ==(lhs: ListViewCenterScrollPositionOverflow, rhs: ListViewCenterScrollPositionOverflow) -> Bool {
+        switch lhs {
+        case .top:
+            if case .top = rhs {
+                return true
+            } else {
+                return false
+            }
+        case .bottom:
+            if case .bottom = rhs {
+                return true
+            } else {
+                return false
+            }
+        case .custom:
+            if case .custom = rhs {
+                return true
+            } else {
+                return false
+            }
+        }
+    }
 }
 
 public enum ListViewScrollPosition: Equatable {
@@ -23,6 +47,21 @@ public enum ListViewAnimationCurve {
     case Spring(duration: Double)
     case Default(duration: Double?)
     case Custom(duration: Double, Float, Float, Float, Float)
+    /// A `CASpringAnimation` with explicit parameters, time-scaled so that it settles within `duration`.
+    /// Mirrors `ContainedViewLayoutTransitionCurve.customSpring`, so list scrolling can share one spring with
+    /// content that is animated through a `ContainedViewLayoutTransition`.
+    case CustomSpring(duration: Double, mass: CGFloat, stiffness: CGFloat, damping: CGFloat, initialVelocity: CGFloat)
+}
+
+/// Whether a list keeps a scroll's target where the scroll lands it, until the next touch or scroll.
+/// Honoured by the chat's CoreList backend only; `ListViewImpl` ignores it.
+public enum ListViewScrollHold {
+    case none
+    case always
+    /// As `.always`, except that a landing resting on the list's newest edge (the edge item 0 rests
+    /// on: the chat's newest message) holds nothing. The list then follows that edge, so an item
+    /// arriving there pushes the content away from it instead of landing under the inset.
+    case yieldingToNewestEdge
 }
 
 public struct ListViewScrollToItem {
@@ -32,14 +71,25 @@ public struct ListViewScrollToItem {
     public let curve: ListViewAnimationCurve
     public let directionHint: ListViewScrollToItemDirectionHint
     public let displayLink: Bool
-    
-    public init(index: Int, position: ListViewScrollPosition, animated: Bool, curve: ListViewAnimationCurve, directionHint: ListViewScrollToItemDirectionHint, displayLink: Bool = false) {
+    public let hold: ListViewScrollHold
+    /// Positions the target's own content: `.top` and `.bottom` leave out the space it reserves for a header
+    /// attached to it (the chat's date header), so the content stays put when that header moves to another
+    /// item. Honoured by the chat's CoreList backend only; `ListViewImpl` ignores it.
+    public let excludesAttachedHeaderSpace: Bool
+
+    public init(index: Int, position: ListViewScrollPosition, animated: Bool, curve: ListViewAnimationCurve, directionHint: ListViewScrollToItemDirectionHint, displayLink: Bool = false, hold: ListViewScrollHold = .none, excludesAttachedHeaderSpace: Bool = false) {
         self.index = index
         self.position = position
         self.animated = animated
         self.curve = curve
         self.directionHint = directionHint
         self.displayLink = displayLink
+        self.hold = hold
+        self.excludesAttachedHeaderSpace = excludesAttachedHeaderSpace
+    }
+
+    public func withHold(_ hold: ListViewScrollHold) -> ListViewScrollToItem {
+        return ListViewScrollToItem(index: self.index, position: self.position, animated: self.animated, curve: self.curve, directionHint: self.directionHint, displayLink: self.displayLink, hold: hold, excludesAttachedHeaderSpace: self.excludesAttachedHeaderSpace)
     }
 }
 
@@ -104,42 +154,65 @@ public struct ListViewDeleteAndInsertOptions: OptionSet {
     public static let PreferSynchronousDrawing = ListViewDeleteAndInsertOptions(rawValue: 64)
     public static let PreferSynchronousResourceLoading = ListViewDeleteAndInsertOptions(rawValue: 128)
     public static let AnimateCrossfade = ListViewDeleteAndInsertOptions(rawValue: 256)
+    public static let ForceUpdate = ListViewDeleteAndInsertOptions(rawValue: 512)
+    public static let AnimateFullTransition = ListViewDeleteAndInsertOptions(rawValue: 1024)
+    public static let InvertOffsetDirection = ListViewDeleteAndInsertOptions(rawValue: 2048)
 }
 
 public struct ListViewUpdateSizeAndInsets {
-    public let size: CGSize
-    public let insets: UIEdgeInsets
-    public let headerInsets: UIEdgeInsets?
-    public let scrollIndicatorInsets: UIEdgeInsets?
-    public let duration: Double
-    public let curve: ListViewAnimationCurve
-    public let ensureTopInsetForOverlayHighlightedItems: CGFloat?
+    public var size: CGSize
+    public var insets: UIEdgeInsets
+    public var headerInsets: UIEdgeInsets?
+    public var scrollIndicatorInsets: UIEdgeInsets?
+    public var itemOffsetInsets: UIEdgeInsets?
+    public var duration: Double
+    public var curve: ListViewAnimationCurve
+    public var ensureTopInsetForOverlayHighlightedItems: CGFloat?
+    public var customAnimationTransition: ControlledTransition?
     
-    public init(size: CGSize, insets: UIEdgeInsets, headerInsets: UIEdgeInsets? = nil, scrollIndicatorInsets: UIEdgeInsets? = nil, duration: Double, curve: ListViewAnimationCurve, ensureTopInsetForOverlayHighlightedItems: CGFloat? = nil) {
+    public init(size: CGSize, insets: UIEdgeInsets, headerInsets: UIEdgeInsets? = nil, scrollIndicatorInsets: UIEdgeInsets? = nil, itemOffsetInsets: UIEdgeInsets? = nil, duration: Double, curve: ListViewAnimationCurve, ensureTopInsetForOverlayHighlightedItems: CGFloat? = nil, customAnimationTransition: ControlledTransition? = nil) {
         self.size = size
         self.insets = insets
         self.headerInsets = headerInsets
         self.scrollIndicatorInsets = scrollIndicatorInsets
+        self.itemOffsetInsets = itemOffsetInsets
         self.duration = duration
         self.curve = curve
         self.ensureTopInsetForOverlayHighlightedItems = ensureTopInsetForOverlayHighlightedItems
+        self.customAnimationTransition = customAnimationTransition
     }
 }
 
 public struct ListViewItemRange: Equatable {
     public let firstIndex: Int
     public let lastIndex: Int
+
+    public init(firstIndex: Int, lastIndex: Int) {
+        self.firstIndex = firstIndex
+        self.lastIndex = lastIndex
+    }
 }
 
 public struct ListViewVisibleItemRange: Equatable {
     public let firstIndex: Int
     public let firstIndexFullyVisible: Bool
     public let lastIndex: Int
+
+    public init(firstIndex: Int, firstIndexFullyVisible: Bool, lastIndex: Int) {
+        self.firstIndex = firstIndex
+        self.firstIndexFullyVisible = firstIndexFullyVisible
+        self.lastIndex = lastIndex
+    }
 }
 
 public struct ListViewDisplayedItemRange: Equatable {
     public let loadedRange: ListViewItemRange?
     public let visibleRange: ListViewVisibleItemRange?
+
+    public init(loadedRange: ListViewItemRange?, visibleRange: ListViewVisibleItemRange?) {
+        self.loadedRange = loadedRange
+        self.visibleRange = visibleRange
+    }
 }
 
 struct IndexRange {
@@ -215,12 +288,12 @@ struct PendingNode {
 }
 
 enum ListViewStateNode {
-    case Node(index: Int, frame: CGRect, referenceNode: QueueLocalObject<ListViewItemNode>?)
+    case Node(index: Int, frame: CGRect, referenceNode: QueueLocalObject<ListViewItemNode>?, newNode: QueueLocalObject<ListViewItemNode>?)
     case Placeholder(frame: CGRect)
     
     var index: Int? {
         switch self {
-        case .Node(let index, _, _):
+        case let .Node(index, _, _, _):
             return index
         case .Placeholder(_):
             return nil
@@ -230,15 +303,15 @@ enum ListViewStateNode {
     var frame: CGRect {
         get {
             switch self {
-            case .Node(_, let frame, _):
+            case let .Node(_, frame, _, _):
                 return frame
             case .Placeholder(let frame):
                 return frame
             }
         } set(value) {
             switch self {
-            case let .Node(index, _, referenceNode):
-                self = .Node(index: index, frame: value, referenceNode: referenceNode)
+            case let .Node(index, _, referenceNode, newNode):
+                self = .Node(index: index, frame: value, referenceNode: referenceNode, newNode: newNode)
             case .Placeholder(_):
                 self = .Placeholder(frame: value)
             }
@@ -277,6 +350,7 @@ struct ListViewInsertionPoint {
 
 struct ListViewState {
     var insets: UIEdgeInsets
+    var itemOffsetInsets: UIEdgeInsets
     var visibleSize: CGSize
     let invisibleInset: CGFloat
     var nodes: [ListViewStateNode]
@@ -288,7 +362,7 @@ struct ListViewState {
         if let (fixedIndex, fixedPosition) = self.scrollPosition {
             for node in self.nodes {
                 if let index = node.index, index == fixedIndex {
-                    let offset: CGFloat
+                    var offset: CGFloat
                     switch fixedPosition {
                         case let .bottom(additionalOffset):
                             offset = (self.visibleSize.height - self.insets.bottom) - node.frame.maxY + additionalOffset
@@ -300,10 +374,23 @@ struct ListViewState {
                                 offset = self.insets.top + floor((contentAreaHeight - node.frame.size.height) / 2.0) - node.frame.minY
                             } else {
                                 switch overflow {
-                                    case .top:
+                                case .top:
+                                    offset = self.insets.top - node.frame.minY
+                                case .bottom:
+                                    offset = (self.visibleSize.height - self.insets.bottom) - node.frame.maxY
+                                case let .custom(getOverflow):
+                                    if Thread.isMainThread, case let .Node(_, _, referenceNode, newNode) = node, let listNode = referenceNode?.syncWith({ $0 }) ?? newNode?.syncWith({ $0 }) {
+                                        let overflow = getOverflow(listNode)
+                                        if overflow == 0.0 {
+                                            offset = self.insets.top - node.frame.minY
+                                        } else {
+                                            offset = (self.visibleSize.height - self.insets.bottom) - node.frame.maxY
+                                            offset += overflow
+                                            offset -= floor((self.visibleSize.height - self.insets.bottom - self.insets.top) * 0.5)
+                                        }
+                                    } else {
                                         offset = self.insets.top - node.frame.minY
-                                    case .bottom:
-                                        offset = (self.visibleSize.height - self.insets.bottom) - node.frame.maxY
+                                    }
                                 }
                             }
                         case .visible:
@@ -482,7 +569,7 @@ struct ListViewState {
         if fixedNode == nil {
             for i in 0 ..< self.nodes.count {
                 let node = self.nodes[i]
-                if let index = node.index , node.frame.maxY >= self.insets.top {
+                if let index = node.index , node.frame.maxY >= self.itemOffsetInsets.top {
                     fixedNode = (i, index, node.frame)
                     break
                 }
@@ -507,7 +594,7 @@ struct ListViewState {
                     if index != currentUpperNode.index - 1 {
                         if currentUpperNode.frame.minY > -self.invisibleInset - CGFloat.ulpOfOne {
                             var directionHint: ListViewInsertionOffsetDirection?
-                            if let hint = insertDirectionHints[currentUpperNode.index - 1] , currentUpperNode.frame.minY > self.insets.top - CGFloat.ulpOfOne {
+                            if let hint = insertDirectionHints[currentUpperNode.index - 1] , currentUpperNode.frame.minY > self.itemOffsetInsets.top - CGFloat.ulpOfOne {
                                 directionHint = ListViewInsertionOffsetDirection(hint)
                             }
                             return ListViewInsertionPoint(index: currentUpperNode.index - 1, point: CGPoint(x: 0.0, y: currentUpperNode.frame.minY), direction: directionHint ?? .Up)
@@ -522,10 +609,10 @@ struct ListViewState {
             if currentUpperNode.index != 0 && currentUpperNode.frame.minY > -self.invisibleInset - CGFloat.ulpOfOne {
                 var directionHint: ListViewInsertionOffsetDirection?
                 if let hint = insertDirectionHints[currentUpperNode.index - 1] {
-                    if currentUpperNode.frame.minY >= self.insets.top - CGFloat.ulpOfOne {
+                    if currentUpperNode.frame.minY >= self.itemOffsetInsets.top - CGFloat.ulpOfOne {
                         directionHint = ListViewInsertionOffsetDirection(hint)
                     }
-                } else if currentUpperNode.frame.minY >= self.insets.top - CGFloat.ulpOfOne && !fixedNodeIsStationary {
+                } else if currentUpperNode.frame.minY >= self.itemOffsetInsets.top - CGFloat.ulpOfOne && !fixedNodeIsStationary {
                     directionHint = .Down
                 }
                 
@@ -540,7 +627,7 @@ struct ListViewState {
                         if index != currentLowerNode.index + 1 {
                             if currentLowerNode.frame.maxY < self.visibleSize.height + self.invisibleInset - CGFloat.ulpOfOne {
                                 var directionHint: ListViewInsertionOffsetDirection?
-                                if let hint = insertDirectionHints[currentLowerNode.index + 1] , currentLowerNode.frame.maxY < self.visibleSize.height - self.insets.bottom + CGFloat.ulpOfOne {
+                                if let hint = insertDirectionHints[currentLowerNode.index + 1] , currentLowerNode.frame.maxY < self.visibleSize.height - self.itemOffsetInsets.bottom + CGFloat.ulpOfOne {
                                     directionHint = ListViewInsertionOffsetDirection(hint)
                                 }
                                 return ListViewInsertionPoint(index: currentLowerNode.index + 1, point: CGPoint(x: 0.0, y: currentLowerNode.frame.maxY), direction: directionHint ?? .Down)
@@ -555,7 +642,7 @@ struct ListViewState {
             
             if currentLowerNode.index != itemCount - 1 && currentLowerNode.frame.maxY < self.visibleSize.height + self.invisibleInset - CGFloat.ulpOfOne {
                 var directionHint: ListViewInsertionOffsetDirection?
-                if let hint = insertDirectionHints[currentLowerNode.index + 1] , currentLowerNode.frame.maxY < self.visibleSize.height - self.insets.bottom + CGFloat.ulpOfOne {
+                if let hint = insertDirectionHints[currentLowerNode.index + 1] , currentLowerNode.frame.maxY < self.visibleSize.height - self.itemOffsetInsets.bottom + CGFloat.ulpOfOne {
                     directionHint = ListViewInsertionOffsetDirection(hint)
                 }
                 return ListViewInsertionPoint(index: currentLowerNode.index + 1, point: CGPoint(x: 0.0, y: currentLowerNode.frame.maxY), direction: directionHint ?? .Down)
@@ -716,7 +803,7 @@ struct ListViewState {
         let nodeFrame = CGRect(origin: nodeOrigin, size: CGSize(width: layout.size.width, height: animated ? 0.0 : layout.size.height))
         
         operations.append(.InsertNode(index: insertionIndex, offsetDirection: offsetDirection, animated: animated, node: node, layout: layout, apply: apply))
-        self.nodes.insert(.Node(index: itemIndex, frame: nodeFrame, referenceNode: nil), at: insertionIndex)
+        self.nodes.insert(.Node(index: itemIndex, frame: nodeFrame, referenceNode: nil, newNode: node), at: insertionIndex)
         
         if !animated {
             switch offsetDirection {
@@ -761,14 +848,14 @@ struct ListViewState {
     
     mutating func removeNodeAtIndex(_ index: Int, direction: ListViewItemOperationDirectionHint?, animated: Bool, operations: inout [ListViewStateOperation]) {
         let node = self.nodes[index]
-        if case let .Node(_, _, referenceNode) = node {
+        if case let .Node(_, _, referenceNode, _) = node {
             let nodeFrame = node.frame
             self.nodes.remove(at: index)
             let offsetDirection: ListViewInsertionOffsetDirection
             if let direction = direction {
                 offsetDirection = ListViewInsertionOffsetDirection(direction)
             } else {
-                if nodeFrame.maxY < self.insets.top + CGFloat.ulpOfOne {
+                if nodeFrame.maxY < self.itemOffsetInsets.top + CGFloat.ulpOfOne {
                     offsetDirection = .Down
                 } else {
                     offsetDirection = .Up
@@ -776,12 +863,12 @@ struct ListViewState {
             }
             operations.append(.Remove(index: index, offsetDirection: offsetDirection))
             
-            if let referenceNode = referenceNode , animated {
+            if let referenceNode = referenceNode, animated {
                 self.nodes.insert(.Placeholder(frame: nodeFrame), at: index)
                 operations.append(.InsertDisappearingPlaceholder(index: index, referenceNode: referenceNode, offsetDirection: offsetDirection.inverted()))
             } else {
-                if nodeFrame.maxY > self.insets.top - CGFloat.ulpOfOne {
-                    if let direction = direction , direction == .Down && node.frame.minY < self.visibleSize.height - self.insets.bottom + CGFloat.ulpOfOne {
+                if nodeFrame.maxY > self.itemOffsetInsets.top - CGFloat.ulpOfOne {
+                    if let direction = direction , direction == .Down && node.frame.minY < self.visibleSize.height - self.itemOffsetInsets.bottom + CGFloat.ulpOfOne {
                         for i in (0 ..< index).reversed() {
                             var frame = self.nodes[i].frame
                             frame.origin.y += nodeFrame.size.height
@@ -812,12 +899,12 @@ struct ListViewState {
         for node in self.nodes {
             i += 1
             if node.index == itemIndex {
-                if isAnimated {
+                if !isAnimated {
                     let offsetDirection: ListViewInsertionOffsetDirection
                     if let direction = direction {
                         offsetDirection = ListViewInsertionOffsetDirection(direction)
                     } else {
-                        if node.frame.maxY < self.insets.top + CGFloat.ulpOfOne {
+                        if node.frame.maxY < self.itemOffsetInsets.top + CGFloat.ulpOfOne {
                             offsetDirection = .Down
                         } else {
                             offsetDirection = .Up

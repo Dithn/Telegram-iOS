@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "TelegramVoip",
-    platforms: [.macOS(.v10_11)],
+    platforms: [.macOS(.v10_13)],
     products: [
         // Products define the executables and libraries a package produces, and make them visible to other packages.
         .library(
@@ -17,6 +17,7 @@ let package = Package(
         // .package(url: /* package url */, from: "1.0.0"),
         .package(name: "TgVoipWebrtc", path: "../../../tgcalls"),
         .package(name: "SSignalKit", path: "../SSignalKit"),
+        .package(name: "FFMpegBinding", path: "../FFMpegBinding"),
         .package(name: "TelegramCore", path: "../TelegramCore")
 
     ],
@@ -26,9 +27,10 @@ let package = Package(
         .target(
             name: "TelegramVoip",
             dependencies: [
-                .productItem(name: "TgVoipWebrtc", package: "TgVoipWebrtc", condition: nil),
-                .productItem(name: "SwiftSignalKit", package: "SSignalKit", condition: nil),
-                .productItem(name: "TelegramCore", package: "TelegramCore", condition: nil),
+                .product(name: "TgVoipWebrtc", package: "TgVoipWebrtc", condition: nil),
+                .product(name: "SwiftSignalKit", package: "SSignalKit", condition: nil),
+                .product(name: "FFMpegBinding", package: "FFMpegBinding", condition: nil),
+                .product(name: "TelegramCore", package: "TelegramCore", condition: nil),
             ],
             path: "Sources",
             exclude: [

@@ -1,5 +1,4 @@
 import Foundation
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import TelegramNotices
@@ -21,7 +20,7 @@ func interactiveChatLinkPreviewsEnabled(accountManager: AccountManager<TelegramA
             return Signal { subscriber in
                 Queue.mainQueue().async {
                     displayAlert(InteractiveChatLinkPreviewsResult({ result in
-                        let _ = ApplicationSpecificNotice.setSecretChatLinkPreviews(accountManager: accountManager, value: result).start()
+                        let _ = ApplicationSpecificNotice.setSecretChatLinkPreviews(accountManager: accountManager, value: result).startStandalone()
                         subscriber.putNext(result)
                         subscriber.putCompletion()
                     }))

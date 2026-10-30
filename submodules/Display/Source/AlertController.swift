@@ -71,7 +71,7 @@ public final class AlertControllerTheme: Equatable {
     }
 }
 
-open class AlertController: ViewController, StandalonePresentableController {
+open class AlertController: ViewController, StandalonePresentableController, KeyShortcutResponder {
     private var controllerNode: AlertControllerNode {
         return self.displayNode as! AlertControllerNode
     }
@@ -83,13 +83,13 @@ open class AlertController: ViewController, StandalonePresentableController {
             }
         }
     }
-    private let contentNode: AlertContentNode
+    public let contentNode: AlertContentNode
     private let allowInputInset: Bool
     
     private weak var existingAlertController: AlertController?
     
     public var willDismiss: (() -> Void)?
-    public var dismissed: (() -> Void)?
+    public var dismissed: ((Bool) -> Void)?
     
     public init(theme: AlertControllerTheme, contentNode: AlertContentNode, existingAlertController: AlertController? = nil, allowInputInset: Bool = true) {
         self.theme = theme
@@ -108,6 +108,7 @@ open class AlertController: ViewController, StandalonePresentableController {
         fatalError("init(coder:) has not been implemented")
     }
     
+    private var isDismissed = false
     override open func loadDisplayNode() {
         self.displayNode = AlertControllerNode(contentNode: self.contentNode, theme: self.theme, allowInputInset: self.allowInputInset)
         self.displayNodeDidLoad()
@@ -118,6 +119,8 @@ open class AlertController: ViewController, StandalonePresentableController {
             if let strongSelf = self, strongSelf.contentNode.dismissOnOutsideTap {
                 strongSelf.willDismiss?()
                 strongSelf.controllerNode.animateOut {
+                    self?.dismissed?(true)
+                    self?.isDismissed = true
                     self?.dismiss()
                 }
             }
@@ -140,13 +143,56 @@ open class AlertController: ViewController, StandalonePresentableController {
     }
     
     override open func dismiss(completion: (() -> Void)? = nil) {
-        self.dismissed?()
+        if !self.isDismissed {
+            self.isDismissed = true
+            self.dismissed?(false)
+        }
         self.presentingViewController?.dismiss(animated: false, completion: completion)
     }
     
-    public func dismissAnimated() {
+    open func dismissAnimated() {
         self.controllerNode.animateOut { [weak self] in
             self?.dismiss()
         }
+    }
+    
+    public var keyShortcuts: [KeyShortcut] {
+        return [
+            KeyShortcut(
+                input: UIKeyCommand.inputEscape,
+                modifiers: [],
+                action: { [weak self] in
+                    self?.dismissAnimated()
+                }
+            ),
+            KeyShortcut(
+                input: "W",
+                modifiers: [.command],
+                action: { [weak self] in
+                    self?.dismissAnimated()
+                }
+            ),
+            KeyShortcut(
+                input: "\r",
+                modifiers: [],
+                action: { [weak self] in
+                    self?.controllerNode.performHighlightedAction()
+                }
+            ),
+            KeyShortcut(
+                input: UIKeyCommand.inputUpArrow,
+                modifiers: [],
+                action: { [weak self] in
+                    self?.controllerNode.decreaseHighlightedIndex()
+                }
+            ),
+            KeyShortcut(
+                input: UIKeyCommand.inputDownArrow,
+                modifiers: [],
+                action: { [weak self] in
+                    self?.controllerNode.increaseHighlightedIndex()
+                }
+            )
+        ]
     }
 }

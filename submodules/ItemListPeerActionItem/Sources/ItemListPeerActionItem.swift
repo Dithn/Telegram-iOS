@@ -21,37 +21,52 @@ public enum ItemListPeerActionItemColor {
 
 public class ItemListPeerActionItem: ListViewItem, ItemListItem {
     let presentationData: ItemListPresentationData
+    let style: ItemListStyle
+    let systemStyle: ItemListSystemStyle
     let icon: UIImage?
+    let iconSignal: Signal<UIImage?, NoError>?
     let title: String
+    let additionalBadgeIcon: UIImage?
     public let alwaysPlain: Bool
     let hasSeparator: Bool
     let editing: Bool
     let height: ItemListPeerActionItemHeight
     let color: ItemListPeerActionItemColor
+    let noInsets: Bool
     public let sectionId: ItemListSectionId
-    let action: (() -> Void)?
+    public let action: (() -> Void)?
+    public let tag: Any?
     
-    public init(presentationData: ItemListPresentationData, icon: UIImage?, title: String, alwaysPlain: Bool = false, hasSeparator: Bool = true, sectionId: ItemListSectionId, height: ItemListPeerActionItemHeight = .peerList, color: ItemListPeerActionItemColor = .accent, editing: Bool = false, action: (() -> Void)?) {
+    public init(presentationData: ItemListPresentationData, style: ItemListStyle = .blocks, systemStyle: ItemListSystemStyle = .legacy, icon: UIImage?, iconSignal: Signal<UIImage?, NoError>? = nil, title: String, additionalBadgeIcon: UIImage? = nil, alwaysPlain: Bool = false, hasSeparator: Bool = true, sectionId: ItemListSectionId, height: ItemListPeerActionItemHeight = .peerList, color: ItemListPeerActionItemColor = .accent, noInsets: Bool = false, editing: Bool = false, action: (() -> Void)?, tag: Any? = nil) {
         self.presentationData = presentationData
+        self.style = style
+        self.systemStyle = systemStyle
         self.icon = icon
+        self.iconSignal = iconSignal
         self.title = title
+        self.additionalBadgeIcon = additionalBadgeIcon
         self.alwaysPlain = alwaysPlain
         self.hasSeparator = hasSeparator
         self.editing = editing
         self.height = height
+        self.noInsets = noInsets
         self.color = color
         self.sectionId = sectionId
         self.action = action
+        self.tag = tag
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = ItemListPeerActionItemNode()
-            var neighbors = itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem)
+            var itemNeighbors = itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self))
             if self.alwaysPlain {
-                neighbors.top = .sameSection(alwaysPlain: false)
+                itemNeighbors.top = .sameSection(alwaysPlain: false)
             }
-            let (layout, apply) = node.asyncLayout()(self, params, neighbors)
+            if self.alwaysPlain {
+                itemNeighbors.bottom = .sameSection(alwaysPlain: false)
+            }
+            let (layout, apply) = node.asyncLayout()(self, params, itemNeighbors)
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -64,7 +79,7 @@ public class ItemListPeerActionItem: ListViewItem, ItemListItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? ItemListPeerActionItemNode {
                 let makeLayout = nodeValue.asyncLayout()
@@ -75,11 +90,14 @@ public class ItemListPeerActionItem: ListViewItem, ItemListItem {
                 }
                 
                 async {
-                    var neighbors = itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem)
+                    var itemNeighbors = itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self))
                     if self.alwaysPlain {
-                        neighbors.top = .sameSection(alwaysPlain: false)
+                        itemNeighbors.top = .sameSection(alwaysPlain: false)
                     }
-                    let (layout, apply) = makeLayout(self, params, neighbors)
+                    if self.alwaysPlain {
+                        itemNeighbors.bottom = .sameSection(alwaysPlain: false)
+                    }
+                    let (layout, apply) = makeLayout(self, params, itemNeighbors)
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply(animated)
@@ -100,8 +118,9 @@ public class ItemListPeerActionItem: ListViewItem, ItemListItem {
     }
 }
 
-class ItemListPeerActionItemNode: ListViewItemNode {
+public final class ItemListPeerActionItemNode: ListViewItemNode, ItemListItemNode {
     private let backgroundNode: ASDisplayNode
+    private let highlightNode: ASDisplayNode
     private let topStripeNode: ASDisplayNode
     private let bottomStripeNode: ASDisplayNode
     private let highlightedBackgroundNode: ASDisplayNode
@@ -109,14 +128,24 @@ class ItemListPeerActionItemNode: ListViewItemNode {
     
     private let iconNode: ASImageNode
     private let titleNode: TextNode
+    private var additionalLabelBadgeNode: ASImageNode?
     
     private let activateArea: AccessibilityAreaNode
     
     private var item: ItemListPeerActionItem?
     
-    init() {
+    private let iconDisposable = MetaDisposable()
+    
+    public var tag: ItemListItemTag? {
+        return self.item?.tag as? ItemListItemTag
+    }
+    
+    public init() {
         self.backgroundNode = ASDisplayNode()
         self.backgroundNode.isLayerBacked = true
+        
+        self.highlightNode = ASDisplayNode()
+        self.highlightNode.isLayerBacked = true
         
         self.topStripeNode = ASDisplayNode()
         self.topStripeNode.isLayerBacked = true
@@ -141,7 +170,7 @@ class ItemListPeerActionItemNode: ListViewItemNode {
         
         self.activateArea = AccessibilityAreaNode()
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        super.init(layerBacked: false)
         
         self.addSubnode(self.iconNode)
         self.addSubnode(self.titleNode)
@@ -149,12 +178,30 @@ class ItemListPeerActionItemNode: ListViewItemNode {
         self.addSubnode(self.activateArea)
     }
     
-    func asyncLayout() -> (_ item: ItemListPeerActionItem, _ params: ListViewItemLayoutParams, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, (Bool) -> Void) {
+    deinit {
+        self.iconDisposable.dispose()
+    }
+    
+    public func displayHighlight() {
+        if self.backgroundNode.supernode != nil {
+            self.insertSubnode(self.highlightNode, aboveSubnode: self.backgroundNode)
+        } else {
+            self.insertSubnode(self.highlightNode, at: 0)
+        }
+        
+        Queue.mainQueue().after(1.2, {
+            self.highlightNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.3, removeOnCompletion: false, completion: { _ in
+                self.highlightNode.removeFromSupernode()
+            })
+        })
+    }
+    
+    public func asyncLayout() -> (_ item: ItemListPeerActionItem, _ params: ListViewItemLayoutParams, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, (Bool) -> Void) {
         let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
         
         let currentItem = self.item
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             var updatedTheme: PresentationTheme?
             
             let titleFont = Font.regular(item.presentationData.fontSize.itemListBaseFontSize)
@@ -165,22 +212,33 @@ class ItemListPeerActionItemNode: ListViewItemNode {
             let leftInset: CGFloat
             let iconOffset: CGFloat
             let verticalInset: CGFloat
-            let verticalOffset: CGFloat
             switch item.height {
                 case .generic:
                     iconOffset = 1.0
-                    verticalInset = 11.0
-                    verticalOffset = 0.0
-                    leftInset = (item.icon == nil ? 16.0 : 59.0) + params.leftInset
+                    switch item.systemStyle {
+                    case .glass:
+                        verticalInset = 15.0
+                    case .legacy:
+                        verticalInset = 12.0
+                    }
+                    leftInset = (item.icon == nil && item.iconSignal == nil ? 16.0 : 59.0) + params.leftInset
                 case .peerList:
                     iconOffset = 3.0
-                    verticalInset = 14.0
-                    verticalOffset = 0.0
+                    switch item.systemStyle {
+                    case .glass:
+                        verticalInset = 15.0
+                    case .legacy:
+                        verticalInset = 14.0
+                    }
                     leftInset = 65.0 + params.leftInset
                 case .compactPeerList:
                     iconOffset = 3.0
-                    verticalInset = 11.0
-                    verticalOffset = 0.0
+                    switch item.systemStyle {
+                    case .glass:
+                        verticalInset = 15.0
+                    case .legacy:
+                        verticalInset = 11.0
+                    }
                     leftInset = 65.0 + params.leftInset
             }
             
@@ -196,11 +254,16 @@ class ItemListPeerActionItemNode: ListViewItemNode {
                     textColor = item.presentationData.theme.list.itemDisabledTextColor
             }
             
-            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.title, font: titleFont, textColor: textColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - editingOffset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.title, font: titleFont, textColor: textColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - editingOffset - max(0.0, params.rightInset - params.leftInset), height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
             let separatorHeight = UIScreenPixel
+            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
             
-            let insets = itemListNeighborsGroupedInsets(neighbors, params)
+            var insets = itemListNeighborsGroupedInsets(neighbors, params)
+            if item.noInsets {
+                insets.top = 0.0
+                insets.bottom = 0.0
+            }
             let contentSize = CGSize(width: params.width, height: titleLayout.size.height + verticalInset * 2.0)
             
             let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
@@ -214,10 +277,23 @@ class ItemListPeerActionItemNode: ListViewItemNode {
                     strongSelf.activateArea.accessibilityLabel = item.title
                     
                     if let _ = updatedTheme {
-                        strongSelf.topStripeNode.backgroundColor = item.presentationData.theme.list.itemBlocksSeparatorColor
-                        strongSelf.bottomStripeNode.backgroundColor = item.presentationData.theme.list.itemBlocksSeparatorColor
-                        strongSelf.backgroundNode.backgroundColor = item.presentationData.theme.list.itemBlocksBackgroundColor
-                        strongSelf.highlightedBackgroundNode.backgroundColor = item.presentationData.theme.list.itemHighlightedBackgroundColor
+                        switch item.style {
+                        case .blocks:
+                            strongSelf.topStripeNode.backgroundColor = item.presentationData.theme.list.itemBlocksSeparatorColor
+                            strongSelf.bottomStripeNode.backgroundColor = item.presentationData.theme.list.itemBlocksSeparatorColor
+                            if !item.alwaysPlain {
+                                strongSelf.backgroundNode.backgroundColor = item.presentationData.theme.list.itemBlocksBackgroundColor
+                            }
+                            strongSelf.highlightedBackgroundNode.backgroundColor = item.presentationData.theme.list.itemHighlightedBackgroundColor
+                        case .plain:
+                            strongSelf.topStripeNode.backgroundColor = item.presentationData.theme.list.itemPlainSeparatorColor
+                            strongSelf.bottomStripeNode.backgroundColor = item.presentationData.theme.list.itemPlainSeparatorColor
+                            if !item.alwaysPlain {
+                                strongSelf.backgroundNode.backgroundColor = item.presentationData.theme.list.plainBackgroundColor
+                            }
+                            strongSelf.highlightedBackgroundNode.backgroundColor = item.presentationData.theme.list.itemHighlightedBackgroundColor
+                        }
+                        strongSelf.highlightNode.backgroundColor = item.presentationData.theme.list.itemSearchHighlightColor
                     }
                     
                     let _ = titleApply()
@@ -231,63 +307,118 @@ class ItemListPeerActionItemNode: ListViewItemNode {
                     
                     strongSelf.iconNode.image = item.icon
                     if let image = item.icon {
-                        transition.updateFrame(node: strongSelf.iconNode, frame: CGRect(origin: CGPoint(x: params.leftInset + editingOffset + floor((leftInset - params.leftInset - image.size.width) / 2.0) + iconOffset, y: floor((contentSize.height - image.size.height) / 2.0)), size: image.size))
+                        transition.updateFrame(node: strongSelf.iconNode, frame: CGRect(origin: CGPoint(x: params.leftInset + editingOffset + floor((leftInset - params.leftInset - image.size.width) / 2.0) + iconOffset, y: floorToScreenPixels((contentSize.height - image.size.height) / 2.0)), size: image.size))
+                    } else if let iconSignal = item.iconSignal {
+                        let imageSize = CGSize(width: 28.0, height: 28.0)
+                        strongSelf.iconDisposable.set((iconSignal
+                        |> deliverOnMainQueue).start(next: { [weak self] image in
+                            if let strongSelf = self, let image {
+                                strongSelf.iconNode.image = image
+                            }
+                        }))
+                        transition.updateFrame(node: strongSelf.iconNode, frame: CGRect(origin: CGPoint(x: params.leftInset + editingOffset + floor((leftInset - params.leftInset - imageSize.width) / 2.0) + iconOffset, y: floor((contentSize.height - imageSize.height) / 2.0)), size: imageSize))
                     }
                     
-                    if strongSelf.backgroundNode.supernode == nil {
-                        strongSelf.insertSubnode(strongSelf.backgroundNode, at: 0)
-                    }
-                    if strongSelf.topStripeNode.supernode == nil {
-                        strongSelf.insertSubnode(strongSelf.topStripeNode, at: 1)
-                    }
-                    if strongSelf.bottomStripeNode.supernode == nil {
-                        strongSelf.insertSubnode(strongSelf.bottomStripeNode, at: 2)
-                    }
-                    if strongSelf.maskNode.supernode == nil {
-                        strongSelf.insertSubnode(strongSelf.maskNode, at: 3)
-                    }
-                    
-                    let hasCorners = itemListHasRoundedBlockLayout(params)
-                    var hasTopCorners = false
-                    var hasBottomCorners = false
-                    switch neighbors.top {
-                        case .sameSection(false):
-                            strongSelf.topStripeNode.isHidden = true
-                        default:
-                            hasTopCorners = true
-                            strongSelf.topStripeNode.isHidden = hasCorners
-                    }
-                    
-                    let bottomStripeInset: CGFloat
-                    let bottomStripeOffset: CGFloat
-                    switch neighbors.bottom {
-                        case .sameSection(false):
-                            bottomStripeInset = leftInset + editingOffset
-                            bottomStripeOffset = -separatorHeight
-                            strongSelf.bottomStripeNode.isHidden = !item.hasSeparator
-                        default:
-                            bottomStripeInset = 0.0
-                            bottomStripeOffset = 0.0
-                            hasBottomCorners = true
-                            strongSelf.bottomStripeNode.isHidden = hasCorners || !item.hasSeparator
-                    }
+                    switch item.style {
+                    case .plain:
+                        if strongSelf.backgroundNode.supernode != nil {
+                            strongSelf.backgroundNode.removeFromSupernode()
+                        }
+                        if strongSelf.topStripeNode.supernode != nil {
+                            strongSelf.topStripeNode.removeFromSupernode()
+                        }
+                        if strongSelf.bottomStripeNode.supernode == nil {
+                            strongSelf.insertSubnode(strongSelf.bottomStripeNode, at: 0)
+                        }
+                        if strongSelf.maskNode.supernode != nil {
+                            strongSelf.maskNode.removeFromSupernode()
+                        }
+                        strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: leftInset, y: contentSize.height - separatorHeight), size: CGSize(width: params.width - leftInset - params.rightInset - separatorRightInset, height: separatorHeight))
+                    case .blocks:
+                        if strongSelf.backgroundNode.supernode == nil {
+                            strongSelf.insertSubnode(strongSelf.backgroundNode, at: 0)
+                        }
+                        if strongSelf.topStripeNode.supernode == nil {
+                            strongSelf.insertSubnode(strongSelf.topStripeNode, at: 1)
+                        }
+                        if strongSelf.bottomStripeNode.supernode == nil {
+                            strongSelf.insertSubnode(strongSelf.bottomStripeNode, at: 2)
+                        }
+                        if strongSelf.maskNode.supernode == nil {
+                            strongSelf.insertSubnode(strongSelf.maskNode, at: 3)
+                        }
                         
-                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                        let hasCorners = itemListHasRoundedBlockLayout(params)
+                        var hasTopCorners = false
+                        var hasBottomCorners = false
+                        switch neighbors.top {
+                            case .sameSection(false):
+                                strongSelf.topStripeNode.isHidden = true
+                            default:
+                                hasTopCorners = true
+                                strongSelf.topStripeNode.isHidden = hasCorners
+                        }
+                        
+                        let bottomStripeInset: CGFloat
+                        let bottomStripeOffset: CGFloat
+                        switch neighbors.bottom {
+                            case .sameSection(false):
+                                bottomStripeInset = leftInset + editingOffset
+                                bottomStripeOffset = -separatorHeight
+                                strongSelf.bottomStripeNode.isHidden = !item.hasSeparator
+                            default:
+                                bottomStripeInset = 0.0
+                                bottomStripeOffset = 0.0
+                                hasBottomCorners = true
+                                strongSelf.bottomStripeNode.isHidden = hasCorners || !item.hasSeparator
+                        }
+                            
+                        strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
+                        
+                        strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
+                        strongSelf.highlightNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
+                        // Per side: the margins differ beside iPhone Duo's strip; equal margins give the symmetric frame.
+                        let backgroundFrame = strongSelf.backgroundNode.frame
+                        strongSelf.maskNode.frame = CGRect(x: backgroundFrame.minX + params.leftInset, y: backgroundFrame.minY, width: backgroundFrame.width - params.leftInset - params.rightInset, height: backgroundFrame.height)
+                        strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight))
+                        transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: layoutSize.width - bottomStripeInset - separatorRightInset - params.rightInset, height: separatorHeight)))
+                    }
                     
-                    strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
-                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
-                    strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight))
-                    transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: layoutSize.width - bottomStripeInset, height: separatorHeight)))
+                    let titleFrame = CGRect(origin: CGPoint(x: leftInset + editingOffset, y: floorToScreenPixels((contentSize.height - titleLayout.size.height) / 2.0) + 1.0), size: titleLayout.size)
+                    transition.updateFrame(node: strongSelf.titleNode, frame: titleFrame)
                     
-                    transition.updateFrame(node: strongSelf.titleNode, frame: CGRect(origin: CGPoint(x: leftInset + editingOffset, y: verticalInset + verticalOffset), size: titleLayout.size))
+                    // Plain style: the highlight spans the full-width separator's extent (ChatListItem's rule), out of the
+                    // side safe areas and ending where the separators end when there is a right inset (iPhone Duo's strip).
+                    let highlightLeftInset: CGFloat = item.style == .plain ? params.leftInset : 0.0
+                    let highlightRightInset: CGFloat = item.style == .plain && !params.rightInset.isZero ? params.rightInset + separatorRightInset : 0.0
+                    strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: highlightLeftInset, y: -UIScreenPixel), size: CGSize(width: params.width - highlightLeftInset - highlightRightInset, height: layout.contentSize.height + UIScreenPixel + UIScreenPixel))
                     
-                    strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: layout.contentSize.height + UIScreenPixel + UIScreenPixel))
+                    if let additionalBadgeIcon = item.additionalBadgeIcon {
+                        let additionalLabelBadgeNode: ASImageNode
+                        if let current = strongSelf.additionalLabelBadgeNode {
+                            additionalLabelBadgeNode = current
+                        } else {
+                            additionalLabelBadgeNode = ASImageNode()
+                            additionalLabelBadgeNode.isUserInteractionEnabled = false
+                            strongSelf.additionalLabelBadgeNode = additionalLabelBadgeNode
+                            strongSelf.addSubnode(additionalLabelBadgeNode)
+                        }
+                        additionalLabelBadgeNode.image = additionalBadgeIcon
+                        
+                        let additionalLabelSize = additionalBadgeIcon.size
+                        additionalLabelBadgeNode.frame = CGRect(origin: CGPoint(x: titleFrame.maxX + 6.0, y: floor((contentSize.height - additionalLabelSize.height) / 2.0)), size: additionalLabelSize)
+                    } else {
+                        if let additionalLabelBadgeNode = strongSelf.additionalLabelBadgeNode {
+                            strongSelf.additionalLabelBadgeNode = nil
+                            additionalLabelBadgeNode.removeFromSupernode()
+                        }
+                    }
                 }
             })
         }
     }
     
-    override func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) {
+    public override func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) {
         super.setHighlighted(highlighted, at: point, animated: animated)
         
         if highlighted {
@@ -325,11 +456,11 @@ class ItemListPeerActionItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    public override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
-    override func animateRemoved(_ currentTimestamp: Double, duration: Double) {
+    public override func animateRemoved(_ currentTimestamp: Double, duration: Double) {
         self.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false)
     }
 }

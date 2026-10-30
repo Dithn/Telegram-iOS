@@ -1,3 +1,4 @@
+#import <LegacyComponents/LegacyComponents.h>
 #import "TGPhotoEditorCurvesHistogramView.h"
 
 #import "LegacyComponentsInternal.h"
@@ -9,10 +10,10 @@
 #import "PGPhotoHistogram.h"
 
 #import <LegacyComponents/TGModernButton.h>
-#import "TGPhotoEditorInterfaceAssets.h"
+#import <LegacyComponents/TGPhotoEditorInterfaceAssets.h>
 #import "TGHistogramView.h"
 
-#import "TGPhotoEditorTabController.h"
+#import <LegacyComponents/TGPhotoEditorTabController.h>
 #import "TGPhotoEditorToolButtonsView.h"
 
 @interface TGPhotoEditorCurvesHistogramView ()
@@ -217,7 +218,7 @@
 - (void)setHistogramSignal:(SSignal *)signal
 {
     __weak TGPhotoEditorCurvesHistogramView *weakSelf = self;
-    [_histogramDisposable setDisposable:[[signal deliverOn:[SQueue mainQueue]] startWithNext:^(PGPhotoHistogram *next)
+    [_histogramDisposable setDisposable:[[signal deliverOn:[SQueue mainQueue]] startStrictWithNext:^(PGPhotoHistogram *next)
     {
         __strong TGPhotoEditorCurvesHistogramView *strongSelf = weakSelf;
         if (strongSelf != nil)
@@ -225,7 +226,7 @@
             strongSelf->_histogram = next;
             [strongSelf updateHistogram];
         }
-    }]];
+    } file:__FILE_NAME__ line:__LINE__]];
 }
 
 @synthesize interactionBegan;

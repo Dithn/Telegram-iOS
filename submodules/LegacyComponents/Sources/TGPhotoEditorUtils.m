@@ -1,12 +1,14 @@
-#import "TGPhotoEditorUtils.h"
+#import <LegacyComponents/TGPhotoEditorUtils.h>
 
 #import "LegacyComponentsInternal.h"
-#import "TGImageUtils.h"
+#import <LegacyComponents/TGImageUtils.h>
 
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
 
-const CGSize TGPhotoEditorResultImageMaxSize = { 1280, 1280 };
+const CGSize TGPhotoEditorResultImageMaxSize = { 2560, 2560 };
+const CGSize TGPhotoEditorResultImageWallpaperMaxSize = { 2048, 2048 };
+const CGSize TGPhotoEditorResultImageAvatarMaxSize = { 2048, 2048 };
 const CGSize TGPhotoEditorScreenImageHardLimitSize = { 1280, 1280 };
 const CGSize TGPhotoEditorScreenImageHardLimitLegacySize = { 750, 750 };
 
@@ -24,13 +26,29 @@ CGSize TGPhotoThumbnailSizeForCurrentScreen()
     
     if ([UIScreen mainScreen].scale >= 2.0f - FLT_EPSILON)
     {
-        if (widescreenWidth >= 926.0f - FLT_EPSILON)
+        if (widescreenWidth >= 956.0f - FLT_EPSILON)
+        {
+            return CGSizeMake(145.0f + TGScreenPixel, 145.0 + TGScreenPixel);
+        }
+        else if (widescreenWidth >= 932.0f - FLT_EPSILON)
         {
             return CGSizeMake(141.0f + TGScreenPixel, 141.0 + TGScreenPixel);
         }
-        if (widescreenWidth >= 896.0f - FLT_EPSILON)
+        else if (widescreenWidth >= 926.0f - FLT_EPSILON)
+        {
+            return CGSizeMake(141.0f + TGScreenPixel, 141.0 + TGScreenPixel);
+        }
+        else if (widescreenWidth >= 896.0f - FLT_EPSILON)
         {
             return CGSizeMake(137.0f - TGScreenPixel, 137.0f - TGScreenPixel);
+        }
+        else if (widescreenWidth >= 874.0f - FLT_EPSILON)
+        {
+            return CGSizeMake(133.0f - TGScreenPixel, 133.0f - TGScreenPixel);
+        }
+        else if (widescreenWidth >= 852.0f - FLT_EPSILON)
+        {
+            return CGSizeMake(129.0f - TGScreenPixel, 129.0f - TGScreenPixel);
         }
         else if (widescreenWidth >= 844.0f - FLT_EPSILON)
         {
@@ -130,7 +148,7 @@ CGImageRef TGPhotoLanczosResize(UIImage *image, CGSize targetSize)
     
     NSUInteger bytesPerPixel = 4;
     NSUInteger dstBytesPerRow = bytesPerPixel * (NSUInteger)targetSize.width;
-    uint8_t *dstData = (uint8_t *)calloc((NSUInteger)targetSize.height * (NSInteger)targetSize.width * bytesPerPixel, sizeof(uint8_t));
+    uint8_t *dstData = (uint8_t *)calloc((NSUInteger)targetSize.height * (NSUInteger)dstBytesPerRow, sizeof(uint8_t));
     vImage_Buffer dstBuffer =
     {
         .data = dstData,
@@ -139,7 +157,11 @@ CGImageRef TGPhotoLanczosResize(UIImage *image, CGSize targetSize)
         .rowBytes = dstBytesPerRow
     };
     
-    ret = vImageScale_ARGB8888(&srcBuffer, &dstBuffer, NULL, kvImageHighQualityResampling);
+    vImage_Flags flags = kvImageHighQualityResampling;
+    if (MAX(image.size.width, image.size.height) > 4200) {
+        flags = kvImageNoFlags;
+    }
+    ret = vImageScale_ARGB8888(&srcBuffer, &dstBuffer, NULL, flags);
     free(srcBuffer.data);
     if (ret != kvImageNoError)
     {

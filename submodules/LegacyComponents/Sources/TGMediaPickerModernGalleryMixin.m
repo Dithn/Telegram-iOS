@@ -1,16 +1,16 @@
-#import "TGMediaPickerModernGalleryMixin.h"
+#import <LegacyComponents/TGMediaPickerModernGalleryMixin.h>
 
 #import "LegacyComponentsInternal.h"
 
 #import <LegacyComponents/LegacyComponents.h>
 
 #import <LegacyComponents/TGModernGalleryController.h>
-#import "TGMediaPickerGalleryItem.h"
-#import "TGMediaPickerGalleryPhotoItem.h"
-#import "TGMediaPickerGalleryVideoItem.h"
-#import "TGMediaPickerGalleryVideoItemView.h"
+#import <LegacyComponents/TGMediaPickerGalleryItem.h>
+#import <LegacyComponents/TGMediaPickerGalleryPhotoItem.h>
+#import <LegacyComponents/TGMediaPickerGalleryVideoItem.h>
+#import <LegacyComponents/TGMediaPickerGalleryVideoItemView.h>
 
-#import "TGMediaPickerSendActionSheetController.h"
+#import <LegacyComponents/TGMediaPickerSendActionSheetController.h>
 
 #import <LegacyComponents/TGMediaEditingContext.h>
 #import <LegacyComponents/TGMediaSelectionContext.h>
@@ -40,17 +40,17 @@
 
 @implementation TGMediaPickerModernGalleryMixin
 
-- (instancetype)initWithContext:(id<LegacyComponentsContext>)context item:(id)item fetchResult:(TGMediaAssetFetchResult *)fetchResult parentController:(TGViewController *)parentController thumbnailImage:(UIImage *)thumbnailImage selectionContext:(TGMediaSelectionContext *)selectionContext editingContext:(TGMediaEditingContext *)editingContext hasCaptions:(bool)hasCaptions allowCaptionEntities:(bool)allowCaptionEntities hasTimer:(bool)hasTimer onlyCrop:(bool)onlyCrop inhibitDocumentCaptions:(bool)inhibitDocumentCaptions inhibitMute:(bool)inhibitMute asFile:(bool)asFile itemsLimit:(NSUInteger)itemsLimit recipientName:(NSString *)recipientName hasSilentPosting:(bool)hasSilentPosting hasSchedule:(bool)hasSchedule reminder:(bool)reminder stickersContext:(id<TGPhotoPaintStickersContext>)stickersContext
+- (instancetype)initWithContext:(id<LegacyComponentsContext>)context item:(id)item fetchResult:(TGMediaAssetFetchResult *)fetchResult parentController:(TGViewController *)parentController thumbnailImage:(UIImage *)thumbnailImage selectionContext:(TGMediaSelectionContext *)selectionContext editingContext:(TGMediaEditingContext *)editingContext hasCaptions:(bool)hasCaptions allowCaptionEntities:(bool)allowCaptionEntities hasTimer:(bool)hasTimer onlyCrop:(bool)onlyCrop inhibitDocumentCaptions:(bool)inhibitDocumentCaptions inhibitMute:(bool)inhibitMute asFile:(bool)asFile itemsLimit:(NSUInteger)itemsLimit recipientName:(NSString *)recipientName hasSilentPosting:(bool)hasSilentPosting hasSchedule:(bool)hasSchedule reminder:(bool)reminder hasCoverButton:(bool)hasCoverButton stickersContext:(id<TGPhotoPaintStickersContext>)stickersContext
 {
-    return [self initWithContext:context item:item fetchResult:fetchResult momentList:nil parentController:parentController thumbnailImage:thumbnailImage selectionContext:selectionContext editingContext:editingContext hasCaptions:hasCaptions allowCaptionEntities:allowCaptionEntities hasTimer:hasTimer onlyCrop:onlyCrop inhibitDocumentCaptions:inhibitDocumentCaptions inhibitMute:inhibitMute asFile:asFile itemsLimit:itemsLimit recipientName:recipientName hasSilentPosting:hasSilentPosting hasSchedule:hasSchedule reminder:reminder stickersContext:stickersContext];
+    return [self initWithContext:context item:item fetchResult:fetchResult momentList:nil parentController:parentController thumbnailImage:thumbnailImage selectionContext:selectionContext editingContext:editingContext hasCaptions:hasCaptions allowCaptionEntities:allowCaptionEntities hasTimer:hasTimer onlyCrop:onlyCrop inhibitDocumentCaptions:inhibitDocumentCaptions inhibitMute:inhibitMute asFile:asFile itemsLimit:itemsLimit recipientName:recipientName hasSilentPosting:hasSilentPosting hasSchedule:hasSchedule reminder:reminder hasCoverButton:hasCoverButton stickersContext:stickersContext];
 }
 
-- (instancetype)initWithContext:(id<LegacyComponentsContext>)context item:(id)item momentList:(TGMediaAssetMomentList *)momentList parentController:(TGViewController *)parentController thumbnailImage:(UIImage *)thumbnailImage selectionContext:(TGMediaSelectionContext *)selectionContext editingContext:(TGMediaEditingContext *)editingContext hasCaptions:(bool)hasCaptions allowCaptionEntities:(bool)allowCaptionEntities hasTimer:(bool)hasTimer onlyCrop:(bool)onlyCrop inhibitDocumentCaptions:(bool)inhibitDocumentCaptions inhibitMute:(bool)inhibitMute asFile:(bool)asFile itemsLimit:(NSUInteger)itemsLimit hasSilentPosting:(bool)hasSilentPosting hasSchedule:(bool)hasSchedule reminder:(bool)reminder stickersContext:(id<TGPhotoPaintStickersContext>)stickersContext
+- (instancetype)initWithContext:(id<LegacyComponentsContext>)context item:(id)item momentList:(TGMediaAssetMomentList *)momentList parentController:(TGViewController *)parentController thumbnailImage:(UIImage *)thumbnailImage selectionContext:(TGMediaSelectionContext *)selectionContext editingContext:(TGMediaEditingContext *)editingContext hasCaptions:(bool)hasCaptions allowCaptionEntities:(bool)allowCaptionEntities hasTimer:(bool)hasTimer onlyCrop:(bool)onlyCrop inhibitDocumentCaptions:(bool)inhibitDocumentCaptions inhibitMute:(bool)inhibitMute asFile:(bool)asFile itemsLimit:(NSUInteger)itemsLimit hasSilentPosting:(bool)hasSilentPosting hasSchedule:(bool)hasSchedule reminder:(bool)reminder hasCoverButton:(bool)hasCoverButton stickersContext:(id<TGPhotoPaintStickersContext>)stickersContext
 {
-    return [self initWithContext:context item:item fetchResult:nil momentList:momentList parentController:parentController thumbnailImage:thumbnailImage selectionContext:selectionContext editingContext:editingContext hasCaptions:hasCaptions allowCaptionEntities:allowCaptionEntities hasTimer:hasTimer onlyCrop:onlyCrop inhibitDocumentCaptions:inhibitDocumentCaptions inhibitMute:inhibitMute asFile:asFile itemsLimit:itemsLimit recipientName:nil hasSilentPosting:hasSilentPosting hasSchedule:hasSchedule reminder:reminder stickersContext:stickersContext];
+    return [self initWithContext:context item:item fetchResult:nil momentList:momentList parentController:parentController thumbnailImage:thumbnailImage selectionContext:selectionContext editingContext:editingContext hasCaptions:hasCaptions allowCaptionEntities:allowCaptionEntities hasTimer:hasTimer onlyCrop:onlyCrop inhibitDocumentCaptions:inhibitDocumentCaptions inhibitMute:inhibitMute asFile:asFile itemsLimit:itemsLimit recipientName:nil hasSilentPosting:hasSilentPosting hasSchedule:hasSchedule reminder:reminder hasCoverButton:hasCoverButton stickersContext:stickersContext];
 }
 
-- (instancetype)initWithContext:(id<LegacyComponentsContext>)context item:(id)item fetchResult:(TGMediaAssetFetchResult *)fetchResult momentList:(TGMediaAssetMomentList *)momentList parentController:(TGViewController *)parentController thumbnailImage:(UIImage *)thumbnailImage selectionContext:(TGMediaSelectionContext *)selectionContext editingContext:(TGMediaEditingContext *)editingContext hasCaptions:(bool)hasCaptions allowCaptionEntities:(bool)allowCaptionEntities hasTimer:(bool)hasTimer onlyCrop:(bool)onlyCrop inhibitDocumentCaptions:(bool)inhibitDocumentCaptions inhibitMute:(bool)inhibitMute asFile:(bool)asFile itemsLimit:(NSUInteger)itemsLimit recipientName:(NSString *)recipientName hasSilentPosting:(bool)hasSilentPosting hasSchedule:(bool)hasSchedule reminder:(bool)reminder stickersContext:(id<TGPhotoPaintStickersContext>)stickersContext
+- (instancetype)initWithContext:(id<LegacyComponentsContext>)context item:(id)item fetchResult:(TGMediaAssetFetchResult *)fetchResult momentList:(TGMediaAssetMomentList *)momentList parentController:(TGViewController *)parentController thumbnailImage:(UIImage *)thumbnailImage selectionContext:(TGMediaSelectionContext *)selectionContext editingContext:(TGMediaEditingContext *)editingContext hasCaptions:(bool)hasCaptions allowCaptionEntities:(bool)allowCaptionEntities hasTimer:(bool)hasTimer onlyCrop:(bool)onlyCrop inhibitDocumentCaptions:(bool)inhibitDocumentCaptions inhibitMute:(bool)inhibitMute asFile:(bool)asFile itemsLimit:(NSUInteger)itemsLimit recipientName:(NSString *)recipientName hasSilentPosting:(bool)hasSilentPosting hasSchedule:(bool)hasSchedule reminder:(bool)reminder hasCoverButton:(bool)hasCoverButton stickersContext:(id<TGPhotoPaintStickersContext>)stickersContext
 {
     self = [super init];
     if (self != nil)
@@ -84,7 +84,7 @@
         
         NSArray *galleryItems = [self prepareGalleryItemsForFetchResult:fetchResult selectionContext:selectionContext editingContext:editingContext stickersContext:stickersContext asFile:asFile enumerationBlock:enumerationBlock];
         
-        TGMediaPickerGalleryModel *model = [[TGMediaPickerGalleryModel alloc] initWithContext:[_windowManager context] items:galleryItems focusItem:focusItem selectionContext:selectionContext editingContext:editingContext hasCaptions:hasCaptions allowCaptionEntities:allowCaptionEntities hasTimer:hasTimer onlyCrop:onlyCrop inhibitDocumentCaptions:inhibitDocumentCaptions hasSelectionPanel:true hasCamera:false recipientName:recipientName];
+        TGMediaPickerGalleryModel *model = [[TGMediaPickerGalleryModel alloc] initWithContext:[_windowManager context] items:galleryItems focusItem:focusItem selectionContext:selectionContext editingContext:editingContext hasCaptions:hasCaptions allowCaptionEntities:allowCaptionEntities hasTimer:hasTimer onlyCrop:onlyCrop inhibitDocumentCaptions:inhibitDocumentCaptions hasSelectionPanel:true hasCamera:false recipientName:recipientName isScheduledMessages:false isActionButtonDone:false hasCoverButton:hasCoverButton];
         _galleryModel = model;
         model.stickersContext = stickersContext;
         model.inhibitMute = inhibitMute;
@@ -142,7 +142,7 @@
                 strongSelf.completeWithItem(item, false, 0);
         };
         
-        model.interfaceView.doneLongPressed = ^(TGMediaPickerGalleryItem *item) {
+        model.interfaceView.doneLongPressed = ^(TGMediaPickerGalleryItem *item, UIView *sourceView) {
             __strong TGMediaPickerModernGalleryMixin *strongSelf = weakSelf;
             if (strongSelf == nil || !(hasSilentPosting || hasSchedule))
                 return;
@@ -165,7 +165,7 @@
                 }
             }
             
-            TGMediaPickerSendActionSheetController *controller = [[TGMediaPickerSendActionSheetController alloc] initWithContext:strongSelf->_context isDark:true sendButtonFrame:strongSelf.galleryModel.interfaceView.doneButtonFrame canSendSilently:hasSilentPosting canSchedule:effectiveHasSchedule reminder:reminder hasTimer:hasTimer];
+            TGMediaPickerSendActionSheetController *controller = [[TGMediaPickerSendActionSheetController alloc] initWithContext:strongSelf->_context isDark:true sendButtonFrame:strongSelf.galleryModel.interfaceView.doneButtonFrame canSendSilently:hasSilentPosting canSendWhenOnline:effectiveHasSchedule canSchedule:effectiveHasSchedule reminder:reminder hasTimer:false];
             controller.send = ^{
                 __strong TGMediaPickerModernGalleryMixin *strongSelf = weakSelf;
                 if (strongSelf == nil)
@@ -186,12 +186,22 @@
                 if (strongSelf.completeWithItem != nil)
                     strongSelf.completeWithItem(item, true, 0);
             };
+            controller.sendWhenOnline = ^{
+                __strong TGMediaPickerModernGalleryMixin *strongSelf = weakSelf;
+                if (strongSelf == nil)
+                    return;
+                
+                strongSelf->_galleryModel.dismiss(true, false);
+                
+                if (strongSelf.completeWithItem != nil)
+                    strongSelf.completeWithItem(item, false, 0x7ffffffe);
+            };
             controller.schedule = ^{
                 __strong TGMediaPickerModernGalleryMixin *strongSelf = weakSelf;
                 if (strongSelf == nil)
                     return;
                 
-                strongSelf.presentScheduleController(true, ^(int32_t time) {
+                strongSelf.presentScheduleController(true, ^(int32_t time, bool silentPosting) {
                     __strong TGMediaPickerModernGalleryMixin *strongSelf = weakSelf;
                     if (strongSelf == nil)
                         return;
@@ -199,7 +209,7 @@
                     strongSelf->_galleryModel.dismiss(true, false);
                     
                     if (strongSelf.completeWithItem != nil)
-                        strongSelf.completeWithItem(item, false, time);
+                        strongSelf.completeWithItem(item, silentPosting, time);
                 });
             };
             controller.sendWithTimer = ^{
@@ -226,6 +236,19 @@
                         strongSelf.completeWithItem(item, false, 0);
                 });
             };
+            if (sourceView != nil && strongSelf->_stickersContext.presentMediaPickerSendActionMenu != nil && strongSelf->_stickersContext.presentMediaPickerSendActionMenu(sourceView, hasSilentPosting, effectiveHasSchedule, effectiveHasSchedule, reminder, false, ^{
+                if (controller.sendSilently != nil)
+                    controller.sendSilently();
+            }, ^{
+                if (controller.sendWhenOnline != nil)
+                    controller.sendWhenOnline();
+            }, ^{
+                if (controller.schedule != nil)
+                    controller.schedule();
+            }, ^{
+            })) {
+                return;
+            }
             
             TGOverlayControllerWindow *controllerWindow = [[TGOverlayControllerWindow alloc] initWithManager:[strongSelf->_context makeOverlayWindowManager] parentController:strongSelf->_parentController contentController:controller];
             controllerWindow.hidden = false;
@@ -318,12 +341,6 @@
     return _galleryController;
 }
 
-- (void)setPreviewMode
-{
-    _galleryController.previewMode = true;
-    _strongGalleryController = nil;
-}
-
 - (void)updateWithFetchResult:(TGMediaAssetFetchResult *)fetchResult
 {
     TGMediaAsset *currentAsset = ((TGMediaPickerGalleryItem *)_galleryController.currentItem).asset;
@@ -359,32 +376,7 @@
         count = MIN(count, _itemsLimit);
     
     for (NSUInteger i = 0; i < count; i++)
-    {
-//        TGMediaAsset *asset = [fetchResult assetAtIndex:i];
-//
-//        TGMediaPickerGalleryItem<TGModernGallerySelectableItem, TGModernGalleryEditableItem> *galleryItem = nil;
-//        switch (asset.type)
-//        {
-//            case TGMediaAssetVideoType:
-//            {
-//                galleryItem = [[TGMediaPickerGalleryVideoItem alloc] initWithAsset:(id<TGMediaEditableItem,TGMediaSelectableItem>)asset];
-//            }
-//                break;
-//
-//            case TGMediaAssetGifType:
-//            {
-//                TGCameraCapturedVideo *convertedAsset = [[TGCameraCapturedVideo alloc] initWithAsset:asset livePhoto:false];
-//                galleryItem = [[TGMediaPickerGalleryVideoItem alloc] initWithAsset:convertedAsset];
-//            }
-//                break;
-//
-//            default:
-//            {
-//                galleryItem = [[TGMediaPickerGalleryPhotoItem alloc] initWithAsset:(id<TGMediaEditableItem,TGMediaSelectableItem>)asset];
-//            }
-//                break;
-//        }
-        
+    {        
         TGMediaPickerGalleryFetchResultItem *galleryItem = [[TGMediaPickerGalleryFetchResultItem alloc] initWithFetchResult:fetchResult index:i];
         galleryItem.selectionContext = selectionContext;
         galleryItem.editingContext = editingContext;

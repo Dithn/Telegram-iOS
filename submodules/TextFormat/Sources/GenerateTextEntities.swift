@@ -1,18 +1,21 @@
 import Foundation
 import UIKit
 import TelegramCore
+import Emoji
 
 private let whitelistedHosts: Set<String> = Set([
     "telegram.org",
     "t.me",
     "telegram.me",
     "telegra.ph",
-    "telesco.pe"
+    "telesco.pe",
+    "fragment.com"
 ])
 
 private let dataDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType([.link]).rawValue)
 private let dataAndPhoneNumberDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType([.link, .phoneNumber]).rawValue)
 private let phoneNumberDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType([.phoneNumber]).rawValue)
+
 private let validHashtagSet: CharacterSet = {
     var set = CharacterSet.alphanumerics
     set.insert("_")
@@ -57,6 +60,7 @@ private let validTimecodePreviousSet: CharacterSet = {
 
 public struct ApplicationSpecificEntityType {
     public static let Timecode: Int32 = 1
+    public static let Button: Int32 = 2
 }
 
 private enum CurrentEntityType {
@@ -142,8 +146,9 @@ private func commitEntity(_ utf16: String.UTF16View, _ type: CurrentEntityType, 
     }
 }
 
-public func generateChatInputTextEntities(_ text: NSAttributedString) -> [MessageTextEntity] {
+public func generateChatInputTextEntities(_ text: NSAttributedString, maxAnimatedEmojisInText: Int? = nil, generateLinks: Bool = false) -> [MessageTextEntity] {
     var entities: [MessageTextEntity] = []
+
     text.enumerateAttributes(in: NSRange(location: 0, length: text.length), options: [], using: { attributes, range, _ in
         for (key, value) in attributes {
             if key == ChatTextInputAttributes.bold {
@@ -160,11 +165,91 @@ public func generateChatInputTextEntities(_ text: NSAttributedString) -> [Messag
                 entities.append(MessageTextEntity(range: range.lowerBound ..< range.upperBound, type: .TextMention(peerId: value.peerId)))
             } else if key == ChatTextInputAttributes.textUrl, let value = value as? ChatTextInputTextUrlAttribute {
                 entities.append(MessageTextEntity(range: range.lowerBound ..< range.upperBound, type: .TextUrl(url: value.url)))
+            } else if key == ChatTextInputAttributes.date, let value = value as? ChatTextInputTextDateAttribute {
+                entities.append(MessageTextEntity(range: range.lowerBound ..< range.upperBound, type: .FormattedDate(format: nil, date: value.date)))
             } else if key == ChatTextInputAttributes.spoiler {
                 entities.append(MessageTextEntity(range: range.lowerBound ..< range.upperBound, type: .Spoiler))
+            } else if key == ChatTextInputAttributes.customEmoji, let value = value as? ChatTextInputTextCustomEmojiAttribute {
+                entities.append(MessageTextEntity(range: range.lowerBound ..< range.upperBound, type: .CustomEmoji(stickerPack: nil, fileId: value.fileId)))
+            } else if key == ChatTextInputAttributes.block, let value = value as? ChatTextInputTextQuoteAttribute {
+                switch value.kind {
+                case .quote:
+                    entities.append(MessageTextEntity(range: range.lowerBound ..< range.upperBound, type: .BlockQuote(isCollapsed: value.isCollapsed)))
+                case let .code(language):
+                    // The language is a token on the wire (`chatInputCodeLanguageForSending`): the composer keeps the
+                    // line as typed, edge whitespace included.
+                    entities.append(MessageTextEntity(range: range.lowerBound ..< range.upperBound, type: .Pre(language: chatInputCodeLanguageForSending(language))))
+                }
             }
         }
     })
+    
+    if generateLinks {
+        for entity in generateTextEntities(text.string, enabledTypes: .allUrl) {
+            if case .Url = entity.type {
+                entities.append(entity)
+            }
+        }
+    }
+    
+    while true {
+        var hadReductions = false
+        
+        scan: for i in 0 ..< entities.count {
+            if case .BlockQuote = entities[i].type {
+                inner: for j in 0 ..< entities.count {
+                    if j == i {
+                        continue inner
+                    }
+                    if case .BlockQuote = entities[j].type {
+                        if entities[i].range.upperBound == entities[j].range.lowerBound || entities[i].range.lowerBound == entities[j].range.upperBound {
+                            entities[i].range = min(entities[i].range.lowerBound, entities[j].range.lowerBound) ..< max(entities[i].range.upperBound, entities[j].range.upperBound)
+                            entities.remove(at: j)
+                            
+                            hadReductions = true
+                            break scan
+                        }
+                    }
+                }
+                
+                break scan
+            }
+        }
+        
+        if !hadReductions {
+            break
+        }
+    }
+    
+    while true {
+        var hadReductions = false
+        
+        scan: for i in 0 ..< entities.count {
+            if case let .Pre(language) = entities[i].type {
+                inner: for j in 0 ..< entities.count {
+                    if j == i {
+                        continue inner
+                    }
+                    if case .Pre(language) = entities[j].type {
+                        if entities[i].range.upperBound == entities[j].range.lowerBound || entities[i].range.lowerBound == entities[j].range.upperBound {
+                            entities[i].range = min(entities[i].range.lowerBound, entities[j].range.lowerBound) ..< max(entities[i].range.upperBound, entities[j].range.upperBound)
+                            entities.remove(at: j)
+                            
+                            hadReductions = true
+                            break scan
+                        }
+                    }
+                }
+                
+                break scan
+            }
+        }
+        
+        if !hadReductions {
+            break
+        }
+    }
+    
     return entities
 }
 
@@ -187,7 +272,7 @@ public func generateTextEntities(_ text: String, enabledTypes: EnabledEntityType
     if let detector = detector {
         detector.enumerateMatches(in: text, options: [], range: NSMakeRange(0, utf16.count), using: { result, _, _ in
             if let result = result {
-                if result.resultType == NSTextCheckingResult.CheckingType.link || result.resultType == NSTextCheckingResult.CheckingType.phoneNumber {
+                if [NSTextCheckingResult.CheckingType.link, NSTextCheckingResult.CheckingType.phoneNumber].contains(result.resultType) {
                     let lowerBound = utf16.index(utf16.startIndex, offsetBy: result.range.location).samePosition(in: text)
                     let upperBound = utf16.index(utf16.startIndex, offsetBy: result.range.location + result.range.length).samePosition(in: text)
                     if let lowerBound = lowerBound, let upperBound = upperBound {

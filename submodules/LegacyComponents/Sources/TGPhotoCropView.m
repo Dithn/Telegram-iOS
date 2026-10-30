@@ -5,7 +5,7 @@
 #import <SSignalKit/SSignalKit.h>
 
 #import <LegacyComponents/TGPhotoEditorAnimation.h>
-#import "TGPhotoEditorInterfaceAssets.h"
+#import <LegacyComponents/TGPhotoEditorInterfaceAssets.h>
 #import <LegacyComponents/UIControl+HitTestEdgeInsets.h>
 #import <LegacyComponents/TGPhotoEditorUtils.h>
 
@@ -539,8 +539,7 @@ const CGFloat TGPhotoCropViewOverscreenSize = 1000;
     
     __weak TGPhotoCropView *weakSelf = self;
     
-    _confirmTimer = [[STimer alloc] initWithTimeout:1.0f repeat:false completion:^
-    {
+    _confirmTimer = [[STimer alloc] initWithTimeout:1.0f repeat:false completion:^(__unused STimer *timer) {
         __strong TGPhotoCropView *strongSelf = weakSelf;
         if (strongSelf == nil)
             return;

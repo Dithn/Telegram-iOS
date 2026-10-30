@@ -6,8 +6,8 @@ import TelegramCore
 import TelegramPresentationData
 import TextFormat
 import AccountContext
-import ShareController
 import Markdown
+import ShareController
 
 final class LanguageLinkPreviewContentNode: ASDisplayNode, ShareContentContainerNode {
     private var contentOffsetUpdated: ((CGFloat, ContainedViewLayoutTransition) -> Void)?
@@ -78,8 +78,15 @@ final class LanguageLinkPreviewContentNode: ASDisplayNode, ShareContentContainer
     func setEnsurePeerVisibleOnLayout(_ peerId: EnginePeer.Id?) {
     }
     
+    func setDidBeginDragging(_ f: (() -> Void)?) {
+    }
+    
     func setContentOffsetUpdated(_ f: ((CGFloat, ContainedViewLayoutTransition) -> Void)?) {
         self.contentOffsetUpdated = f
+    }
+    
+    func updateTheme(_ theme: PresentationTheme) {
+        
     }
     
     func updateLayout(size: CGSize, isLandscape: Bool, bottomInset: CGFloat, transition: ContainedViewLayoutTransition) {
@@ -110,6 +117,6 @@ final class LanguageLinkPreviewContentNode: ASDisplayNode, ShareContentContainer
         self.contentOffsetUpdated?(-size.height + nodeHeight - 64.0, transition)
     }
     
-    func updateSelectedPeers() {
+    func updateSelectedPeers(animated: Bool) {
     }
 }

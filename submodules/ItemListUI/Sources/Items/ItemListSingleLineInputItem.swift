@@ -4,6 +4,8 @@ import Display
 import AsyncDisplayKit
 import SwiftSignalKit
 import TelegramPresentationData
+import TextNodeWithEntities
+import AccountContext
 
 private let validIdentifierSet: CharacterSet = {
     var set = CharacterSet(charactersIn: "a".unicodeScalars.first! ... "z".unicodeScalars.first!)
@@ -43,10 +45,13 @@ public enum ItemListSingleLineInputAlignment {
 }
 
 public class ItemListSingleLineInputItem: ListViewItem, ItemListItem {
+    let context: AccountContext?
+    let systemStyle: ItemListSystemStyle
     let presentationData: ItemListPresentationData
     let title: NSAttributedString
     let text: String
     let placeholder: String
+    let label: String?
     let type: ItemListSingleLineInputItemType
     let returnKeyType: UIReturnKeyType
     let alignment: ItemListSingleLineInputAlignment
@@ -65,11 +70,14 @@ public class ItemListSingleLineInputItem: ListViewItem, ItemListItem {
     let cleared: (() -> Void)?
     public let tag: ItemListItemTag?
     
-    public init(presentationData: ItemListPresentationData, title: NSAttributedString, text: String, placeholder: String, type: ItemListSingleLineInputItemType = .regular(capitalization: true, autocorrection: true), returnKeyType: UIReturnKeyType = .`default`, alignment: ItemListSingleLineInputAlignment = .default, spacing: CGFloat = 0.0, clearType: ItemListSingleLineInputClearType = .none, maxLength: Int = 0, enabled: Bool = true, selectAllOnFocus: Bool = false, secondaryStyle: Bool = false, tag: ItemListItemTag? = nil, sectionId: ItemListSectionId, textUpdated: @escaping (String) -> Void, shouldUpdateText: @escaping (String) -> Bool = { _ in return true }, processPaste: ((String) -> String)? = nil, updatedFocus: ((Bool) -> Void)? = nil, action: @escaping () -> Void, cleared: (() -> Void)? = nil) {
+    public init(context: AccountContext? = nil, presentationData: ItemListPresentationData, systemStyle: ItemListSystemStyle = .legacy, title: NSAttributedString, text: String, placeholder: String, label: String? = nil, type: ItemListSingleLineInputItemType = .regular(capitalization: true, autocorrection: true), returnKeyType: UIReturnKeyType = .`default`, alignment: ItemListSingleLineInputAlignment = .default, spacing: CGFloat = 0.0, clearType: ItemListSingleLineInputClearType = .none, maxLength: Int = 0, enabled: Bool = true, selectAllOnFocus: Bool = false, secondaryStyle: Bool = false, tag: ItemListItemTag? = nil, sectionId: ItemListSectionId, textUpdated: @escaping (String) -> Void, shouldUpdateText: @escaping (String) -> Bool = { _ in return true }, processPaste: ((String) -> String)? = nil, updatedFocus: ((Bool) -> Void)? = nil, action: @escaping () -> Void, cleared: (() -> Void)? = nil) {
+        self.context = context
         self.presentationData = presentationData
+        self.systemStyle = systemStyle
         self.title = title
         self.text = text
         self.placeholder = placeholder
+        self.label = label
         self.type = type
         self.returnKeyType = returnKeyType
         self.alignment = alignment
@@ -89,10 +97,10 @@ public class ItemListSingleLineInputItem: ListViewItem, ItemListItem {
         self.cleared = cleared
     }
     
-    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    public func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = ItemListSingleLineInputItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
             
             node.contentSize = layout.contentSize
             node.insets = layout.insets
@@ -105,14 +113,14 @@ public class ItemListSingleLineInputItem: ListViewItem, ItemListItem {
         }
     }
     
-    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    public func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? ItemListSingleLineInputItemNode {
             
                 let makeLayout = nodeValue.asyncLayout()
                 
                 async {
-                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
+                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topFacet: neighbors.previous?.base(ItemListNeighborFacet.self), bottomFacet: neighbors.next?.base(ItemListNeighborFacet.self)))
                     Queue.mainQueue().async {
                         completion(layout, { _ in
                             apply()
@@ -130,11 +138,12 @@ public class ItemListSingleLineInputItemNode: ListViewItemNode, UITextFieldDeleg
     private let bottomStripeNode: ASDisplayNode
     private let maskNode: ASImageNode
     
-    private let titleNode: TextNode
+    private let titleNode: TextNodeWithEntities
     private let measureTitleSizeNode: TextNode
     private let textNode: TextFieldNode
     private let clearIconNode: ASImageNode
     private let clearButtonNode: HighlightableButtonNode
+    private let labelNode: TextNode
     
     private var item: ItemListSingleLineInputItem?
     
@@ -154,7 +163,7 @@ public class ItemListSingleLineInputItemNode: ListViewItemNode, UITextFieldDeleg
         
         self.maskNode = ASImageNode()
         
-        self.titleNode = TextNode()
+        self.titleNode = TextNodeWithEntities()
         self.measureTitleSizeNode = TextNode()
         self.textNode = TextFieldNode()
         
@@ -165,12 +174,17 @@ public class ItemListSingleLineInputItemNode: ListViewItemNode, UITextFieldDeleg
         
         self.clearButtonNode = HighlightableButtonNode()
         
-        super.init(layerBacked: false, dynamicBounce: false)
+        self.labelNode = TextNode()
+        self.labelNode.isUserInteractionEnabled = false
         
-        self.addSubnode(self.titleNode)
+        super.init(layerBacked: false)
+        
+        self.addSubnode(self.titleNode.textNode)
         self.addSubnode(self.textNode)
         self.addSubnode(self.clearIconNode)
         self.addSubnode(self.clearButtonNode)
+        self.addSubnode(self.textNode)
+        self.addSubnode(self.labelNode)
         
         self.clearButtonNode.addTarget(self, action: #selector(self.clearButtonPressed), forControlEvents: .touchUpInside)
         self.clearButtonNode.highligthedChanged = { [weak self] highlighted in
@@ -209,12 +223,14 @@ public class ItemListSingleLineInputItemNode: ListViewItemNode, UITextFieldDeleg
     }
     
     public func asyncLayout() -> (_ item: ItemListSingleLineInputItem, _ params: ListViewItemLayoutParams, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, () -> Void) {
-        let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
+        let makeTitleLayout =  TextNode.asyncLayout(self.titleNode.textNode)
+        let makeTitleWithEntitiesLayout =  TextNodeWithEntities.asyncLayout(self.titleNode)
         let makeMeasureTitleSizeLayout = TextNode.asyncLayout(self.measureTitleSizeNode)
+        let makeLabelLayout = TextNode.asyncLayout(self.labelNode)
         
         let currentItem = self.item
         
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             var updatedTheme: PresentationTheme?
             
             var updatedClearIcon: UIImage?
@@ -241,16 +257,34 @@ public class ItemListSingleLineInputItemNode: ListViewItemNode, UITextFieldDeleg
             }
             
             let titleString = NSMutableAttributedString(attributedString: item.title)
-            titleString.removeAttribute(NSAttributedString.Key.font, range: NSMakeRange(0, titleString.length))
+            if !item.title.string.isSingleEmoji {
+                titleString.removeAttribute(NSAttributedString.Key.font, range: NSMakeRange(0, titleString.length))
+            }
             titleString.addAttributes([NSAttributedString.Key.font: Font.regular(item.presentationData.fontSize.itemListBaseFontSize)], range: NSMakeRange(0, titleString.length))
             
-            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: titleString, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - 32.0 - leftInset - rightInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let titleArguments = TextNodeLayoutArguments(attributedString: titleString, backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - 32.0 - leftInset - rightInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets())
+            
+            let (titleLayoutAndApply) = item.context == nil ? makeTitleLayout(titleArguments) : nil
+            let (titleWithEntitiesLayoutAndApply) = item.context != nil ? makeTitleWithEntitiesLayout(titleArguments) : nil
+            
+            let titleLayout: TextNodeLayout = (titleWithEntitiesLayoutAndApply?.0 ?? titleLayoutAndApply?.0)!
             
             let (measureTitleLayout, measureTitleSizeApply) = makeMeasureTitleSizeLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: "A", font: Font.regular(item.presentationData.fontSize.itemListBaseFontSize)), backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - 32.0 - leftInset - rightInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
-            let separatorHeight = UIScreenPixel
+            let (labelLayout, labelApply) = makeLabelLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.label ?? "", font: Font.regular(item.presentationData.fontSize.itemListBaseFontSize), textColor: item.presentationData.theme.list.itemSecondaryTextColor), backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - 32.0 - leftInset - rightInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
-            let contentSize = CGSize(width: params.width, height: max(titleLayout.size.height, measureTitleLayout.size.height) + 22.0)
+            let separatorHeight = UIScreenPixel
+            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
+            
+            let verticalInset: CGFloat
+            switch item.systemStyle {
+            case .glass:
+                verticalInset = 15.0
+            case .legacy:
+                verticalInset = 11.0
+            }
+            
+            let contentSize = CGSize(width: params.width, height: max(titleLayout.size.height, measureTitleLayout.size.height) + verticalInset * 2.0)
             let insets = itemListNeighborsGroupedInsets(neighbors, params)
             
             let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
@@ -280,10 +314,23 @@ public class ItemListSingleLineInputItemNode: ListViewItemNode, UITextFieldDeleg
                         strongSelf.textNode.textField.textColor = item.secondaryStyle ? item.presentationData.theme.list.itemSecondaryTextColor : item.presentationData.theme.list.itemPrimaryTextColor
                     }
                     
-                    let _ = titleApply()
-                    strongSelf.titleNode.frame = CGRect(origin: CGPoint(x: leftInset, y: floor((layout.contentSize.height - titleLayout.size.height) / 2.0)), size: titleLayout.size)
+                    if let titleWithEntitiesApply = titleWithEntitiesLayoutAndApply?.1, let context = item.context {
+                        let _ = titleWithEntitiesApply(
+                            TextNodeWithEntities.Arguments(
+                                context: context,
+                                cache: context.animationCache,
+                                renderer: context.animationRenderer,
+                                placeholderColor: item.presentationData.theme.chat.inputPanel.inputTextColor.withAlphaComponent(0.12),
+                                attemptSynchronous: false
+                            )
+                        )
+                    } else if let titleApply = titleLayoutAndApply?.1 {
+                        let _ = titleApply()
+                    }
+                    strongSelf.titleNode.textNode.frame = CGRect(origin: CGPoint(x: leftInset, y: floor((layout.contentSize.height - titleLayout.size.height) / 2.0)), size: titleLayout.size)
                     
                     let _ = measureTitleSizeApply()
+                    let _ = labelApply()
                     
                     let secureEntry: Bool
                     let capitalizationType: UITextAutocapitalizationType
@@ -353,6 +400,8 @@ public class ItemListSingleLineInputItemNode: ListViewItemNode, UITextFieldDeleg
                     
                     strongSelf.textNode.frame = CGRect(origin: CGPoint(x: leftInset + titleLayout.size.width + item.spacing, y: 0.0), size: CGSize(width: max(1.0, params.width - (leftInset + rightInset + titleLayout.size.width + item.spacing)), height: layout.contentSize.height - 2.0))
                     
+                    strongSelf.labelNode.frame = CGRect(origin: CGPoint(x: layoutSize.width - rightInset - labelLayout.size.width, y: floorToScreenPixels((layout.contentSize.height - labelLayout.size.height) / 2.0)), size: labelLayout.size)
+                    
                     switch item.alignment {
                         case .default:
                             strongSelf.textNode.textField.textAlignment = .natural
@@ -406,12 +455,12 @@ public class ItemListSingleLineInputItemNode: ListViewItemNode, UITextFieldDeleg
                             strongSelf.bottomStripeNode.isHidden = hasCorners
                     }
                     
-                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                    strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                     
                     strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
-                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                    strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                     strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight))
-                    strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - UIScreenPixel), size: CGSize(width: layoutSize.width - bottomStripeInset, height: separatorHeight))
+                    strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - UIScreenPixel), size: CGSize(width: layoutSize.width - bottomStripeInset - params.rightInset - separatorRightInset, height: separatorHeight))
                     
                     if strongSelf.textNode.textField.attributedPlaceholder == nil || !strongSelf.textNode.textField.attributedPlaceholder!.isEqual(to: attributedPlaceholderText) {
                         strongSelf.textNode.textField.attributedPlaceholder = attributedPlaceholderText
@@ -445,7 +494,7 @@ public class ItemListSingleLineInputItemNode: ListViewItemNode, UITextFieldDeleg
         self.clearButtonNode.isAccessibilityElement = isHidden
     }
     
-    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
@@ -471,6 +520,10 @@ public class ItemListSingleLineInputItemNode: ListViewItemNode, UITextFieldDeleg
         if !self.textNode.textField.isFirstResponder {
             self.textNode.textField.becomeFirstResponder()
         }
+    }
+    
+    public func selectAll() {
+        self.textNode.textField.selectAll(nil)
     }
     
     @objc public func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {

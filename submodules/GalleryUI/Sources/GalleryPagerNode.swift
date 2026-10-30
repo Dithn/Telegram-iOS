@@ -3,10 +3,13 @@ import UIKit
 import AsyncDisplayKit
 import Display
 import SwiftSignalKit
-import Postbox
 
 private func edgeWidth(width: CGFloat) -> CGFloat {
     return min(44.0, floor(width / 6.0))
+}
+
+private func activeEdgeWidth(width: CGFloat) -> CGFloat {
+    return floor(width * 0.4)
 }
 
 let fadeWidth: CGFloat = 70.0
@@ -76,7 +79,7 @@ public struct GalleryPagerTransaction {
     }
 }
 
-public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGestureRecognizerDelegate {
+public final class GalleryPagerNode: ASDisplayNode, ASScrollViewDelegate, ASGestureRecognizerDelegate {
     private let pageGap: CGFloat
     private let disableTapNavigation: Bool
     
@@ -85,6 +88,9 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
     private let leftFadeNode: ASDisplayNode
     private let rightFadeNode: ASDisplayNode
     private var highlightedSide: Bool?
+    private var activeSide: GalleryItemNode.ActiveEdge?
+    private var canPerformSideNavigationAction: Bool = false
+    private var sideActionInitialPosition: CGPoint?
     
     private var tapRecognizer: TapLongTapOrDoubleTapGestureRecognizer?
     
@@ -107,16 +113,34 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
     public var centralItemIndexOffsetUpdated: (([GalleryItem]?, Int, CGFloat)?) -> Void = { _ in }
     public var toggleControlsVisibility: () -> Void = { }
     public var updateControlsVisibility: (Bool) -> Void = { _ in }
+    public var controlsVisibility: () -> Bool = { return true }
     public var updateOrientation: (UIInterfaceOrientation) -> Void = { _ in }
     public var dismiss: () -> Void = { }
-    public var beginCustomDismiss: (Bool) -> Void = { _ in }
-    public var completeCustomDismiss: () -> Void = { }
+    public var beginCustomDismiss: (GalleryControllerNode.CustomDismissType) -> Void = { _ in }
+    public var completeCustomDismiss: (Bool) -> Void = { _ in }
     public var baseNavigationController: () -> NavigationController? = { return nil }
     public var galleryController: () -> ViewController? = { return nil }
+    public var isInteractingUpdated: ((Bool) -> Void)?
     
     private var pagingEnabled = true
     public var pagingEnabledPromise = Promise<Bool>(true)
     private var pagingEnabledDisposable: Disposable?
+    
+    private var edgeLongTapTimer: Foundation.Timer?
+
+    private func isInteractiveControlView(_ view: UIView?) -> Bool {
+        var currentView = view
+        while let view = currentView {
+            if view is UIControl {
+                return true
+            }
+            if let _ = view.asyncdisplaykit_node as? ASButtonNode {
+                return true
+            }
+            currentView = view.superview
+        }
+        return false
+    }
     
     public init(pageGap: CGFloat, disableTapNavigation: Bool) {
         self.pageGap = pageGap
@@ -142,7 +166,7 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
         self.scrollView.alwaysBounceHorizontal = !pageGap.isZero
         self.scrollView.bounces = !pageGap.isZero
         self.scrollView.isPagingEnabled = true
-        self.scrollView.delegate = self
+        self.scrollView.delegate = self.wrappedScrollViewDelegate
         self.scrollView.clipsToBounds = false
         self.scrollView.scrollsToTop = false
         self.scrollView.delaysContentTouches = false
@@ -156,7 +180,7 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
             if let strongSelf = self {
                 strongSelf.pagingEnabled = pagingEnabled
             }
-        })
+        }).strict()
     }
     
     deinit {
@@ -167,59 +191,99 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
         super.didLoad()
         
         let recognizer = TapLongTapOrDoubleTapGestureRecognizer(target: self, action: #selector(self.tapLongTapOrDoubleTapGesture(_:)))
-        recognizer.delegate = self
+        recognizer.delegate = self.wrappedGestureRecognizerDelegate
         self.tapRecognizer = recognizer
         recognizer.tapActionAtPoint = { [weak self] point in
-            guard let strongSelf = self, strongSelf.pagingEnabled else {
+            guard let strongSelf = self else {
                 return .fail
             }
             
             let size = strongSelf.bounds
             
             var highlightedSide: Bool?
-            if point.x < edgeWidth(width: size.width) && strongSelf.canGoToPreviousItem() {
-                if strongSelf.items.count > 1 {
-                    highlightedSide = false
+            var activeSide: Bool?
+            if point.x < edgeWidth(width: size.width) {
+                if strongSelf.canGoToPreviousItem() {
+                    if strongSelf.items.count > 1 {
+                        highlightedSide = false
+                    }
                 }
-            } else if point.x > size.width - edgeWidth(width: size.width) && strongSelf.canGoToNextItem() {
-                if strongSelf.items.count > 1 {
-                    if point.y < 80.0 {
-                        highlightedSide = nil
-                    } else {
+            } else if point.x > size.width - edgeWidth(width: size.width) {
+                if strongSelf.canGoToNextItem() {
+                    if strongSelf.items.count > 1 {
                         highlightedSide = true
                     }
                 }
             }
+            if point.x < activeEdgeWidth(width: size.width), let centralIndex = strongSelf.centralItemIndex, let itemNode = strongSelf.visibleItemNode(at: centralIndex), itemNode.hasActiveEdgeAction(edge: .left) {
+                activeSide = false
+            } else if point.x > 0.0, let centralIndex = strongSelf.centralItemIndex, let itemNode = strongSelf.visibleItemNode(at: centralIndex), itemNode.hasActiveEdgeAction(edge: .right) {
+                activeSide = true
+            }
             
-            if highlightedSide == nil {
+            if activeSide == nil, let centralIndex = strongSelf.centralItemIndex, let itemNode = strongSelf.visibleItemNode(at: centralIndex), itemNode.hasActiveEdgeAction(edge: .middle) {
+                activeSide = true
+            }
+            
+            if !strongSelf.pagingEnabled {
+                highlightedSide = nil
+            }
+            
+            if highlightedSide == nil && activeSide == nil {
                 return .fail
             }
             
-            if let result = strongSelf.hitTest(point, with: nil), let _ = result.asyncdisplaykit_node as? ASButtonNode {
+            if strongSelf.isInteractiveControlView(strongSelf.hitTest(point, with: nil)) {
                 return .fail
             }
-            return .keepWithSingleTap
+            
+            if activeSide != nil {
+                return .waitForHold(timeout: 0.3, acceptTap: true)
+            } else {
+                return .keepWithSingleTap
+            }
         }
         recognizer.highlight = { [weak self] point in
-            guard let strongSelf = self, strongSelf.pagingEnabled else {
+            guard let strongSelf = self else {
                 return
             }
             let size = strongSelf.bounds
             
             var highlightedSide: Bool?
-            if let point = point {
-                if point.x < edgeWidth(width: size.width) && strongSelf.canGoToPreviousItem() {
-                    if strongSelf.items.count > 1 {
-                        highlightedSide = false
+            var activeSide: GalleryItemNode.ActiveEdge?
+            if let point {
+                if point.x < edgeWidth(width: size.width) {
+                    if strongSelf.canGoToPreviousItem() {
+                        if strongSelf.items.count > 1 {
+                            highlightedSide = false
+                        }
                     }
-                } else if point.x > size.width - edgeWidth(width: size.width) && strongSelf.canGoToNextItem() {
-                    if strongSelf.items.count > 1 {
-                        highlightedSide = true
+                } else if point.x > size.width - edgeWidth(width: size.width) {
+                    if strongSelf.canGoToNextItem() {
+                        if strongSelf.items.count > 1 {
+                            highlightedSide = true
+                        }
                     }
                 }
+                if point.x < activeEdgeWidth(width: size.width), let centralIndex = strongSelf.centralItemIndex, let itemNode = strongSelf.visibleItemNode(at: centralIndex), itemNode.hasActiveEdgeAction(edge: .left) {
+                    activeSide = .left
+                } else if point.x > 0.0, let centralIndex = strongSelf.centralItemIndex, let itemNode = strongSelf.visibleItemNode(at: centralIndex), itemNode.hasActiveEdgeAction(edge: .right) {
+                    activeSide = .right
+                } else if let centralIndex = strongSelf.centralItemIndex, let itemNode = strongSelf.visibleItemNode(at: centralIndex), itemNode.hasActiveEdgeAction(edge: .middle) {
+                    activeSide = .middle
+                }
             }
+            
+            if !strongSelf.pagingEnabled {
+                highlightedSide = nil
+            }
+            
             if strongSelf.highlightedSide != highlightedSide {
                 strongSelf.highlightedSide = highlightedSide
+                
+                if highlightedSide != nil {
+                    strongSelf.canPerformSideNavigationAction = true
+                }
                 
                 let leftAlpha: CGFloat
                 let rightAlpha: CGFloat
@@ -247,6 +311,47 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
                     }
                 }
             }
+            
+            if strongSelf.activeSide != activeSide {
+                strongSelf.activeSide = activeSide
+                
+                if let activeSide, let centralIndex = strongSelf.centralItemIndex, let _ = strongSelf.visibleItemNode(at: centralIndex) {
+                    if strongSelf.edgeLongTapTimer == nil {
+                        strongSelf.edgeLongTapTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false, block: { _ in
+                            guard let self else {
+                                return
+                            }
+                            if let centralIndex = self.centralItemIndex, let itemNode = self.visibleItemNode(at: centralIndex) {
+                                itemNode.setActiveEdgeAction(edge: activeSide)
+                            }
+                            
+                            self.canPerformSideNavigationAction = false
+                            
+                            let leftAlpha: CGFloat
+                            let rightAlpha: CGFloat
+                            
+                            leftAlpha = 0.0
+                            rightAlpha = 0.0
+                            
+                            if self.leftFadeNode.alpha != leftAlpha {
+                                self.leftFadeNode.alpha = leftAlpha
+                                self.leftFadeNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.16, timingFunction: kCAMediaTimingFunctionSpring)
+                            }
+                            if self.rightFadeNode.alpha != rightAlpha {
+                                self.rightFadeNode.alpha = rightAlpha
+                                self.rightFadeNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.16, timingFunction: kCAMediaTimingFunctionSpring)
+                            }
+                        })
+                    }
+                } else if let edgeLongTapTimer = strongSelf.edgeLongTapTimer {
+                    edgeLongTapTimer.invalidate()
+                    strongSelf.edgeLongTapTimer = nil
+                    
+                    if let centralIndex = strongSelf.centralItemIndex, let itemNode = strongSelf.visibleItemNode(at: centralIndex) {
+                        itemNode.setActiveEdgeAction(edge: nil)
+                    }
+                }
+            }
         }
         self.view.addGestureRecognizer(recognizer)
     }
@@ -258,13 +363,29 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
     @objc private func tapLongTapOrDoubleTapGesture(_ recognizer: TapLongTapOrDoubleTapGestureRecognizer) {
         switch recognizer.state {
         case .ended:
+            self.sideActionInitialPosition = nil
             if let (gesture, location) = recognizer.lastRecognizedGestureAndLocation {
-                if case .tap = gesture {
+                if case .tap = gesture, self.canPerformSideNavigationAction {
                     let size = self.bounds.size
                     if location.x < edgeWidth(width: size.width) && self.canGoToPreviousItem() {
                         self.goToPreviousItem()
                     } else if location.x > size.width - edgeWidth(width: size.width) && self.canGoToNextItem() {
                         self.goToNextItem()
+                    }
+                }
+            }
+        case .cancelled:
+            self.sideActionInitialPosition = nil
+        case .began:
+            if let (gesture, location) = recognizer.lastRecognizedGestureAndLocation, case .hold = gesture {
+                self.sideActionInitialPosition = location
+            }
+        case .changed:
+            if let (gesture, location) = recognizer.lastRecognizedGestureAndLocation, case .hold = gesture {
+                if let sideActionInitialPosition = self.sideActionInitialPosition {
+                    let distance = location.x - sideActionInitialPosition.x
+                    if let centralIndex = self.centralItemIndex, let itemNode = self.visibleItemNode(at: centralIndex) {
+                        itemNode.adjustActiveEdgeAction(distance: distance)
                     }
                 }
             }
@@ -457,7 +578,7 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
         }
     }
     
-    private func canGoToPreviousItem() -> Bool {
+    func canGoToPreviousItem() -> Bool {
         if self.disableTapNavigation {
             return false
         }
@@ -468,7 +589,7 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
         }
     }
     
-    private func canGoToNextItem() -> Bool {
+    func canGoToNextItem() -> Bool {
         if self.disableTapNavigation {
             return false
         }
@@ -479,13 +600,13 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
         }
     }
     
-    private func goToPreviousItem() {
+    func goToPreviousItem() {
         if let index = self.centralItemIndex, index > 0 {
             self.transaction(GalleryPagerTransaction(deleteItems: [], insertItems: [], updateItems: [], focusOnItem: index - 1, synchronous: false))
         }
     }
     
-    private func goToNextItem() {
+    func goToNextItem() {
         if let index = self.centralItemIndex, index < self.items.count - 1 {
             self.transaction(GalleryPagerTransaction(deleteItems: [], insertItems: [], updateItems: [], focusOnItem: index + 1, synchronous: false))
         }
@@ -495,6 +616,7 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
         let node = self.items[index].node(synchronous: synchronous)
         node.toggleControlsVisibility = self.toggleControlsVisibility
         node.updateControlsVisibility = self.updateControlsVisibility
+        node.controlsVisibility = self.controlsVisibility
         node.updateOrientation = self.updateOrientation
         node.dismiss = self.dismiss
         node.beginCustomDismiss = self.beginCustomDismiss
@@ -549,6 +671,7 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
             let node = self.makeNodeForItem(at: self.centralItemIndex ?? 0, synchronous: synchronous)
             node.frame = CGRect(origin: CGPoint(), size: self.scrollView.bounds.size)
             if let containerLayout = self.containerLayout {
+                node.controlsVisibilityUpdated(isVisible: self.controlsVisibility(), animated: false)
                 node.containerLayoutUpdated(containerLayout.0, navigationBarHeight: containerLayout.1, transition: .immediate)
             }
             self.addVisibleItemNode(node)
@@ -585,7 +708,7 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
                 let node = self.itemNodes[i]
                 transition.updateFrame(node: node, frame: CGRect(origin: CGPoint(x: CGFloat(i) * self.scrollView.bounds.size.width + self.pageGap, y: 0.0), size: CGSize(width: self.scrollView.bounds.size.width - self.pageGap * 2.0, height: self.scrollView.bounds.size.height)))
                 
-                let screenFrame = node.convert(node.bounds, to: self.supernode)
+                let screenFrame = node.view.convert(node.view.bounds, to: self.view.superview)
                 node.screenFrameUpdated(screenFrame)
             }
             
@@ -669,15 +792,18 @@ public final class GalleryPagerNode: ASDisplayNode, UIScrollViewDelegate, UIGest
     public func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate {
             self.ensureItemsLoaded(force: false)
+            self.isInteractingUpdated?(false)
         }
     }
     
     public func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         self.ensureItemsLoaded(force: true)
+        self.isInteractingUpdated?(true)
     }
     
     public func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         self.ensureItemsLoaded(force: true)
+        self.isInteractingUpdated?(false)
     }
     
     private func shouldLoadItems(force: Bool) -> Bool {

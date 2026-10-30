@@ -1,12 +1,23 @@
 import Foundation
 import Display
-import Postbox
 import TelegramCore
 import AccountContext
 import WebKit
 import SwiftSignalKit
 import UniversalMediaPlayer
 import AppBundle
+
+private func accumulateTimecode(_ base: Int, _ value: Int, times multiplier: Int) -> Int {
+    let (product, productOverflow) = value.multipliedReportingOverflow(by: multiplier)
+    if productOverflow {
+        return Int.max
+    }
+    let (sum, sumOverflow) = base.addingReportingOverflow(product)
+    if sumOverflow {
+        return Int.max
+    }
+    return sum
+}
 
 func extractYoutubeVideoIdAndTimestamp(url: String) -> (String, Int)? {
     guard let url = URL(string: url), let host = url.host?.lowercased() else {
@@ -36,7 +47,7 @@ func extractYoutubeVideoIdAndTimestamp(url: String) -> (String, Int)? {
                             if let hoursRange = value.range(of: "h", options: .caseInsensitive, range: range, locale: nil) {
                                 let subvalue = String(value[range.lowerBound ..< hoursRange.lowerBound])
                                 if let hours = Int(subvalue) {
-                                    timestamp = timestamp + hours * 3600
+                                    timestamp = accumulateTimecode(timestamp, hours, times: 3600)
                                 }
                                 range = hoursRange.upperBound..<value.endIndex
                             }
@@ -44,7 +55,7 @@ func extractYoutubeVideoIdAndTimestamp(url: String) -> (String, Int)? {
                             if let minutesRange = value.range(of: "m", options: .caseInsensitive, range: range, locale: nil) {
                                 let subvalue = String(value[range.lowerBound ..< minutesRange.lowerBound])
                                 if let minutes = Int(subvalue) {
-                                    timestamp = timestamp + minutes * 60
+                                    timestamp = accumulateTimecode(timestamp, minutes, times: 60)
                                 }
                                 range = minutesRange.upperBound..<value.endIndex
                             }
@@ -52,7 +63,7 @@ func extractYoutubeVideoIdAndTimestamp(url: String) -> (String, Int)? {
                             if let secondsRange = value.range(of: "s", options: .caseInsensitive, range: range, locale: nil) {
                                 let subvalue = String(value[range.lowerBound ..< secondsRange.lowerBound])
                                 if let seconds = Int(subvalue) {
-                                    timestamp = timestamp + seconds
+                                    timestamp = accumulateTimecode(timestamp, seconds, times: 1)
                                 }
                             }
                         } else {
@@ -176,7 +187,7 @@ final class YoutubeEmbedImplementation: WebEmbedImplementation {
         updateStatus(self.status)
         
         let html = String(format: htmlTemplate, paramsJson)
-        webView.loadHTMLString(html, baseURL: URL(string: "https://telegram.youtube.com"))
+        webView.loadHTMLString(html, baseURL: URL(string: "https://ph.telegra.Telegraph"))
 //        webView.isUserInteractionEnabled = false
         
         userContentController.addUserScript(WKUserScript(source: userScript, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
@@ -287,7 +298,6 @@ final class YoutubeEmbedImplementation: WebEmbedImplementation {
                     }
 
                     let _ = download
-                    let _ = failed
                     
                     if let position = position {
                         if self.ignoreEarlierTimestamps {
@@ -307,8 +317,14 @@ final class YoutubeEmbedImplementation: WebEmbedImplementation {
                     }
                 
                     if let updateStatus = self.updateStatus, let playback = playback, let duration = duration {
-                        let playbackStatus: MediaPlayerPlaybackStatus
-                        switch playback {
+                        if let failed, failed {
+                            self.status = MediaPlayerStatus(generationTimestamp: self.status.generationTimestamp, duration: 0.0, dimensions: self.status.dimensions, timestamp: 0.0, baseRate: 0.0, seekId: self.status.seekId, status: .playing, soundEnabled: false)
+                            updateStatus(self.status)
+                            
+                            self.onPlaybackStarted?()
+                        } else {
+                            let playbackStatus: MediaPlayerPlaybackStatus
+                            switch playback {
                             case 0:
                                 if newTimestamp > Double(duration) - 1.0 {
                                     self.isPlaying = false
@@ -325,17 +341,18 @@ final class YoutubeEmbedImplementation: WebEmbedImplementation {
                                 playbackStatus = .buffering(initial: !self.started, whilePlaying: self.isPlaying, progress: 0.0, display: false)
                             default:
                                 playbackStatus = .buffering(initial: true, whilePlaying: true, progress: 0.0, display: false)
-                        }
-                        
-                        if case .playing = playbackStatus, !self.started {
-                            self.started = true
-                            print("YT started in \(CFAbsoluteTimeGetCurrent() - self.benchmarkStartTime)")
+                            }
                             
-                            self.onPlaybackStarted?()
+                            if case .playing = playbackStatus, !self.started {
+                                self.started = true
+                                print("YT started in \(CFAbsoluteTimeGetCurrent() - self.benchmarkStartTime)")
+                                
+                                self.onPlaybackStarted?()
+                            }
+                            
+                            self.status = MediaPlayerStatus(generationTimestamp: self.status.generationTimestamp, duration: Double(duration), dimensions: self.status.dimensions, timestamp: newTimestamp, baseRate: self.status.baseRate, seekId: self.status.seekId, status: playbackStatus, soundEnabled: true)
+                            updateStatus(self.status)
                         }
-                        
-                        self.status = MediaPlayerStatus(generationTimestamp: self.status.generationTimestamp, duration: Double(duration), dimensions: self.status.dimensions, timestamp: newTimestamp, baseRate: self.status.baseRate, seekId: self.status.seekId, status: playbackStatus, soundEnabled: true)
-                        updateStatus(self.status)
                     }
                 }
                 
@@ -401,29 +418,33 @@ public class YoutubeEmbedStoryboardMediaResource: TelegramMediaResource {
     public let storyboardId: Int32
     public let url: String
     
+    public var size: Int64? {
+        return nil
+    }
+    
     public init(videoId: String, storyboardId: Int32, url: String) {
         self.videoId = videoId
         self.storyboardId = storyboardId
         self.url = url
     }
     
-    public required init(decoder: PostboxDecoder) {
+    public required init(decoder: EnginePostboxDecoder) {
         self.videoId = decoder.decodeStringForKey("v", orElse: "")
         self.storyboardId = decoder.decodeInt32ForKey("i", orElse: 0)
         self.url = decoder.decodeStringForKey("u", orElse: "")
     }
-    
-    public func encode(_ encoder: PostboxEncoder) {
+
+    public func encode(_ encoder: EnginePostboxEncoder) {
         encoder.encodeString(self.videoId, forKey: "v")
         encoder.encodeInt32(self.storyboardId, forKey: "i")
         encoder.encodeString(self.url, forKey: "u")
     }
-    
-    public var id: MediaResourceId {
-        return MediaResourceId(YoutubeEmbedStoryboardMediaResourceId(videoId: self.videoId, storyboardId: self.storyboardId).uniqueId)
+
+    public var id: EngineRawMediaResourceId {
+        return EngineRawMediaResourceId(YoutubeEmbedStoryboardMediaResourceId(videoId: self.videoId, storyboardId: self.storyboardId).uniqueId)
     }
-    
-    public func isEqual(to: MediaResource) -> Bool {
+
+    public func isEqual(to: EngineRawMediaResource) -> Bool {
         if let to = to as? YoutubeEmbedStoryboardMediaResource {
             return self.videoId == to.videoId && self.storyboardId == to.storyboardId && self.url == to.url
         } else {
@@ -432,17 +453,17 @@ public class YoutubeEmbedStoryboardMediaResource: TelegramMediaResource {
     }
 }
 
-public final class YoutubeEmbedStoryboardMediaResourceRepresentation: CachedMediaResourceRepresentation {
-    public let keepDuration: CachedMediaRepresentationKeepDuration = .shortLived
-    
+public final class YoutubeEmbedStoryboardMediaResourceRepresentation: EngineMediaResourceRepresentation {
+    public let keepDuration: EngineCachedMediaRepresentationKeepDuration = .shortLived
+
     public var uniqueId: String {
         return "cached"
     }
-    
+
     public init() {
     }
-    
-    public func isEqual(to: CachedMediaResourceRepresentation) -> Bool {
+
+    public func isEqual(to: EngineRawCachedMediaResourceRepresentation) -> Bool {
         if to is YoutubeEmbedStoryboardMediaResourceRepresentation {
             return true
         } else {
@@ -451,14 +472,14 @@ public final class YoutubeEmbedStoryboardMediaResourceRepresentation: CachedMedi
     }
 }
 
-public func fetchYoutubeEmbedStoryboardResource(resource: YoutubeEmbedStoryboardMediaResource) -> Signal<CachedMediaResourceRepresentationResult, NoError> {
+public func fetchYoutubeEmbedStoryboardResource(resource: YoutubeEmbedStoryboardMediaResource) -> Signal<EngineCachedMediaResourceRepresentationResult, NoError> {
     return Signal { subscriber in
         subscriber.putNext(.reset)
                 
         let disposable = MetaDisposable()
         disposable.set(fetchHttpResource(url: resource.url).start(next: { next in
             if case let .dataPart(_, data, _, complete) = next, complete {
-                let tempFile = TempBox.shared.tempFile(fileName: "image.jpg")
+                let tempFile = EngineTempBox.shared.tempFile(fileName: "image.jpg")
                 if let _ = try? data.write(to: URL(fileURLWithPath: tempFile.path), options: .atomic) {
                     subscriber.putNext(.tempFile(tempFile))
                     subscriber.putCompletion()
@@ -474,9 +495,9 @@ public func fetchYoutubeEmbedStoryboardResource(resource: YoutubeEmbedStoryboard
 
 private func youtubeEmbedStoryboardData(account: Account, resource: YoutubeEmbedStoryboardMediaResource) -> Signal<Data?, NoError> {
     return Signal<Data?, NoError> { subscriber in
-        let dataDisposable = account.postbox.mediaBox.cachedResourceRepresentation(resource, representation: YoutubeEmbedStoryboardMediaResourceRepresentation(), complete: true).start(next: { next in
-            if next.size != 0 {
-                subscriber.putNext(next.size == 0 ? nil : try? Data(contentsOf: URL(fileURLWithPath: next.path), options: []))
+        let dataDisposable = TelegramEngine(account: account).resources.cachedRepresentation(resource: EngineMediaResource(resource), representation: YoutubeEmbedStoryboardMediaResourceRepresentation(), complete: true).start(next: { next in
+            if next.availableSize != 0 {
+                subscriber.putNext(next.availableSize == 0 ? nil : try? Data(contentsOf: URL(fileURLWithPath: next.path), options: []))
             }
         }, error: subscriber.putError, completed: subscriber.putCompletion)
         
@@ -491,7 +512,9 @@ private func youtubeEmbedStoryboardImage(account: Account, resource: YoutubeEmbe
     
     return signal |> map { fullSizeData in
         let drawingSize = CGSize(width: CGFloat(size.width), height: CGFloat(size.height))
-        let context = DrawingContext(size: drawingSize, clear: true)
+        guard let context = DrawingContext(size: drawingSize, clear: true) else {
+            return nil
+        }
         
         var fullSizeImage: CGImage?
         if let fullSizeData = fullSizeData {
@@ -641,10 +664,10 @@ public final class YoutubeEmbedFramePreview: FramePreview {
             let frame: Int32 = globalFrame % framesOnStoryboard
 
             let num: Int32 = Int32(floor(Double(globalFrame) / Double(framesOnStoryboard)))
-            let url = storyboardUrl(spec: storyboardSpec, sizeIndex: bestSize.0, num: num)
+            let url = strongSelf.storyboardUrl(spec: storyboardSpec, sizeIndex: bestSize.0, num: num)
             
             strongSelf.framePipe.putNext(.waitingForData)
-            strongSelf.currentFrameDisposable.set(youtubeEmbedStoryboardImage(account: strongSelf.context.account, resource: YoutubeEmbedStoryboardMediaResource(videoId: youtubeImpl.videoId, storyboardId: num, url: url), frame: frame, size: bestSize.1).start(next: { [weak self] image in
+            strongSelf.currentFrameDisposable.set(youtubeEmbedStoryboardImage(account: strongSelf.context.account, resource: YoutubeEmbedStoryboardMediaResource(videoId: youtubeImpl.videoId, storyboardId: num, url: url), frame: frame, size: bestSize.1).start(next: { image in
                 if let strongSelf = self {
                     if let image = image {
                         strongSelf.framePipe.putNext(.image(image))

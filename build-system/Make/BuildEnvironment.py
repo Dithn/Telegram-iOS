@@ -2,7 +2,7 @@ import json
 import os
 import platform
 import subprocess
-
+import sys
 
 def is_apple_silicon():
     if platform.processor() == 'arm':
@@ -11,37 +11,81 @@ def is_apple_silicon():
         return False
 
 
-def get_clean_env():
+def get_clean_env(use_clean_env=True):
     clean_env = os.environ.copy()
-    clean_env['PATH'] = '/usr/bin:/bin:/usr/sbin:/sbin'
+    if use_clean_env:
+        clean_env['PATH'] = '/usr/bin:/bin:/usr/sbin:/sbin'
     return clean_env
 
 
-def resolve_executable(program):
+def resolve_executable(program, use_clean_env=True):
     def is_executable(fpath):
         return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
 
-    for path in get_clean_env()["PATH"].split(os.pathsep):
+    for path in get_clean_env(use_clean_env=use_clean_env)["PATH"].split(os.pathsep):
         executable_file = os.path.join(path, program)
         if is_executable(executable_file):
             return executable_file
     return None
 
 
-def run_executable_with_output(path, arguments):
-    executable_path = resolve_executable(path)
+def run_executable_with_output(path, arguments, use_clean_env=True, decode=True, input=None, stderr_to_stdout=True, print_command=False, check_result=False):
+    executable_path = resolve_executable(path, use_clean_env=use_clean_env)
     if executable_path is None:
         raise Exception('Could not resolve {} to a valid executable file'.format(path))
+
+    stderr_assignment = subprocess.DEVNULL
+    if stderr_to_stdout:
+        stderr_assignment = subprocess.STDOUT
+
+    if print_command:
+        print('Running {} {}'.format(executable_path, arguments))
 
     process = subprocess.Popen(
         [executable_path] + arguments,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=get_clean_env()
+        stderr=stderr_assignment,
+        stdin=subprocess.PIPE,
+        env=get_clean_env(use_clean_env=use_clean_env)
     )
-    output_data, _ = process.communicate()
+    if input is not None:
+        output_data, _ = process.communicate(input=input)
+    else:
+        output_data, _ = process.communicate()
+
     output_string = output_data.decode('utf-8')
-    return output_string
+
+    if check_result:
+        if process.returncode != 0:
+            print('Command {} {} finished with non-zero return code and output:\n{}'.format(executable_path, arguments, output_string))
+            sys.exit(1)
+
+    if decode:
+        return output_string
+    else:
+        return output_data
+
+
+def run_executable_with_status(arguments, use_clean_environment=True):
+    executable_path = resolve_executable(arguments[0])
+    if executable_path is None:
+        raise Exception(f'Could not resolve {arguments[0]} to a valid executable file')
+
+    if use_clean_environment:
+        resolved_env = get_clean_env()
+    else:
+        resolved_env = os.environ
+
+    resolved_arguments = [executable_path] + arguments[1:]
+
+    result = subprocess.run(
+        resolved_arguments,
+        env=resolved_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+
+    return result.returncode
 
 
 def call_executable(arguments, use_clean_environment=True, check_result=True):
@@ -60,6 +104,12 @@ def call_executable(arguments, use_clean_environment=True, check_result=True):
         subprocess.check_call(resolved_arguments, env=resolved_env)
     else:
         subprocess.call(resolved_arguments, env=resolved_env)
+
+
+def check_run_system(command):
+    if os.system(command) != 0:
+        print('Command failed: {}'.format(command))
+        sys.exit(1)
 
 
 def get_bazel_version(bazel_path):
@@ -108,11 +158,17 @@ class BuildEnvironmentVersions:
             if configuration_dict['bazel'] is None:
                 raise Exception('Missing bazel version in {}'.format(configuration_path))
             else:
-                self.bazel_version = configuration_dict['bazel']
+                bazel_version, bazel_version_sha256 = configuration_dict['bazel'].split(':')
+                self.bazel_version = bazel_version
+                self.bazel_version_sha256 = bazel_version_sha256
             if configuration_dict['xcode'] is None:
                 raise Exception('Missing xcode version in {}'.format(configuration_path))
             else:
                 self.xcode_version = configuration_dict['xcode']
+            if configuration_dict['macos'] is None:
+                raise Exception('Missing macos version in {}'.format(configuration_path))
+            else:
+                self.macos_version = configuration_dict['macos']
 
 class BuildEnvironment:
     def __init__(
@@ -152,3 +208,4 @@ class BuildEnvironment:
         self.app_version = versions.app_version
         self.xcode_version = versions.xcode_version
         self.bazel_version = versions.bazel_version
+        self.macos_version = versions.macos_version

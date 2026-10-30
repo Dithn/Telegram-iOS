@@ -16,50 +16,14 @@ public enum ImpactHapticFeedbackStyle: Hashable {
 
 @available(iOSApplicationExtension 10.0, iOS 10.0, *)
 private final class HapticFeedbackImpl {
-    private lazy var impactGenerator: [ImpactHapticFeedbackStyle : UIImpactFeedbackGenerator] = {
-        if #available(iOSApplicationExtension 13.0, iOS 13.0, *) {
-            return [.light: UIImpactFeedbackGenerator(style: .light),
-                    .medium: UIImpactFeedbackGenerator(style: .medium),
-                    .heavy: UIImpactFeedbackGenerator(style: .heavy),
-                    .soft: UIImpactFeedbackGenerator(style: .soft),
-                    .rigid: UIImpactFeedbackGenerator(style: .rigid),
-                    .veryLight: UIImpactFeedbackGenerator(),
-                    .click05: UIImpactFeedbackGenerator(),
-                    .click06: UIImpactFeedbackGenerator()]
-        } else {
-            return [.light: UIImpactFeedbackGenerator(style: .light),
-                    .medium: UIImpactFeedbackGenerator(style: .medium),
-                    .heavy: UIImpactFeedbackGenerator(style: .heavy)]
-        }
-    }()
+    private var impactGenerators: [ImpactHapticFeedbackStyle : UIImpactFeedbackGenerator] = [:]
    
     private lazy var selectionGenerator: UISelectionFeedbackGenerator? = {
-        let generator = UISelectionFeedbackGenerator()
-        generator.prepare()
-        var string = generator.debugDescription
-        string.removeLast()
-        let number = string.suffix(1)
-        if number == "1" {
-            return generator
-        } else {
-            if #available(iOSApplicationExtension 13.0, iOS 13.0, *) {
-                return generator
-            }
-            return nil
-        }
+        return UISelectionFeedbackGenerator()
     }()
     
     private lazy var notificationGenerator: UINotificationFeedbackGenerator? = {
-        let generator = UINotificationFeedbackGenerator()
-        generator.prepare()
-        var string = generator.debugDescription
-        string.removeLast()
-        let number = string.suffix(1)
-        if number == "1" {
-            return generator
-        } else {
-            return nil
-        }
+        return UINotificationFeedbackGenerator()
     }()
     
     func prepareTap() {
@@ -74,28 +38,55 @@ private final class HapticFeedbackImpl {
         }
     }
     
-    func prepareImpact(_ style: ImpactHapticFeedbackStyle) {
-        if let impactGenerator = self.impactGenerator[style] {
-            impactGenerator.prepare()
+    private func impactGenerator(for style: ImpactHapticFeedbackStyle) -> UIImpactFeedbackGenerator {
+        if let impactGenerator = self.impactGenerators[style] {
+            return impactGenerator
         }
+
+        let impactGenerator: UIImpactFeedbackGenerator
+        switch style {
+            case .light:
+                impactGenerator = UIImpactFeedbackGenerator(style: .light)
+            case .medium:
+                impactGenerator = UIImpactFeedbackGenerator(style: .medium)
+            case .heavy:
+                impactGenerator = UIImpactFeedbackGenerator(style: .heavy)
+            case .soft:
+                impactGenerator = UIImpactFeedbackGenerator(style: .soft)
+            case .rigid:
+                impactGenerator = UIImpactFeedbackGenerator(style: .rigid)
+            case .veryLight, .click05, .click06:
+                impactGenerator = UIImpactFeedbackGenerator()
+        }
+        self.impactGenerators[style] = impactGenerator
+        return impactGenerator
+    }
+
+    func prepareImpact(_ style: ImpactHapticFeedbackStyle) {
+        self.impactGenerator(for: style).prepare()
     }
     
-    func impact(_ style: ImpactHapticFeedbackStyle) {
-        if let impactGenerator = self.impactGenerator[style] {
-            if #available(iOSApplicationExtension 13.0, iOS 13.0, *) {
-                switch style {
-                    case .click05:
-                        impactGenerator.impactOccurred(intensity: 0.3)
-                    case .click06:
-                        impactGenerator.impactOccurred(intensity: 0.4)
-                    case .veryLight:
-                        impactGenerator.impactOccurred(intensity: 0.3)
-                    default:
+    func impact(_ style: ImpactHapticFeedbackStyle, intensity: CGFloat? = nil) {
+        let impactGenerator = self.impactGenerator(for: style)
+        if #available(iOSApplicationExtension 13.0, iOS 13.0, *) {
+            switch style {
+                case .click05:
+                    impactGenerator.impactOccurred(intensity: 0.3)
+                case .click06:
+                    impactGenerator.impactOccurred(intensity: 0.4)
+                case .veryLight:
+                    impactGenerator.impactOccurred(intensity: 0.3)
+                case .rigid:
+                    if let intensity {
+                        impactGenerator.impactOccurred(intensity: intensity)
+                    } else {
                         impactGenerator.impactOccurred()
-                }
-            } else {
-                impactGenerator.impactOccurred()
+                    }
+                default:
+                    impactGenerator.impactOccurred()
             }
+        } else {
+            impactGenerator.impactOccurred()
         }
     }
     
@@ -119,6 +110,15 @@ private final class HapticFeedbackImpl {
         } else {
             AudioServicesPlaySystemSound(1521)
         }
+    }
+    
+    func warning() {
+        AudioServicesPlaySystemSound(1102)
+//        if let notificationGenerator = self.notificationGenerator {
+//            notificationGenerator.notificationOccurred(.warning)
+//        } else {
+//
+//        }
     }
     
     @objc dynamic func f() {
@@ -174,10 +174,10 @@ public final class HapticFeedback {
         }
     }
     
-    public func impact(_ style: ImpactHapticFeedbackStyle = .medium) {
+    public func impact(_ style: ImpactHapticFeedbackStyle = .medium, intensity: CGFloat? = nil) {
         if #available(iOSApplicationExtension 10.0, iOS 10.0, *) {
             self.withImpl { impl in
-                impl.impact(style)
+                impl.impact(style, intensity: intensity)
             }
         }
     }
@@ -202,6 +202,14 @@ public final class HapticFeedback {
         if #available(iOSApplicationExtension 10.0, iOS 10.0, *) {
             self.withImpl { impl in
                 impl.error()
+            }
+        }
+    }
+    
+    public func warning() {
+        if #available(iOSApplicationExtension 10.0, iOS 10.0, *) {
+            self.withImpl { impl in
+                impl.warning()
             }
         }
     }

@@ -19,18 +19,16 @@ def _plist_fragment(ctx):
     for key in found_keys:
         value = ctx.var.get(key, None)
         if value == None:
+            value = ctx.attr.defaults.get(key, None)
+        if value == None:
             fail("Expected value for --define={} was not found".format(key))
         resolved_values[key] = value
 
-    plist_string = """
-    <?xml version="1.0" encoding="UTF-8"?>
-    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-    <plist version="1.0">
-    <dict>
-    """ + template.format(**resolved_values) + """
-    </dict>
-    </plist>
-    """
+    plist_string = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>""" + template.format(**resolved_values) + """</dict>
+</plist>"""
 
     ctx.actions.write(
         output = output,
@@ -42,6 +40,7 @@ plist_fragment = rule(
     attrs = {
         "extension": attr.string(mandatory = True),
         "template": attr.string(mandatory = True),
+        "defaults": attr.string_dict(),
     },
     outputs = {
         "out": "%{name}.%{extension}"

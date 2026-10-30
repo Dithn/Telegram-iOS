@@ -10,8 +10,11 @@
 #import <arpa/inet.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <CommonCrypto/CommonHMac.h>
+#import <Security/SecRandom.h>
 
 #import <MtProtoKit/MTInternalId.h>
+#import <MtProtoKit/MTQuickAck.h>
+#import <MtProtoKit/MTTransport.h>
 
 #import <MtProtoKit/MTContext.h>
 #import <MtProtoKit/MTApiEnvironment.h>
@@ -24,6 +27,8 @@
 #import "MTDNS.h"
 
 #import <EncryptionProvider/EncryptionProvider.h>
+
+#import <libkern/OSAtomic.h>
 
 static id<MTBignum> get_y2(id<MTBignum> x, id<MTBignum> mod, id<MTBignumContext> context) {
     // returns y^2 = x^3 + 486662 * x^2 + x
@@ -70,8 +75,11 @@ static void generate_public_key(unsigned char key[32], id<EncryptionProvider> pr
     
     id<MTBignum> x = [context create];
     while (1) {
-        int randomResult = SecRandomCopyBytes(kSecRandomDefault, 32, key);
-        assert(randomResult == errSecSuccess);
+        if (SecRandomCopyBytes(kSecRandomDefault, 32, key) != errSecSuccess) {
+            // Only fails when the system entropy source is unavailable; never
+            // continue with whatever the buffer held. arc4random_buf cannot fail.
+            arc4random_buf(key, 32);
+        }
         
         key[31] &= 127;
         [context assignBinTo:x value:[NSData dataWithBytesNoCopy:key length:32 freeWhenDone:false]];
@@ -106,7 +114,48 @@ static void generate_public_key(unsigned char key[32], id<EncryptionProvider> pr
     }
 }
 
-/*typedef enum {
+static bool MTFillRandomBytes(uint8_t *buffer, size_t length) {
+    return SecRandomCopyBytes(kSecRandomDefault, length, buffer) == errSecSuccess;
+}
+
+static bool generate_ml_kem_public_key(uint8_t key[1184]) {
+    for (int i = 0; i < 384; i++) {
+        uint32_t randA = 0;
+        uint32_t randB = 0;
+        if (SecRandomCopyBytes(kSecRandomDefault, 4, (uint8_t *)&randA) != errSecSuccess) {
+            return false;
+        }
+        if (SecRandomCopyBytes(kSecRandomDefault, 4, (uint8_t *)&randB) != errSecSuccess) {
+            return false;
+        }
+        uint32_t a = randA % 3329;
+        uint32_t b = randB % 3329;
+        key[i * 3 + 0] = (uint8_t)(a & 0xFF);
+        key[i * 3 + 1] = (uint8_t)((a >> 8) | ((b & 0x0F) << 4));
+        key[i * 3 + 2] = (uint8_t)(b >> 4);
+    }
+    if (SecRandomCopyBytes(kSecRandomDefault, 32, key + 1152) != errSecSuccess) {
+        return false;
+    }
+    return true;
+}
+
+static bool MTGenerateGreaseValues(uint8_t grease[8]) {
+    if (!MTFillRandomBytes(grease, 8)) {
+        return false;
+    }
+    for (NSUInteger i = 0; i < 8; i++) {
+        grease[i] = (uint8_t)((grease[i] & 0xf0) | 0x0a);
+    }
+    for (NSUInteger i = 0; i < 8; i += 2) {
+        if (grease[i] == grease[i + 1]) {
+            grease[i + 1] ^= 0x10;
+        }
+    }
+    return true;
+}
+
+typedef enum {
     HelloGenerationCommandInvalid = 0,
     HelloGenerationCommandString = 1,
     HelloGenerationCommandZero = 2,
@@ -115,81 +164,79 @@ static void generate_public_key(unsigned char key[32], id<EncryptionProvider> pr
     HelloGenerationCommandGrease = 5,
     HelloGenerationCommandKey = 6,
     HelloGenerationCommandPushLengthPosition = 7,
-    HelloGenerationCommandPopLengthPosition = 8
+    HelloGenerationCommandPopLengthPosition = 8,
+    HelloGenerationCommandMlKemKey = 9,
+    HelloGenerationCommandBeginChoice = 10,
+    HelloGenerationCommandBeginAlternative = 11,
+    HelloGenerationCommandEndAlternative = 12,
+    HelloGenerationCommandEndChoice = 13
 } HelloGenerationCommand;
 
 typedef struct {
-    int position;
+    NSUInteger position;
 } HelloParseState;
 
 static HelloGenerationCommand parseCommand(NSString *string, HelloParseState *state) {
-    if (state->position + 1 >= string.length) {
-        return HelloGenerationCommandInvalid;
+    while (state->position < string.length) {
+        unichar c = [string characterAtIndex:state->position];
+        state->position += 1;
+        if (c == '\n' || c == '\r' || c == ' ') {
+            continue;
+        } else if (c == 'S') {
+            return HelloGenerationCommandString;
+        } else if (c == 'Z') {
+            return HelloGenerationCommandZero;
+        } else if (c == 'R') {
+            return HelloGenerationCommandRandom;
+        } else if (c == 'D') {
+            return HelloGenerationCommandDomain;
+        } else if (c == 'G') {
+            return HelloGenerationCommandGrease;
+        } else if (c == 'K') {
+            return HelloGenerationCommandKey;
+        } else if (c == 'M') {
+            return HelloGenerationCommandMlKemKey;
+        } else if (c == '[') {
+            return HelloGenerationCommandPushLengthPosition;
+        } else if (c == ']') {
+            return HelloGenerationCommandPopLengthPosition;
+        } else if (c == '<') {
+            return HelloGenerationCommandBeginChoice;
+        } else if (c == '(') {
+            return HelloGenerationCommandBeginAlternative;
+        } else if (c == ')') {
+            return HelloGenerationCommandEndAlternative;
+        } else if (c == '>') {
+            return HelloGenerationCommandEndChoice;
+        } else {
+            return HelloGenerationCommandInvalid;
+        }
     }
-    unichar c = [string characterAtIndex:state->position];
-    state->position += 1;
-    
-    if (c == 'S') {
-        return HelloGenerationCommandString;
-    } else if (c == 'Z') {
-        return HelloGenerationCommandZero;
-    } else if (c == 'R') {
-        return HelloGenerationCommandRandom;
-    } else if (c == 'D') {
-        return HelloGenerationCommandDomain;
-    } else if (c == 'G') {
-        return HelloGenerationCommandGrease;
-    } else if (c == 'K') {
-        return HelloGenerationCommandKey;
-    } else if (c == '[') {
-        return HelloGenerationCommandPushLengthPosition;
-    } else if (c == ']') {
-        return HelloGenerationCommandPopLengthPosition;
-    } else {
-        return HelloGenerationCommandInvalid;
-    }
+    return HelloGenerationCommandInvalid;
 }
 
 static bool parseSpace(NSString *string, HelloParseState *state) {
-    if (state->position + 1 >= string.length) {
-        return false;
-    }
-    bool hadSpace = false;
-    while (true) {
+    bool seenSpace = false;
+    while (state->position < string.length) {
         unichar c = [string characterAtIndex:state->position];
-        state->position += 1;
         if (c == ' ') {
-            hadSpace = true;
+            seenSpace = true;
+            state->position += 1;
         } else {
-            if (hadSpace) {
-                return true;
-            } else {
-                return false;
-            }
+            return seenSpace;
         }
     }
-    return true;
+    return seenSpace;
 }
 
-static bool parseEndlineOrEnd(NSString *string, HelloParseState *state) {
-    if (state->position == string.length) {
-        return true;
-    } else if (state->position + 1 >= string.length) {
-        return false;
-    } else {
-        unichar c = [string characterAtIndex:state->position];
-        state->position += 1;
-        return c == '\n';
-    }
-}
 
 static bool parseHexByte(unichar c, uint8_t *output) {
     if (c >= '0' && c <= '9') {
         *output = (uint8_t)(c - '0');
     } else if (c >= 'a' && c <= 'f') {
-        *output = (uint8_t)(c - 'a');
+        *output = (uint8_t)(c - 'a' + 10);
     } else if (c >= 'A' && c <= 'F') {
-        *output = (uint8_t)(c - 'A');
+        *output = (uint8_t)(c - 'A' + 10);
     } else {
         return false;
     }
@@ -200,278 +247,334 @@ static NSData *parseHexStringArgument(NSString *string, HelloParseState *state) 
     if (state->position >= string.length) {
         return nil;
     }
-    
+    if ([string characterAtIndex:state->position] != '"') {
+        return nil;
+    }
+    state->position += 1;
+
     NSMutableData *data = [[NSMutableData alloc] init];
-    
-    while (true) {
-        if (state->position == string.length) {
-            return data;
-        }
-        
+
+    while (state->position < string.length) {
         unichar c = [string characterAtIndex:state->position];
         state->position += 1;
         if (c == '\\') {
             if (state->position >= string.length) {
                 return nil;
             }
-            c = [string characterAtIndex:state->position];
+            unichar escapeType = [string characterAtIndex:state->position];
             state->position += 1;
-            if (c == 'x') {
-                if (state->position >= string.length) {
+
+            if (escapeType == 'x' || escapeType == 'X') {
+                if (state->position + 1 >= string.length) {
                     return nil;
                 }
                 unichar d1 = [string characterAtIndex:state->position];
                 state->position += 1;
-                if (state->position >= string.length) {
-                    return nil;
-                }
                 unichar d0 = [string characterAtIndex:state->position];
                 state->position += 1;
-                
-                uint8_t c1 = 0;
-                if (!parseHexByte(d1, &c1)) {
+
+                uint8_t value1 = 0;
+                uint8_t value0 = 0;
+                if (!parseHexByte(d1, &value1) || !parseHexByte(d0, &value0)) {
                     return nil;
                 }
-                uint8_t c0 = 0;
-                if (!parseHexByte(d0, &c0)) {
-                    return nil;
-                }
-                uint8_t byteValue = (c1 << 4) | c0;
+                uint8_t byteValue = (uint8_t)((value1 << 4) | value0);
                 [data appendBytes:&byteValue length:1];
             } else {
                 return nil;
             }
+        } else if (c == '"') {
+            if (state->position < string.length && [string characterAtIndex:state->position] == '\n') {
+                state->position += 1;
+            }
+            return data;
         } else if (c == '\n') {
             return data;
         } else {
             return nil;
         }
     }
-    
-    return nil;
+
+    return data;
 }
 
 static bool parseIntArgument(NSString *string, HelloParseState *state, int *output) {
     if (state->position >= string.length) {
         return false;
     }
-    int value = 0;
-    while (true) {
-        if (state->position == string.length) {
-            *output = value;
-            return true;
-        }
-        
-        unichar c = [string characterAtIndex:state->position];
-        state->position += 1;
-        
-        if (c == '\n') {
-            *output = value;
-            return true;
-        } else if (c >= '0' && c <= '9') {
-            value *= 10;
-            value += c;
-        } else {
-            return false;
-        }
-    }
-    return false;
-}
 
-static NSData *executeGenerationCode(id<EncryptionProvider> provider, NSData *domain) {
-    NSString *code = @"S \"\\x16\\x03\\x01\\x02\\x00\\x01\\x00\\x01\\xfc\\x03\\x03\\n"
-    "Z 32"
-    "S \"\\x20\"\n"
-    "R 32\n"
-    "S \"\\x00\\x36\"\n"
-    "G 0\n"
-    "S \"\\x13\\x01\\x13\\x02\\x13\\x03\\xc0\\x2c\\xc0\\x2b\\xcc\\xa9\\xc0\\x30\\xc0\\x2f\\xcc\\xa8\\xc0\\x24\\xc0\\x23\\xc0\\x0a\\xc0\\x09\\xc0\\x28\\xc0\\x27\\xc0\\x14\\xc0\\x13\\x00\\x9d\\x00\\x9c\\x00\\x3d\\x00\\x3c\\x00\\x35\\x00\\x2f\\xc0\\x08\\xc0\\x12\\x00\\x0a\\x01\\x00\\x01\\x7d\"\n"
-    "G 2\n"
-    "S \"\\x00\\x00\\x00\\x00\"\n"
-    "[\n"
-    "[\n"
-    "S \"\\x00\"\n"
-    "[\n"
-    "D\n"
-    "]\n"
-    "]\n"
-    "]\n"
-    "S \"\\x00\\x17\\x00\\x00\\xff\\x01\\x00\\x01\\x00\\x00\\x0a\\x00\\x0c\\x00\\x0a\"\n"
-    "G 4\n"
-    "S \"\\x00\\x1d\\x00\\x17\\x00\\x18\\x00\\x19\\x00\\x0b\\x00\\x02\\x01\\x00\\x00\\x10\\x00\\x0e\\x00\\x0c\\x02\\x68\\x32\\x08\\x68\\x74\\x74\\x70\\x2f\\x31\\x2e\\x31\\x00\\x05\\x00\\x05\\x01\\x00\\x00\\x00\\x00\\x00\\x0d\\x00\\x18\\x00\\x16\\x04\\x03\\x08\\x04\\x04\\x01\\x05\\x03\\x02\\x03\\x08\\x05\\x08\\x05\\x05\\x01\\x08\\x06\\x06\\x01\\x02\\x01\\x00\\x12\\x00\\x00\\x00\\x33\\x00\\x2b\\x00\\x29\"\n"
-    "G 4\n"
-    "S \"\\x00\\x01\\x00\\x00\\x1d\\x00\\x20\"\n"
-    "K\n"
-    "S \"\\x00\\x2d\\x00\\x02\\x01\\x01\\x00\\x2b\\x00\\x0b\\x0a\"\n"
-    "G 6\n"
-    "S \"\\x03\\x04\\x03\\x03\\x03\\x02\\x03\\x01\"\n"
-    "G 3\n"
-    "S \"\\x00\\x01\\x00\\x00\\x15\"";
-    
-    int greaseCount = 8;
-    NSMutableData *greaseData = [[NSMutableData alloc] initWithLength:greaseCount];
-    uint8_t *greaseBytes = (uint8_t *)greaseData.mutableBytes;
-    int result;
-    result = SecRandomCopyBytes(nil, greaseData.length, greaseData.mutableBytes);
-    
-    for (int i = 0; i < greaseData.length; i++) {
-        uint8_t c = greaseBytes[i];
-        c = (c & 0xf0) | 0x0a;
-        greaseBytes[i] = c;
-    }
-    for (int i = 1; i < greaseData.length; i += 2) {
-        if (greaseBytes[i] == greaseBytes[i - 1]) {
-            greaseBytes[i] &= 0x10;
-        }
-    }
-    
-    NSMutableData *resultData = [[NSMutableData alloc] init];
-    NSMutableArray<NSNumber *> *lengthStack = [[NSMutableArray alloc] init];
-    
-    HelloParseState state;
-    state.position = 0;
-    
-    while (true) {
-        if (state.position >= code.length) {
+    int value = 0;
+    bool hasDigit = false;
+    while (state->position < string.length) {
+        unichar c = [string characterAtIndex:state->position];
+        if (c >= '0' && c <= '9') {
+            value = value * 10 + (c - '0');
+            hasDigit = true;
+            state->position += 1;
+        } else if (c == '\n') {
+            state->position += 1;
             break;
         } else {
-            HelloGenerationCommand command = parseCommand(code, &state);
-            switch (command) {
-                case HelloGenerationCommandString: {
-                    if (!parseSpace(code, &state)) {
-                        return nil;
-                    }
-                    NSData *data = parseHexStringArgument(code, &state);
-                    if (data == nil) {
-                        return nil;
-                    }
-                    
-                    [resultData appendData:data];
-                    
-                    break;
+            break;
+        }
+    }
+
+    if (!hasDigit) {
+        return false;
+    }
+
+    if (output != NULL) {
+        *output = value;
+    }
+
+    return true;
+}
+
+static bool executeGenerationCodeRecursive(NSString *code, HelloParseState *state, uint8_t grease[8], NSData *domain, id<EncryptionProvider> provider, NSMutableData *resultData, NSMutableArray<NSNumber *> *lengthStack) {
+    while (true) {
+        HelloGenerationCommand command = parseCommand(code, state);
+        if (command == HelloGenerationCommandInvalid) {
+            break;
+        }
+
+        switch (command) {
+            case HelloGenerationCommandString: {
+                if (!parseSpace(code, state)) {
+                    return false;
                 }
-                case HelloGenerationCommandZero: {
-                    if (!parseSpace(code, &state)) {
+                NSData *data = parseHexStringArgument(code, state);
+                if (data == nil) {
+                    return false;
+                }
+                [resultData appendData:data];
+                break;
+            }
+            case HelloGenerationCommandZero: {
+                if (!parseSpace(code, state)) {
+                    return false;
+                }
+                int zeroLength = 0;
+                if (!parseIntArgument(code, state, &zeroLength)) {
+                    return false;
+                }
+                if (zeroLength < 0) {
+                    return false;
+                }
+                NSMutableData *zeros = [[NSMutableData alloc] initWithLength:(NSUInteger)zeroLength];
+                [resultData appendData:zeros];
+                break;
+            }
+            case HelloGenerationCommandRandom: {
+                if (!parseSpace(code, state)) {
+                    return false;
+                }
+                int randomLength = 0;
+                if (!parseIntArgument(code, state, &randomLength)) {
+                    return false;
+                }
+                if (randomLength < 0) {
+                    return false;
+                }
+                NSMutableData *randomData = [[NSMutableData alloc] initWithLength:(NSUInteger)randomLength];
+                if (!MTFillRandomBytes((uint8_t *)randomData.mutableBytes, randomData.length)) {
+                    return false;
+                }
+                [resultData appendData:randomData];
+                break;
+            }
+            case HelloGenerationCommandDomain: {
+                [resultData appendData:domain];
+                break;
+            }
+            case HelloGenerationCommandGrease: {
+                if (!parseSpace(code, state)) {
+                    return false;
+                }
+                int greaseIndex = 0;
+                if (!parseIntArgument(code, state, &greaseIndex)) {
+                    return false;
+                }
+                if (greaseIndex < 0 || greaseIndex >= 8) {
+                    return false;
+                }
+                uint8_t value = grease[greaseIndex];
+                [resultData appendBytes:&value length:1];
+                [resultData appendBytes:&value length:1];
+                break;
+            }
+            case HelloGenerationCommandKey: {
+                NSMutableData *key = [[NSMutableData alloc] initWithLength:32];
+                generate_public_key((unsigned char *)key.mutableBytes, provider);
+                [resultData appendData:key];
+                break;
+            }
+            case HelloGenerationCommandMlKemKey: {
+                NSMutableData *key = [[NSMutableData alloc] initWithLength:1184];
+                if (!generate_ml_kem_public_key((uint8_t *)key.mutableBytes)) {
+                    return false;
+                }
+                [resultData appendData:key];
+                break;
+            }
+            case HelloGenerationCommandPushLengthPosition: {
+                NSUInteger lengthPosition = resultData.length;
+                uint8_t zeroBytes[2] = { 0, 0 };
+                [resultData appendBytes:zeroBytes length:2];
+                [lengthStack addObject:@(lengthPosition)];
+                break;
+            }
+            case HelloGenerationCommandPopLengthPosition: {
+                if (lengthStack.count == 0) {
+                    return false;
+                }
+                NSUInteger position = (NSUInteger)[lengthStack.lastObject unsignedIntegerValue];
+                [lengthStack removeLastObject];
+                if (resultData.length < position + 2) {
+                    return false;
+                }
+                uint16_t blockLength = (uint16_t)(resultData.length - position - 2);
+                ((uint8_t *)resultData.mutableBytes)[position] = (uint8_t)((blockLength >> 8) & 0xff);
+                ((uint8_t *)resultData.mutableBytes)[position + 1] = (uint8_t)(blockLength & 0xff);
+                break;
+            }
+            case HelloGenerationCommandBeginChoice: {
+                NSMutableArray<NSMutableData *> *alternatives = [[NSMutableArray alloc] init];
+                while (true) {
+                    HelloGenerationCommand nextCommand = parseCommand(code, state);
+                    if (nextCommand == HelloGenerationCommandEndChoice) {
+                        break;
+                    }
+                    if (nextCommand != HelloGenerationCommandBeginAlternative) {
                         return false;
                     }
-                    int zeroLength = 0;
-                    if (!parseIntArgument(code, &state, &zeroLength)) {
-                        return nil;
+                    NSMutableData *altData = [[NSMutableData alloc] init];
+                    NSMutableArray<NSNumber *> *altLengthStack = [[NSMutableArray alloc] init];
+                    if (!executeGenerationCodeRecursive(code, state, grease, domain, provider, altData, altLengthStack)) {
+                        return false;
                     }
-                    
-                    NSMutableData *zeroData = [[NSMutableData alloc] initWithLength:zeroLength];
-                    [resultData appendData:zeroData];
-                    
-                    break;
+                    if (altLengthStack.count != 0) {
+                        return false;
+                    }
+                    [alternatives addObject:altData];
                 }
-                case HelloGenerationCommandRandom: {
-                    if (!parseSpace(code, &state)) {
-                        return nil;
-                    }
-                    int randomLength = 0;
-                    if (!parseIntArgument(code, &state, &randomLength)) {
-                        return nil;
-                    }
-                    
-                    NSMutableData *randomData = [[NSMutableData alloc] initWithLength:randomLength];
-                    int randomResult = SecRandomCopyBytes(kSecRandomDefault, randomLength, randomData.mutableBytes);
-                    if (randomResult != errSecSuccess) {
-                        return nil;
-                    }
-                    [resultData appendData:randomData];
-                    
-                    break;
+                if (alternatives.count == 0) {
+                    return false;
                 }
-                case HelloGenerationCommandDomain: {
-                    [resultData appendData:domain];
-                    if (!parseEndlineOrEnd(code, &state)) {
-                        return nil;
-                    }
-                    break;
-                }
-                case HelloGenerationCommandGrease: {
-                    if (!parseSpace(code, &state)) {
-                        return nil;
-                    }
-                    int greaseIndex = 0;
-                    if (!parseIntArgument(code, &state, &greaseIndex)) {
-                        return nil;
-                    }
-                    
-                    if (greaseIndex < 0 || greaseIndex >= greaseCount) {
-                        return nil;
-                    }
-                    
-                    [resultData appendBytes:&greaseBytes[greaseIndex] length:1];
-                    [resultData appendBytes:&greaseBytes[greaseIndex] length:1];
-                    
-                    break;
-                }
-                case HelloGenerationCommandKey: {
-                    if (!parseEndlineOrEnd(code, &state)) {
-                        return nil;
-                    }
-                    
-                    NSMutableData *key = [[NSMutableData alloc] initWithLength:32];
-                    generate_public_key(key.mutableBytes, provider);
-                    [resultData appendData:key];
-                    
-                    break;
-                }
-                case HelloGenerationCommandPushLengthPosition: {
-                    if (!parseEndlineOrEnd(code, &state)) {
-                        return nil;
-                    }
-                    
-                    [lengthStack addObject:@(resultData.length)];
-                    NSMutableData *zeroData = [[NSMutableData alloc] initWithLength:2];
-                    [resultData appendData:zeroData];
-                    
-                    break;
-                }
-                case HelloGenerationCommandPopLengthPosition: {
-                    if (!parseEndlineOrEnd(code, &state)) {
-                        return nil;
-                    }
-                    
-                    if (lengthStack.count == 0) {
-                        return nil;
-                    }
-                    
-                    int position = [lengthStack[lengthStack.count - 1] intValue];
-                    uint16_t calculatedLength = resultData.length - 2 - position;
-                    ((uint8_t *)resultData.mutableBytes)[position] = ((uint8_t *)&calculatedLength)[1];
-                    ((uint8_t *)resultData.mutableBytes)[position + 1] = ((uint8_t *)&calculatedLength)[0];
-                    [lengthStack removeLastObject];
-                    
-                    break;
-                }
-                case HelloGenerationCommandInvalid: {
-                    return nil;
-                }
-                default: {
-                    return nil;
-                }
+                uint32_t choiceIndex = arc4random_uniform((uint32_t)alternatives.count);
+                [resultData appendData:alternatives[choiceIndex]];
+                break;
+            }
+            case HelloGenerationCommandEndAlternative: {
+                // signals end of current alternative — return to caller
+                return true;
+            }
+            case HelloGenerationCommandBeginAlternative:
+            case HelloGenerationCommandEndChoice: {
+                // should not be encountered directly at this level
+                return false;
+            }
+            default: {
+                return false;
             }
         }
     }
-    
-    int paddingLengthPosition = (int)resultData.length;
-    [lengthStack addObject:@(resultData.length)];
-    NSMutableData *zeroData = [[NSMutableData alloc] initWithLength:2];
-    [resultData appendData:zeroData];
-    
-    while (resultData.length < 517) {
-        uint8_t zero = 0;
-        [resultData appendBytes:&zero length:1];
+
+    return true;
+}
+
+static NSMutableData *executeGenerationCode(id<EncryptionProvider> provider, NSData *domain) {
+    NSString *code = @"S \"\\x16\\x03\\x01\"\n"
+                      "[\n"
+                      "S \"\\x01\\x00\"\n"
+                      "[\n"
+                      "S \"\\x03\\x03\"\n"
+                      "Z 32\n"
+                      "S \"\\x20\"\n"
+                      "R 32\n"
+                      "<\n"
+                      "( S \"\\x00\\x1c\" G 0 S \"\\x13\\x02\\x13\\x01\\x13\\x03\\xc0\\x2c\\xc0\\x30\\xc0\\x2b\\xcc\\xa9\\xc0\\x2f\\xcc\\xa8\\xc0\\x0a\\xc0\\x09\\xc0\\x14\\xc0\\x13\" )\n"
+                      "( S \"\\x00\\x2a\" G 0 S \"\\x13\\x02\\x13\\x03\\x13\\x01\\xc0\\x2c\\xc0\\x2b\\xcc\\xa9\\xc0\\x30\\xc0\\x2f\\xcc\\xa8\\xc0\\x0a\\xc0\\x09\\xc0\\x14\\xc0\\x13\\x00\\x9d\\x00\\x9c\\x00\\x35\\x00\\x2f\\xc0\\x08\\xc0\\x12\\x00\\x0a\" )\n"
+                      ">\n"
+                      "S \"\\x01\\x00\"\n"
+                      "[\n"
+                      "G 2\n"
+                      "S \"\\x00\\x00\\x00\\x00\"\n"
+                      "[\n"
+                      "[\n"
+                      "S \"\\x00\"\n"
+                      "[\n"
+                      "D\n"
+                      "]\n"
+                      "]\n"
+                      "]\n"
+                      "S \"\\x00\\x17\\x00\\x00\\xff\\x01\\x00\\x01\\x00\\x00\\x0a\\x00\\x0e\\x00\\x0c\"\n"
+                      "G 4\n"
+                      "S \"\\x11\\xec\\x00\\x1d\\x00\\x17\\x00\\x18\\x00\\x19\\x00\\x0b\\x00\\x02\\x01\\x00\"\n"
+                      "<\n"
+                      "( S \"\\x00\\x10\\x00\\x0b\\x00\\x09\\x08\\x68\\x74\\x74\\x70\\x2f\\x31\\x2e\\x31\" )\n"
+                      "( S \"\\x00\\x10\\x00\\x0e\\x00\\x0c\\x02\\x68\\x32\\x08\\x68\\x74\\x74\\x70\\x2f\\x31\\x2e\\x31\" )\n"
+                      ">\n"
+                      "S \"\\x00\\x05\\x00\\x05\\x01\\x00\\x00\\x00\\x00\\x00\\x0d\\x00\\x16\\x00\\x14\\x04\\x03\\x08\\x04\\x04\\x01\\x05\\x03\\x08\\x05\\x08\\x05\\x05\\x01\\x08\\x06\\x06\\x01\\x02\\x01\\x00\\x12\\x00\\x00\\x00\\x33\\x04\\xef\\x04\\xed\"\n"
+                      "G 4\n"
+                      "S \"\\x00\\x01\\x00\\x11\\xec\\x04\\xc0\"\n"
+                      "M\n"
+                      "K\n"
+                      "S \"\\x00\\x1d\\x00\\x20\"\n"
+                      "K\n"
+                      "S \"\\x00\\x2d\\x00\\x02\\x01\\x01\\x00\\x2b\\x00\\x07\\x06\"\n"
+                      "G 6\n"
+                      "S \"\\x03\\x04\\x03\\x03\\x00\\x1b\\x00\\x03\\x02\\x00\\x01\"\n"
+                      "G 3\n"
+                      "S \"\\x00\\x01\\x00\"\n"
+                      "]\n"
+                      "]\n"
+                      "]\n";
+
+    uint8_t grease[8];
+    if (!MTGenerateGreaseValues(grease)) {
+        return nil;
     }
-    
-    uint16_t calculatedLength = resultData.length - 2 - paddingLengthPosition;
-    ((uint8_t *)resultData.mutableBytes)[paddingLengthPosition] = ((uint8_t *)&calculatedLength)[1];
-    ((uint8_t *)resultData.mutableBytes)[paddingLengthPosition + 1] = ((uint8_t *)&calculatedLength)[0];
-    
+
+    NSMutableData *resultData = [[NSMutableData alloc] init];
+    NSMutableArray<NSNumber *> *lengthStack = [[NSMutableArray alloc] init];
+
+    HelloParseState state = { .position = 0 };
+
+    if (!executeGenerationCodeRecursive(code, &state, grease, domain, provider, resultData, lengthStack)) {
+        return nil;
+    }
+
+    if (lengthStack.count != 0) {
+        return nil;
+    }
+
+    NSUInteger baseLength = resultData.length;
+    if (baseLength < 513) {
+        uint8_t paddingType[2] = { 0x00, 0x15 };
+        [resultData appendBytes:paddingType length:2];
+
+        uint16_t paddingLength = (uint16_t)(513 - baseLength);
+        uint8_t paddingLengthBytes[2] = { (uint8_t)((paddingLength >> 8) & 0xff), (uint8_t)(paddingLength & 0xff) };
+        [resultData appendBytes:paddingLengthBytes length:2];
+
+        if (paddingLength > 0) {
+            NSMutableData *zeros = [[NSMutableData alloc] initWithLength:paddingLength];
+            [resultData appendData:zeros];
+        }
+    }
+
     return resultData;
-}*/
+}
+
+static NSMutableData *MTCreateSafariClientHello(NSString *domain, id<EncryptionProvider> provider) {
+    NSData *domainData = [domain dataUsingEncoding:NSUTF8StringEncoding];
+    if (domainData == nil || domainData.length == 0 || domainData.length > 0xffff) {
+        return nil;
+    }
+
+    return executeGenerationCode(provider, domainData);
+}
+
 
 @interface MTTcpConnectionData : NSObject
 
@@ -495,7 +598,10 @@ static NSData *executeGenerationCode(id<EncryptionProvider> provider, NSData *do
 
 @end
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 MTInternalIdClass(MTTcpConnection)
+#pragma clang diagnostic pop
 
 struct socks5_ident_req
 {
@@ -601,6 +707,91 @@ struct ctr_state {
 
 @end
 
+@interface MTGcdAsyncSocketTcpConnectionInterface: NSObject<MTTcpConnectionInterface, GCDAsyncSocketDelegate> {
+    GCDAsyncSocket *_socket;
+    __weak id<MTTcpConnectionInterfaceDelegate> _delegate;
+}
+
+@end
+
+@implementation MTGcdAsyncSocketTcpConnectionInterface
+
+- (instancetype)initWithDelegate:(id<MTTcpConnectionInterfaceDelegate>)delegate delegateQueue:(dispatch_queue_t)delegateQueue {
+    self = [super init];
+    if (self != nil) {
+        _delegate = delegate;
+        _socket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:delegateQueue];
+    }
+    return self;
+}
+
+- (void)setGetLogPrefix:(NSString *(^)())getLogPrefix {
+    _socket.getLogPrefix = getLogPrefix;
+}
+
+- (void)setUsageCalculationInfo:(MTNetworkUsageCalculationInfo *)usageCalculationInfo {
+    _socket.usageCalculationInfo = usageCalculationInfo;
+}
+
+- (bool)connectToHost:(NSString *)inHost
+               onPort:(uint16_t)port
+         viaInterface:(NSString *)inInterface
+          withTimeout:(NSTimeInterval)timeout
+                error:(NSError **)errPtr {
+    return [_socket connectToHost:inHost onPort:port viaInterface:inInterface withTimeout:timeout error:errPtr];
+}
+
+- (void)writeData:(NSData *)data {
+    [_socket writeData:data withTimeout:-1.0 tag:0];
+}
+
+- (void)readDataToLength:(NSUInteger)length withTimeout:(NSTimeInterval)timeout tag:(long)tag {
+    [_socket readDataToLength:length withTimeout:timeout tag:tag];
+}
+
+- (void)disconnect {
+    [_socket disconnect];
+}
+
+- (void)resetDelegate {
+    _socket.delegate = nil;
+    
+}
+
+- (void)socket:(GCDAsyncSocket *)socket didReadPartialDataOfLength:(NSUInteger)partialLength tag:(long)tag {
+    id<MTTcpConnectionInterfaceDelegate> delegate = _delegate;
+    if (delegate) {
+        [delegate connectionInterfaceDidReadPartialDataOfLength:partialLength tag:tag];
+    }
+}
+
+- (void)socket:(GCDAsyncSocket *)socket didReadData:(NSData *)rawData withTag:(long)tag networkType:(int32_t)networkType {
+    id<MTTcpConnectionInterfaceDelegate> delegate = _delegate;
+    if (delegate) {
+        [delegate connectionInterfaceDidReadData:rawData withTag:tag networkType:networkType];
+    }
+}
+
+- (void)socket:(GCDAsyncSocket *)socket didConnectToHost:(NSString *)host port:(uint16_t)port {
+    id<MTTcpConnectionInterfaceDelegate> delegate = _delegate;
+    if (delegate) {
+        [delegate connectionInterfaceDidConnect];
+    }
+}
+
+- (void)socketDidDisconnect:(GCDAsyncSocket *)socket withError:(NSError *)error {
+    id<MTTcpConnectionInterfaceDelegate> delegate = _delegate;
+    if (delegate) {
+        [delegate connectionInterfaceDidDisconnectWithError:error];
+    }
+}
+
+- (NSTimeInterval)socket:(GCDAsyncSocket *)sock shouldTimeoutReadWithTag:(long)tag elapsed:(NSTimeInterval)elapsed bytesDone:(NSUInteger)length {
+    return -1.0;
+}
+
+@end
+
 @interface MTTcpReceiveData : NSObject
 
 @property (nonatomic, readonly) int tag;
@@ -621,12 +812,13 @@ struct ctr_state {
 
 @end
 
-@interface MTTcpConnection () <GCDAsyncSocketDelegate>
+@interface MTTcpConnection () <MTTcpConnectionInterfaceDelegate>
 {
     id<EncryptionProvider> _encryptionProvider;
     
-    GCDAsyncSocket *_socket;
+    id<MTTcpConnectionInterface> _socket;
     bool _closed;
+    int32_t _lastNetworkType;
     
     bool _useIntermediateFormat;
     
@@ -660,6 +852,7 @@ struct ctr_state {
     NSString *_mtpIp;
     int32_t _mtpPort;
     MTProxySecret *_mtpSecret;
+    bool _isWebProxy;
     NSData *_helloRandom;
     NSData *_currentHelloResponse;
     
@@ -673,6 +866,8 @@ struct ctr_state {
 
 @property (nonatomic) int64_t packetHeadDecodeToken;
 @property (nonatomic, strong) id packetProgressToken;
+
+@property (nonatomic, copy) id<MTTcpConnectionInterface> _Nonnull (^ _Nullable makeTcpConnectionInterface)(id<MTTcpConnectionInterfaceDelegate> _Nonnull delegate, dispatch_queue_t _Nonnull delegateQueue);
 
 @end
 
@@ -709,6 +904,8 @@ struct ctr_state {
         _interface = interface;
         _usageCalculationInfo = usageCalculationInfo;
         
+        _makeTcpConnectionInterface = context.makeTcpConnectionInterface;
+        
         if (context.apiEnvironment.datacenterAddressOverrides[@(datacenterId)] != nil) {
             _firstPacketControlByte = [context.apiEnvironment tcpPayloadPrefix];
         }
@@ -718,7 +915,9 @@ struct ctr_state {
             _mtpPort = _scheme.address.port;
             _mtpSecret = [MTProxySecret parseData:_scheme.address.secret];
         }
+        
         if (context.apiEnvironment.socksProxySettings != nil) {
+            _isWebProxy = context.apiEnvironment.socksProxySettings.webProxy;
             if (context.apiEnvironment.socksProxySettings.secret != nil) {
                 _mtpIp = context.apiEnvironment.socksProxySettings.ip;
                 _mtpPort = context.apiEnvironment.socksProxySettings.port;
@@ -781,7 +980,7 @@ struct ctr_state {
 - (void)setUsageCalculationInfo:(MTNetworkUsageCalculationInfo *)usageCalculationInfo {
     [[MTTcpConnection tcpQueue] dispatchOnQueue:^{
         _usageCalculationInfo = usageCalculationInfo;
-        _socket.usageCalculationInfo = usageCalculationInfo;
+        [_socket setUsageCalculationInfo:usageCalculationInfo];
     }];
 }
 
@@ -800,14 +999,61 @@ struct ctr_state {
     {
         if (_socket == nil)
         {
-            _socket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:[[MTTcpConnection tcpQueue] nativeQueue]];
-            _socket.getLogPrefix = _getLogPrefix;
-            _socket.usageCalculationInfo = _usageCalculationInfo;
+            // The injected interface must be paired with `_isWebProxy`, because the WEB
+            // carrier ignores the address it is handed. Derived contexts copy the factory
+            // while deliberately carrying DIFFERENT proxy settings - MTBackupAddressSignals
+            // nils them to fetch a backup address off-proxy, MTProxyConnectivity swaps in
+            // the server it is pinging - so an ungated factory silently routes those through
+            // the carrier to the relay's own backend instead of the address they asked for.
+            id<MTTcpConnectionInterface> injected = nil;
+            if (_makeTcpConnectionInterface) {
+                injected = _makeTcpConnectionInterface(self, [[MTTcpConnection tcpQueue] nativeQueue]);
+            }
+            bool injectedIsWebProxyCarrier = injected != nil
+                && [injected respondsToSelector:@selector(isWebProxyCarrier)]
+                && [injected isWebProxyCarrier];
+
+            if (_isWebProxy) {
+                if (!injectedIsWebProxyCarrier) {
+                    // Fail closed. There is no local endpoint to dial - the carrier is not a
+                    // loopback listener - and falling back to a socket would reach the
+                    // destination directly, defeating the proxy the user chose. This is the
+                    // state an app extension is in: it shares the settings but never runs a
+                    // carrier.
+                    if (MTLogEnabled()) {
+                        MTLog(@"[MTTcpConnection#%" PRIxPTR " no WEB proxy carrier; failing]", (intptr_t)self);
+                    }
+                    [injected resetDelegate];
+                    [self closeAndNotifyWithError:true];
+                    return;
+                }
+                _socket = injected;
+            } else {
+                _socket = injectedIsWebProxyCarrier ? nil : injected;
+                if (_socket == nil) {
+                    [injected resetDelegate];
+                    _socket = [[MTGcdAsyncSocketTcpConnectionInterface alloc] initWithDelegate:self delegateQueue:[[MTTcpConnection tcpQueue] nativeQueue]];
+                }
+            }
+            
+            [_socket setGetLogPrefix:_getLogPrefix];
+            [_socket setUsageCalculationInfo:_usageCalculationInfo];
             
             NSString *addressIp = _scheme.address.ip;
             MTSignal *resolveSignal = [MTSignal single:[[MTTcpConnectionData alloc] initWithIp:addressIp port:_scheme.address.port isSocks:false]];
             
-            if (_socksIp != nil) {
+            if (_isWebProxy) {
+                // Resolve NOTHING, and keep the default signal above. This branch is
+                // load-bearing even though the carrier ignores whatever address it is
+                // handed: `_socksIp` is nil for a WEB proxy and `_mtpIp` is the relay
+                // HOSTNAME, so falling through would reach `MTDNS resolveHostnameUniversal`
+                // below - a direct, unproxied `https://google.com/resolve?name=<relay host>`
+                // that leaks the hostname off the very proxy the user chose, on exactly the
+                // networks a WEB proxy exists for, stalls up to 10s when that lookup is
+                // blocked, and then has its answer discarded. It previously substituted a
+                // `127.0.0.1:443` endpoint, which read as though the app ran a local
+                // listener and hid why the branch had to exist at all.
+            } else if (_socksIp != nil) {
                 bool isHostname = true;
                 struct in_addr ip4;
                 struct in6_addr ip6;
@@ -846,7 +1092,7 @@ struct ctr_state {
             }
             
             __weak MTTcpConnection *weakSelf = self;
-            [_resolveDisposable setDisposable:[resolveSignal startWithNext:^(MTTcpConnectionData *connectionData) {
+            [_resolveDisposable setDisposable:[resolveSignal startWithNextStrict:^(MTTcpConnectionData *connectionData) {
                 [[MTTcpConnection tcpQueue] dispatchOnQueue:^{
                     __strong MTTcpConnection *strongSelf = weakSelf;
                     if (strongSelf == nil || connectionData == nil) {
@@ -868,6 +1114,8 @@ struct ctr_state {
                             } else {
                                 MTLog(@"[MTTcpConnection#%" PRIxPTR " connecting to %@:%d via %@:%d using %@:%@]", (intptr_t)strongSelf, strongSelf->_scheme.address.ip, (int)strongSelf->_scheme.address.port, strongSelf->_socksIp, (int)strongSelf->_socksPort, strongSelf->_socksUsername, strongSelf->_socksPassword);
                             }
+                        } else if (strongSelf->_mtpIp != nil && strongSelf->_isWebProxy) {
+                            MTLog(@"[MTTcpConnection#%" PRIxPTR " connecting via WEB proxy %@:%d]", (intptr_t)strongSelf, strongSelf->_mtpIp, (int)strongSelf->_mtpPort);
                         } else if (strongSelf->_mtpIp != nil) {
                             MTLog(@"[MTTcpConnection#%" PRIxPTR " connecting to %@:%d via mtp://%@:%d:%@]", (intptr_t)strongSelf, strongSelf->_scheme.address.ip, (int)strongSelf->_scheme.address.port, strongSelf->_mtpIp, (int)strongSelf->_mtpPort, strongSelf->_mtpSecret);
                         } else {
@@ -881,110 +1129,32 @@ struct ctr_state {
                     } else if (strongSelf->_socksIp == nil) {
                         if (strongSelf->_mtpIp != nil && [strongSelf->_mtpSecret isKindOfClass:[MTProxySecretType2 class]]) {
                             MTProxySecretType2 *secret = (MTProxySecretType2 *)(strongSelf->_mtpSecret);
-                            
-                            int greaseCount = 8;
-                            NSMutableData *greaseData = [[NSMutableData alloc] initWithLength:greaseCount];
-                            uint8_t *greaseBytes = (uint8_t *)greaseData.mutableBytes;
-                            int result;
-                            result = SecRandomCopyBytes(nil, greaseData.length, greaseData.mutableBytes);
-                            assert(result == errSecSuccess);
-                            
-                            for (int i = 0; i < greaseData.length; i++) {
-                                uint8_t c = greaseBytes[i];
-                                c = (c & 0xf0) | 0x0a;
-                                greaseBytes[i] = c;
+                            NSMutableData *helloData = MTCreateSafariClientHello(secret.domain, strongSelf->_encryptionProvider);
+                            if (helloData == nil || helloData.length < 513) {
+                                [strongSelf closeAndNotifyWithError:true];
+                                return;
                             }
-                            for (int i = 1; i < greaseData.length; i += 2) {
-                                if (greaseBytes[i] == greaseBytes[i - 1]) {
-                                    greaseBytes[i] &= 0x10;
-                                }
+
+                            NSData *effectiveSecret = secret.secret;
+                            if (effectiveSecret.length < 16) {
+                                [strongSelf closeAndNotifyWithError:true];
+                                return;
                             }
-                            
-                            NSMutableData *helloData = [[NSMutableData alloc] init];
-                            
-                            uint8_t s1[11] = { 0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc, 0x03, 0x03 };
-                            [helloData appendBytes:s1 length:11];
-                            
-                            for (int i = 0; i < 32; i++) {
-                                uint8_t zero = 0;
-                                [helloData appendBytes:&zero length:1];
-                            }
-                            
-                            uint8_t s2[1] = { 0x20 };
-                            [helloData appendBytes:s2 length:1];
-                            
-                            uint8_t r1[32];
-                            result = SecRandomCopyBytes(nil, 32, r1);
-                            assert(result == errSecSuccess);
-                            [helloData appendBytes:r1 length:32];
-                            
-                            uint8_t s0[65] = { 0x00, 0x34, 0x13, 0x03, 0x13, 0x01, 0x13, 0x02, 0xc0, 0x2c, 0xc0, 0x2b, 0xc0, 0x24, 0xc0, 0x23, 0xc0, 0x0a, 0xc0, 0x09, 0xcc, 0xa9, 0xc0, 0x30, 0xc0, 0x2f, 0xc0, 0x28, 0xc0, 0x27, 0xc0, 0x14, 0xc0, 0x13, 0xcc, 0xa8, 0x00, 0x9d, 0x00, 0x9c, 0x00, 0x3d, 0x00, 0x3c, 0x00, 0x35, 0x00, 0x2f, 0xc0, 0x08, 0xc0, 0x12, 0x00, 0x0a, 0x01, 0x00, 0x01, 0x7f, 0xff, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00 };
-                            [helloData appendBytes:s0 length:65];
-                            
-                            uint8_t stackZ[2] = { 0x00, 0x00 };
-                            
-                            int stack1 = (int)helloData.length;
-                            [helloData appendBytes:stackZ length:2];
-                            
-                            int stack2 = (int)helloData.length;
-                            [helloData appendBytes:stackZ length:2];
-                            
-                            uint8_t s5[1] = { 0x00 };
-                            [helloData appendBytes:s5 length:1];
-                            
-                            int stack3 = (int)helloData.length;
-                            [helloData appendBytes:stackZ length:2];
-                            
-                            NSString *d1 = secret.domain;
-                            [helloData appendData:[d1 dataUsingEncoding:NSUTF8StringEncoding]];
-                            
-                            int16_t stack3Value = (int16_t)(helloData.length - stack3 - 2);
-                            stack3Value = OSSwapInt16(stack3Value);
-                            memcpy(((uint8_t *)helloData.mutableBytes) + stack3, &stack3Value, 2);
-                            
-                            int16_t stack2Value = (int16_t)(helloData.length - stack2 - 2);
-                            stack2Value = OSSwapInt16(stack2Value);
-                            memcpy(((uint8_t *)helloData.mutableBytes) + stack2, &stack2Value, 2);
-                            
-                            int16_t stack1Value = (int16_t)(helloData.length - stack1 - 2);
-                            stack1Value = OSSwapInt16(stack1Value);
-                            memcpy(((uint8_t *)helloData.mutableBytes) + stack1, &stack1Value, 2);
-                            
-                            uint8_t s6[117] = { 0x00, 0x17, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x18, 0x00, 0x16, 0x04, 0x03, 0x08, 0x04, 0x04, 0x01, 0x05, 0x03, 0x02, 0x03, 0x08, 0x05, 0x08, 0x05, 0x05, 0x01, 0x08, 0x06, 0x06, 0x01, 0x02, 0x01, 0x00, 0x05, 0x00, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00, 0x33, 0x74, 0x00, 0x00, 0x00, 0x12, 0x00, 0x00, 0x00, 0x10, 0x00, 0x30, 0x00, 0x2e, 0x02, 0x68, 0x32, 0x05, 0x68, 0x32, 0x2d, 0x31, 0x36, 0x05, 0x68, 0x32, 0x2d, 0x31, 0x35, 0x05, 0x68, 0x32, 0x2d, 0x31, 0x34, 0x08, 0x73, 0x70, 0x64, 0x79, 0x2f, 0x33, 0x2e, 0x31, 0x06, 0x73, 0x70, 0x64, 0x79, 0x2f, 0x33, 0x08, 0x68, 0x74, 0x74, 0x70, 0x2f, 0x31, 0x2e, 0x31, 0x00, 0x0b, 0x00, 0x02, 0x01, 0x00, 0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20 };
-                            [helloData appendBytes:s6 length:117];
-                            
-                            uint8_t r2[32];
-                            generate_public_key(r2, strongSelf->_encryptionProvider);
-                            
-                            [helloData appendBytes:r2 length:32];
-                            
-                            uint8_t s9[35] = { 0x00, 0x2d, 0x00, 0x02, 0x01, 0x01, 0x00, 0x2b, 0x00, 0x09, 0x08, 0x03, 0x04, 0x03, 0x03, 0x03, 0x02, 0x03, 0x01, 0x00, 0x0a, 0x00, 0x0a, 0x00, 0x08, 0x00, 0x1d, 0x00, 0x17, 0x00, 0x18, 0x00, 0x19, 0x00, 0x15 };
-                            [helloData appendBytes:s9 length:35];
-                            
-                            int stack4 = (int)helloData.length;
-                            [helloData appendBytes:stackZ length:2];
-                            
-                            while (helloData.length < 517) {
-                                uint8_t zero = 0;
-                                [helloData appendBytes:&zero length:1];
-                            }
-                            
-                            int16_t stack4Value = (int16_t)(helloData.length - stack4 - 2);
-                            stack4Value = OSSwapInt16(stack4Value);
-                            memcpy(((uint8_t *)helloData.mutableBytes) + stack4, &stack4Value, 2);
-                            
-                            NSData *effectiveSecret = strongSelf->_mtpSecret.secret;
+
                             uint8_t cHMAC[CC_SHA256_DIGEST_LENGTH];
                             CCHmac(kCCHmacAlgSHA256, effectiveSecret.bytes, effectiveSecret.length, helloData.bytes, helloData.length, cHMAC);
-                            int32_t timestamp = (int32_t)[[NSDate date] timeIntervalSince1970] + [MTContext fixedTimeDifference];
-                            uint8_t *timestampValue = (uint8_t *)&timestamp;
+
+                            uint32_t timestamp = (uint32_t)([[NSDate date] timeIntervalSince1970] + [MTContext fixedTimeDifference]);
+                            uint32_t timestampLe = OSSwapHostToLittleInt32(timestamp);
+                            uint8_t *timestampBytes = (uint8_t *)&timestampLe;
                             for (int i = 0; i < 4; i++) {
-                                cHMAC[CC_SHA256_DIGEST_LENGTH - 4 + i] ^= timestampValue[i];
+                                cHMAC[CC_SHA256_DIGEST_LENGTH - 4 + i] ^= timestampBytes[i];
                             }
-                            _helloRandom = [[NSData alloc] initWithBytes:cHMAC length:32];
-                            memcpy(((uint8_t *)helloData.mutableBytes) + 11, cHMAC, 32);
-                            
-                            [strongSelf->_socket writeData:helloData withTimeout:-1 tag:0];
+
+                            _helloRandom = [[NSData alloc] initWithBytes:cHMAC length:CC_SHA256_DIGEST_LENGTH];
+                            memcpy(((uint8_t *)helloData.mutableBytes) + 11, cHMAC, CC_SHA256_DIGEST_LENGTH);
+
+                            [strongSelf->_socket writeData:helloData];
                             [strongSelf->_socket readDataToLength:5 withTimeout:-1 tag:MTTcpSocksReceiveHelloResponse];
                         } else {
                             strongSelf->_readyToSendData = true;
@@ -1005,11 +1175,11 @@ struct ctr_state {
                             req.NumberOfMethods += 1;
                             req.Methods[1] = 0x02;
                         }
-                        [strongSelf->_socket writeData:[NSData dataWithBytes:&req length:2 + req.NumberOfMethods] withTimeout:-1 tag:0];
+                        [strongSelf->_socket writeData:[NSData dataWithBytes:&req length:2 + req.NumberOfMethods]];
                         [strongSelf->_socket readDataToLength:sizeof(struct socks5_ident_resp) withTimeout:-1 tag:MTTcpSocksLogin];
                     }
                 }];
-            }]];
+            } file:__FILE_NAME__ line:__LINE__]];
         }
     }];
 }
@@ -1032,7 +1202,7 @@ struct ctr_state {
             _closed = true;
             
             [_socket disconnect];
-            _socket.delegate = nil;
+            [_socket resetDelegate];
             _socket = nil;
             
             if (_connectionClosed)
@@ -1163,7 +1333,16 @@ struct ctr_state {
                             MTAesCtr *incomingAesCtr = [[MTAesCtr alloc] initWithKey:incomingAesKey.bytes keyLength:32 iv:incomingAesIv.bytes decrypt:false];
                             
                             uint8_t encryptedControlBytes[64];
-                            [outgoingAesCtr encryptIn:controlBytes out:encryptedControlBytes len:64];
+                            if (outgoingAesCtr == nil || incomingAesCtr == nil || ![outgoingAesCtr encryptIn:controlBytes out:encryptedControlBytes len:64]) {
+                                if (MTLogEnabled()) {
+                                    MTLog(@"***** %s: could not set up the obfuscation cipher", __PRETTY_FUNCTION__);
+                                }
+                                [self closeAndNotifyWithError:true];
+                                if (dataToSend.completion) {
+                                    dataToSend.completion(false);
+                                }
+                                return;
+                            }
                             
                             uint32_t intHeader = 0;
                             memcpy(&intHeader, encryptedControlBytes, 4);
@@ -1211,7 +1390,7 @@ struct ctr_state {
                             [partitionedCompleteData appendData:[[NSData alloc] initWithBytes:helloHeader length:6]];
                         }
                         
-                        NSUInteger limit = 2878;
+                        NSUInteger limit = 16408;
                         NSUInteger offset = 0;
                         while (offset < completeData.length) {
                             NSUInteger partLength = MIN(limit, completeData.length - offset);
@@ -1226,9 +1405,9 @@ struct ctr_state {
                             
                             offset += partLength;
                         }
-                        [_socket writeData:partitionedCompleteData withTimeout:-1 tag:0];
+                        [_socket writeData:partitionedCompleteData];
                     } else {
-                        [_socket writeData:completeData withTimeout:-1 tag:0];
+                        [_socket writeData:completeData];
                     }
                 }
                 
@@ -1288,7 +1467,7 @@ struct ctr_state {
     [self closeAndNotifyWithError:true];
 }
 
-- (void)socket:(GCDAsyncSocket *)__unused socket didReadPartialDataOfLength:(NSUInteger)partialLength tag:(long)__unused tag
+- (void)connectionInterfaceDidReadPartialDataOfLength:(NSUInteger)partialLength tag:(long)__unused tag
 {
     if (_closed)
         return;
@@ -1307,6 +1486,9 @@ struct ctr_state {
             [delegate tcpConnectionProgressUpdated:self packetProgressToken:_packetProgressToken packetLength:_packetRestLength progress:currentApproximateProgress / 100.0f];
         }
     }
+    
+    id<MTTcpConnectionDelegate> delegate = _delegate;
+    [delegate tcpConnectionDownloadActivityUpdated:self];
 }
 
 - (void)requestSocksConnection {
@@ -1351,14 +1533,17 @@ struct ctr_state {
     unsigned short port = htons(req.DestPort);
     [reqData appendBytes:&port length:2];
     
-    [_socket writeData:reqData withTimeout:-1 tag:0];
+    [_socket writeData:reqData];
     [_socket readDataToLength:4 withTimeout:-1 tag:MTTcpSocksRequest];
 }
 
-- (void)socket:(GCDAsyncSocket *)__unused socket didReadData:(NSData *)rawData withTag:(long)tag
+- (void)connectionInterfaceDidReadData:(NSData *)rawData withTag:(long)tag networkType:(int32_t)networkType
 {
     if (_closed)
         return;
+    
+    id<MTTcpConnectionDelegate> delegate = _delegate;
+    [delegate tcpConnectionDownloadActivityUpdated:self];
     
     if (tag == MTTcpSocksLogin) {
         if (rawData.length != sizeof(struct socks5_ident_resp)) {
@@ -1404,7 +1589,7 @@ struct ctr_state {
             [reqData appendBytes:&passwordLength length:1];
             [reqData appendData:passwordData];
             
-            [_socket writeData:reqData withTimeout:-1 tag:0];
+            [_socket writeData:reqData];
             [_socket readDataToLength:2 withTimeout:-1 tag:MTTcpSocksReceiveAuthResponse];
         } else {
             [self requestSocksConnection];
@@ -1647,12 +1832,12 @@ struct ctr_state {
         [_socket readDataToLength:(int)nextLength withTimeout:-1 tag:MTTcpSocksReceiveComplexPacketPart];
         return;
     } else if (tag == MTTcpSocksReceiveComplexPacketPart) {
-        [self addReadData:rawData];
+        [self addReadData:rawData networkType:networkType];
         
         [_socket readDataToLength:5 withTimeout:-1 tag:MTTcpSocksReceiveComplexLength];
         return;
     } else {
-        [self addReadData:rawData];
+        [self addReadData:rawData networkType:networkType];
     }
 }
 
@@ -1668,15 +1853,15 @@ struct ctr_state {
         [_receivedDataBuffer replaceBytesInRange:NSMakeRange(0, _pendingReceiveData.length) withBytes:nil length:0];
         int tag = _pendingReceiveData.tag;
         _pendingReceiveData = nil;
-        [self processReceivedData:rawData tag:tag];
+        [self processReceivedData:rawData tag:tag networkType:_lastNetworkType];
     }
 }
 
-- (void)addReadData:(NSData *)data {
+- (void)addReadData:(NSData *)data networkType:(int32_t)networkType {
     if (_pendingReceiveData != nil && _pendingReceiveData.length == data.length) {
         int tag = _pendingReceiveData.tag;
         _pendingReceiveData = nil;
-        [self processReceivedData:data tag:tag];
+        [self processReceivedData:data tag:tag networkType:networkType];
     } else {
         [_receivedDataBuffer appendData:data];
         if (_pendingReceiveData != nil) {
@@ -1685,17 +1870,31 @@ struct ctr_state {
                 [_receivedDataBuffer replaceBytesInRange:NSMakeRange(0, _pendingReceiveData.length) withBytes:nil length:0];
                 int tag = _pendingReceiveData.tag;
                 _pendingReceiveData = nil;
-                [self processReceivedData:rawData tag:tag];
+                [self processReceivedData:rawData tag:tag networkType:networkType];
             }
         }
     }
 }
 
-- (void)processReceivedData:(NSData *)rawData tag:(int)tag {
-    NSMutableData *decryptedData = [[NSMutableData alloc] initWithLength:rawData.length];
-    [_incomingAesCtr encryptIn:rawData.bytes out:decryptedData.mutableBytes len:rawData.length];
+- (void)processReceivedData:(NSData *)rawData tag:(int)tag networkType:(int32_t)networkType {
+    _lastNetworkType = networkType;
     
-    NSData *data = decryptedData;
+    NSMutableData *decryptedData = nil;
+    NSUInteger decryptOffset = 0;
+    if (tag == MTTcpReadTagPacketBody && _packetHead != nil) {
+        // A large packet arrives as a 128-byte head (already decrypted, used for
+        // progress tokens) followed by the rest. Decrypt the rest straight after the
+        // head so the packet never has to be reassembled with a second copy.
+        decryptOffset = _packetHead.length;
+        decryptedData = [[NSMutableData alloc] initWithLength:decryptOffset + rawData.length];
+        memcpy(decryptedData.mutableBytes, _packetHead.bytes, decryptOffset);
+        _packetHead = nil;
+    } else {
+        decryptedData = [[NSMutableData alloc] initWithLength:rawData.length];
+    }
+    [_incomingAesCtr encryptIn:rawData.bytes out:((uint8_t *)decryptedData.mutableBytes) + decryptOffset len:rawData.length];
+
+    NSMutableData *data = decryptedData;
     
     if (tag == MTTcpReadTagPacketShortLength) {
 #ifdef DEBUG
@@ -1759,10 +1958,8 @@ struct ctr_state {
         [data getBytes:&length length:4];
         
         if ((length & 0x80000000) == 0x80000000) {
-            int32_t ackId = length;
-            ackId &= ((uint32_t)0xffffffff ^ (uint32_t)(((uint32_t)1) << 31));
-            ackId = (int32_t)OSSwapInt32(ackId);
-            
+            int32_t ackId = MTQuickAckTokenFromIntermediateWord(length);
+
             id<MTTcpConnectionDelegate> delegate = _delegate;
             if ([delegate respondsToSelector:@selector(tcpConnectionReceivedQuickAck:quickAck:)])
                 [delegate tcpConnectionReceivedQuickAck:self quickAck:ackId];
@@ -1773,7 +1970,7 @@ struct ctr_state {
                 [self requestReadDataWithLength:1 tag:MTTcpReadTagPacketShortLength];
             }
         } else {
-            if (length > 16 * 1024 * 1024) {
+            if (length < 4 || (NSUInteger)length > MTMaxTransportPayloadLength) {
                 if (MTLogEnabled()) {
                     MTLog(@"[MTTcpConnection#%" PRIxPTR " received invalid length %d]", (intptr_t)self, length);
                 }
@@ -1817,18 +2014,11 @@ struct ctr_state {
         _packetHeadDecodeToken = -1;
         _packetProgressToken = nil;
         
-        NSData *packetData = data;
-        if (_packetHead != nil) {
-            NSMutableData *combinedData = [[NSMutableData alloc] initWithCapacity:_packetHead.length + data.length];
-            [combinedData appendData:_packetHead];
-            [combinedData appendData:data];
-            packetData = combinedData;
-            _packetHead = nil;
-        }
-        
+        // `data` already holds head + rest for large packets (see the decrypt above).
+        NSMutableData *packetData = data;
+
         if (packetData.length % 4 != 0) {
-            int32_t realLength = ((int32_t)packetData.length) & (~3);
-            packetData = [packetData subdataWithRange:NSMakeRange(0, (NSUInteger)realLength)];
+            [packetData setLength:packetData.length & ~((NSUInteger)3)];
         }
         
         bool ignorePacket = false;
@@ -1837,11 +2027,10 @@ struct ctr_state {
             [packetData getBytes:&header length:4];
             if (header == 0xffffffff) {
                 if (packetData.length >= 8) {
-                    int32_t ackId = 0;
-                    [packetData getBytes:&ackId range:NSMakeRange(4, 4)];
-                    ackId &= ((uint32_t)0xffffffff ^ (uint32_t)(((uint32_t)1) << 31));
-                    ackId = (int32_t)OSSwapInt32(ackId);
-                    
+                    int32_t ackWord = 0;
+                    [packetData getBytes:&ackWord range:NSMakeRange(4, 4)];
+                    int32_t ackId = MTQuickAckTokenFromIntermediateWord(ackWord);
+
                     id<MTTcpConnectionDelegate> delegate = _delegate;
                     if ([delegate respondsToSelector:@selector(tcpConnectionReceivedQuickAck:quickAck:)]) {
                         [delegate tcpConnectionReceivedQuickAck:self quickAck:ackId];
@@ -1861,8 +2050,8 @@ struct ctr_state {
             if (_connectionReceivedData)
                 _connectionReceivedData(packetData);
             id<MTTcpConnectionDelegate> delegate = _delegate;
-            if ([delegate respondsToSelector:@selector(tcpConnectionReceivedData:data:)])
-                [delegate tcpConnectionReceivedData:self data:packetData];
+            if ([delegate respondsToSelector:@selector(tcpConnectionReceivedData:networkType:data:)])
+                [delegate tcpConnectionReceivedData:self networkType:networkType data:packetData];
         }
         
         if (_useIntermediateFormat) {
@@ -1875,12 +2064,11 @@ struct ctr_state {
         NSAssert(data.length == 3, @"data length should be equal to 3");
 #endif
         
-        int32_t ackId = 0;
-        ((uint8_t *)&ackId)[0] = _quickAckByte;
-        memcpy(((uint8_t *)&ackId) + 1, data.bytes, 3);
-        ackId = (int32_t)OSSwapInt32(ackId);
-        ackId &= ((uint32_t)0xffffffff ^ (uint32_t)(((uint32_t)1) << 31));
-        
+        uint8_t ackBytes[4];
+        ackBytes[0] = _quickAckByte;
+        memcpy(ackBytes + 1, data.bytes, 3);
+        int32_t ackId = MTQuickAckTokenFromAbridgedBytes(ackBytes);
+
         id<MTTcpConnectionDelegate> delegate = _delegate;
         if ([delegate respondsToSelector:@selector(tcpConnectionReceivedQuickAck:quickAck:)])
             [delegate tcpConnectionReceivedQuickAck:self quickAck:ackId];
@@ -1893,7 +2081,7 @@ struct ctr_state {
     }
 }
              
-- (void)socket:(GCDAsyncSocket *)__unused socket didConnectToHost:(NSString *)__unused host port:(uint16_t)__unused port
+- (void)connectionInterfaceDidConnect
 {
     if (_socksIp != nil) {
         
@@ -1906,7 +2094,7 @@ struct ctr_state {
     }
 }
 
-- (void)socketDidDisconnect:(GCDAsyncSocket *)__unused socket withError:(NSError *)error
+- (void)connectionInterfaceDidDisconnectWithError:(NSError *)error
 {
     if (error != nil) {
         if (MTLogEnabled()) {
